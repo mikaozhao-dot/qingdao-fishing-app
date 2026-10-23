@@ -10,7 +10,7 @@
 - `docs/b-direction-review-v1.md` — B 深海高级两屏小样的评审说明
 - `design/content-prototype-v1.html` — 内容正本原型（10 屏，创始人已验收内容、视觉待重做）
 - `design/b-direction-sample-v1.html` — B「深海高级」审核小样（首页 + 活动详情）
-- `design/b-direction-sample-v1-mobile.zip` — B 方案手机离线预览包（解压后打开 `index.html`）
+- `design/b-direction-sample-v1-photos/` — B 方案手机预览图片（首页、活动详情）
 
 ## 协作规矩
 - 内容与规格由 Muse 评审定版；Codex 按任务书交付，评审意见与新任务直接写回本仓。

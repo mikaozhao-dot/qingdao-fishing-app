@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>拼船海钓 · 深海霓虹风格稿 v2（细节修订版）</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-font-smoothing:antialiased; }
+  body {
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+    background: radial-gradient(1200px 700px at 70% 20%, #1d4d3a 0%, #0e2a20 45%, #081410 100%);
+    min-height:100vh; padding:44px 20px 60px; color:#eef3ee;
+  }
+  .page-title { text-align:center; margin-bottom:8px; font-size:22px; font-weight:800; letter-spacing:.5px; }
+  .page-sub { text-align:center; color:#9db8a8; font-size:13px; margin-bottom:36px; }
+  .stage { display:flex; gap:34px; justify-content:center; align-items:flex-start; flex-wrap:wrap; }
+  .phone {
+    width:330px; height:700px; background:#070a08; border-radius:46px; position:relative;
+    border:1px solid rgba(255,255,255,.14);
+    box-shadow:0 30px 60px rgba(0,0,0,.55), inset 0 0 0 6px #101410;
+    overflow:hidden; flex:none;
+  }
+  .screen { position:absolute; inset:0; padding:20px 18px 96px; overflow:hidden; }
+  .notch { position:absolute; top:10px; left:50%; transform:translateX(-50%); width:96px; height:22px; background:#000; border-radius:12px; z-index:5; }
+  /* ---------- 通用组件 ---------- */
+  .card { background:#131915; border:1px solid rgba(255,255,255,.06); border-radius:24px; padding:16px; }
+  .lime { color:#cdf463; }
+  .mut { color:#8fa398; }
+  .pill { display:inline-flex; align-items:center; gap:5px; padding:5px 11px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; flex:none; }
+  .fishrow { display:flex; gap:8px; margin-top:14px; overflow-x:auto; scrollbar-width:none; padding-bottom:2px; }
+  .fishrow::-webkit-scrollbar { display:none; }
+  .pill-lime { background:#cdf463; color:#0c120c; }
+  .pill-dark { background:#1e2620; color:#cfe0d2; border:1px solid rgba(255,255,255,.08); }
+  .pill-teal { background:rgba(94,200,189,.16); color:#5ec8bd; }
+  .tabbar {
+    position:absolute; left:50%; transform:translateX(-50%); bottom:18px; z-index:6;
+    background:rgba(16,20,17,.92); border:1px solid rgba(255,255,255,.1); border-radius:999px;
+    display:flex; gap:4px; padding:7px 10px; backdrop-filter: blur(6px);
+  }
+  .tabbar .tab { width:52px; text-align:center; font-size:10px; color:#7e9284; padding:4px 0 2px; }
+  .tabbar .tab .ic { font-size:17px; display:block; line-height:1.15; }
+  .tabbar .tab.on { color:#cdf463; }
+  .avatar { width:40px; height:40px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px; color:#0b100b; }
+  .progress { height:7px; background:#232b24; border-radius:99px; overflow:hidden; }
+  .progress i { display:block; height:100%; background:linear-gradient(90deg,#5ec8bd,#cdf463); border-radius:99px; }
+  .cta {
+    display:block; text-align:center; background:#cdf463; color:#0b100b; font-weight:800; font-size:16px;
+    padding:15px; border-radius:999px; letter-spacing:1px;
+  }
+  /* ---------- 英雄卡（波纹肌理） ---------- */
+  .hero {
+    position:relative; border-radius:26px; overflow:hidden; padding:18px;
+    background:linear-gradient(135deg,#0d2b23 0%,#114434 55%,#1a5c3a 100%);
+    border:1px solid rgba(255,255,255,.08);
+  }
+  .wave { position:absolute; right:-6px; top:0; bottom:0; width:58%; display:flex; align-items:center; gap:2.5px; opacity:.85;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 30%); mask-image:linear-gradient(90deg,transparent,#000 30%); }
+  .wave i { flex:1; background:linear-gradient(180deg,#7fe0cd,#2e7d68); border-radius:2px; min-width:2px; }
+  .hero .inner { position:relative; z-index:2; }
+  /* ---------- 环形图 ---------- */
+  .donut-wrap { position:relative; width:172px; height:172px; margin:6px auto 2px; }
+  .donut-center { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .pct-bubble { position:absolute; background:#232a24; border:1px solid rgba(255,255,255,.12); color:#e7f0e7;
+    font-size:11px; font-weight:700; padding:3px 8px; border-radius:999px; }
+  .legend { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:10px; }
+  .legend .pill i { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  h1.big { font-size:40px; font-weight:900; line-height:1.12; letter-spacing:.5px; }
+  .sec-title { font-size:16px; font-weight:800; margin:20px 2px 10px; display:flex; justify-content:space-between; align-items:baseline; }
+  .sec-title span { font-size:12px; color:#8fa398; font-weight:500; }
+</style>
+</head>
+<body>
+<div class="page-title">拼船海钓 · 风格改造稿 v2（细节修订）</div>
+<div class="page-sub">v2 修订：鱼种胶囊单行滚动不再竖排 · 英雄卡指标改三列网格不再挤压换行 · 活动卡加船只实拍图位（预留 Luna 实拍素材）· 价格区强制不换行</div>
+
+<div class="stage">
+
+  <!-- ============ 屏 1：首页 ============ -->
+  <div class="phone"><div class="notch"></div><div class="screen">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;">
+      <div style="font-weight:900;font-size:19px;letter-spacing:.5px;">🎣 拼船<span class="lime">海钓</span></div>
+      <div class="pill pill-dark">📍 青岛 · 小港 ▾</div>
+    </div>
+
+    <div class="hero" style="margin-top:16px;">
+      <div class="wave" data-wave></div>
+      <div class="inner">
+        <span class="pill" style="background:rgba(255,255,255,.92);color:#0c120c;">明日出钓卡</span>
+        <div style="margin-top:14px;font-size:13px;color:#bfe3d2;">出钓指数</div>
+        <div style="font-size:52px;font-weight:900;line-height:1;">86<span style="font-size:16px;font-weight:600;color:#bfe3d2;"> / 100 · 适宜出钓</span></div>
+        <div style="display:grid;grid-template-columns:repeat(3,max-content);gap:16px;margin-top:14px;">
+          <div><div style="font-size:11px;color:#9fd4ba;white-space:nowrap;">💨 风力</div><div style="font-size:13px;font-weight:700;margin-top:2px;white-space:nowrap;">东南风 3 级</div></div>
+          <div><div style="font-size:11px;color:#9fd4ba;white-space:nowrap;">🌊 浪高</div><div style="font-size:13px;font-weight:700;margin-top:2px;white-space:nowrap;">0.4 m</div></div>
+          <div><div style="font-size:11px;color:#9fd4ba;white-space:nowrap;">🌙 黄金潮时</div><div style="font-size:13px;font-weight:700;margin-top:2px;white-space:nowrap;">06:20 起</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="fishrow">
+      <span class="pill pill-lime">刀鱼 · 当季旺</span>
+      <span class="pill pill-dark">鲅鱼</span>
+      <span class="pill pill-dark">黑头</span>
+      <span class="pill pill-dark">黄鱼</span>
+      <span class="pill pill-dark">全部鱼种 →</span>
+    </div>
+
+    <div class="sec-title">正在拼船 <span>查看全部 →</span></div>
+
+    <div class="card">
+      <div style="height:84px;border-radius:16px;margin-bottom:12px;position:relative;overflow:hidden;background:linear-gradient(120deg,#0d2b23,#1a5c3a 60%,#114434);">
+        <div class="wave" data-wave style="width:100%;opacity:.35;"></div>
+        <span style="position:absolute;left:10px;bottom:8px;font-size:11px;color:#e2f2e6;">⛵ 船只实拍图位 ·「海丰号」</span>
+        <span class="pill" style="position:absolute;right:10px;top:8px;background:rgba(0,0,0,.45);color:#fff;">专业拼船</span>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="avatar" style="background:linear-gradient(135deg,#5ec8bd,#cdf463);">王</div>
+        <div style="flex:1;">
+          <div style="font-weight:800;font-size:15px;">王光臣船长 <span class="pill pill-teal" style="margin-left:4px;">口碑 4.9</span></div>
+          <div class="mut" style="font-size:12px;margin-top:2px;">明日 05:30 · 小港出发 · 灵山岛海域 · 刀鱼</div>
+        </div>
+        <div style="text-align:right;white-space:nowrap;flex:none;"><div class="lime" style="font-weight:900;font-size:18px;">¥268</div><div class="mut" style="font-size:11px;">/ 位</div></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+        <div class="progress" style="flex:1;"><i style="width:75%;"></i></div>
+        <span style="font-size:12px;font-weight:700;">已订 9/12</span>
+        <span class="pill pill-lime">还差 3 人成行</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="avatar" style="background:linear-gradient(135deg,#8b7cf0,#5ec8bd);color:#fff;">薛</div>
+        <div style="flex:1;">
+          <div style="font-weight:800;font-size:15px;">薛其光船长 <span class="pill pill-teal" style="margin-left:4px;">口碑 4.8</span></div>
+          <div class="mut" style="font-size:12px;margin-top:2px;">周六 06:00 · 沙子口出发 · 崂山湾 · 鲅鱼</div>
+        </div>
+        <div style="text-align:right;white-space:nowrap;flex:none;"><div class="lime" style="font-weight:900;font-size:18px;">¥298</div><div class="mut" style="font-size:11px;">/ 位</div></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+        <div class="progress" style="flex:1;"><i style="width:100%;"></i></div>
+        <span style="font-size:12px;font-weight:700;">已订 12/12</span>
+        <span class="pill pill-dark">✓ 已成行</span>
+      </div>
+    </div>
+
+    <div class="tabbar">
+      <div class="tab on"><span class="ic">🏠</span>首页</div>
+      <div class="tab"><span class="ic">🎣</span>活动</div>
+      <div class="tab"><span class="ic">🐟</span>渔获</div>
+      <div class="tab"><span class="ic">👤</span>我的</div>
+    </div>
+  </div></div>
+
+  <!-- ============ 屏 2：活动详情 ============ -->
+  <div class="phone"><div class="notch"></div><div class="screen">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;">
+      <div style="font-size:15px;">← 活动详情</div>
+      <div class="pill pill-dark">明日 05:30 · 小港</div>
+    </div>
+    <h1 class="big" style="margin-top:14px;">灵山岛<br>刀鱼专场</h1>
+
+    <div class="card" style="margin-top:14px;display:flex;gap:12px;align-items:center;">
+      <div class="avatar" style="width:52px;height:52px;font-size:19px;background:linear-gradient(135deg,#5ec8bd,#cdf463);">王</div>
+      <div style="flex:1;">
+        <div style="font-weight:800;font-size:16px;">王光臣船长</div>
+        <div class="mut" style="font-size:12px;margin-top:3px;">出船 312 次 · 空军率仅 6% · 平均渔获 8.4kg</div>
+        <div style="margin-top:6px;display:flex;gap:6px;">
+          <span class="pill pill-teal">✓ 证件已验</span><span class="pill pill-teal">✓ 责任险在保</span>
+        </div>
+      </div>
+      <div style="text-align:center;"><div class="lime" style="font-size:26px;font-weight:900;">4.9</div><div class="mut" style="font-size:11px;">口碑分</div></div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-weight:800;">成团进度</div><span class="pill pill-lime">还差 3 人</span>
+      </div>
+      <div class="donut-wrap" style="width:150px;height:150px;">
+        <svg width="150" height="150" viewBox="0 0 150 150">
+          <circle cx="75" cy="75" r="62" fill="none" stroke="#232b24" stroke-width="15"/>
+          <circle cx="75" cy="75" r="62" fill="none" stroke="#cdf463" stroke-width="15" stroke-linecap="round"
+                  stroke-dasharray="292 390" transform="rotate(-90 75 75)"/>
+          <circle cx="75" cy="75" r="62" fill="none" stroke="#5ec8bd" stroke-width="15"
+                  stroke-dasharray="0 390" />
+        </svg>
+        <div class="donut-center">
+          <div style="font-size:30px;font-weight:900;">9<span style="font-size:15px;color:#8fa398;"> /12 人</span></div>
+          <div class="mut" style="font-size:11px;">已达最低成行线</div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;" class="mut">
+        <span>🌊 浪高 0.4m</span><span>💨 风 3 级</span><span>🎣 电绞/手摇可选</span><span>🪱 鱼饵包含</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div style="display:flex;justify-content:space-between;font-size:14px;padding:3px 0;"><span>船位费</span><b>¥268</b></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:14px;padding:6px 0;">
+        <span>意外险（必买 · 外部投保）</span><span class="pill pill-dark" style="border-color:#cdf463;color:#cdf463;">去投保 ¥15 起 →</span>
+      </div>
+      <div style="border-top:1px dashed rgba(255,255,255,.12);margin-top:6px;padding-top:9px;display:flex;justify-content:space-between;font-size:14px;">
+        <span>平台合计</span><b class="lime" style="font-size:17px;">¥268</b>
+      </div>
+      <div class="mut" style="font-size:11px;margin-top:8px;line-height:1.6;">退改明示：出航前 48 小时全额退 · 24 小时退 50% · 天气停航全额自动退（保险同步自动退保）。</div>
+    </div>
+
+    <a class="cta" style="margin-top:14px;">立即拼船 · ¥268</a>
+
+    <div class="tabbar">
+      <div class="tab"><span class="ic">🏠</span>首页</div>
+      <div class="tab on"><span class="ic">🎣</span>活动</div>
+      <div class="tab"><span class="ic">🐟</span>渔获</div>
+      <div class="tab"><span class="ic">👤</span>我的</div>
+    </div>
+  </div></div>
+
+  <!-- ============ 屏 3：我的渔获（数据屏） ============ -->
+  <div class="phone"><div class="notch"></div><div class="screen">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;">
+      <div style="font-weight:800;font-size:17px;">我的渔获</div>
+      <div class="pill pill-dark">本季 ▾</div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <div style="display:flex;justify-content:space-between;font-size:13px;"><span class="mut">2026 刀鲅季</span><span class="mut">近 3 个月 ▾</span></div>
+      <div class="donut-wrap">
+        <svg width="172" height="172" viewBox="0 0 172 172">
+          <circle cx="86" cy="86" r="70" fill="none" stroke="#232b24" stroke-width="17"/>
+          <circle cx="86" cy="86" r="70" fill="none" stroke="#5ec8bd" stroke-width="17" stroke-dasharray="180 440" transform="rotate(-90 86 86)"/>
+          <circle cx="86" cy="86" r="70" fill="none" stroke="#cdf463" stroke-width="17" stroke-dasharray="114 440" stroke-dashoffset="-180" transform="rotate(-90 86 86)"/>
+          <circle cx="86" cy="86" r="70" fill="none" stroke="#8b7cf0" stroke-width="17" stroke-dasharray="79 440" stroke-dashoffset="-294" transform="rotate(-90 86 86)"/>
+        </svg>
+        <span class="pct-bubble" style="top:6px;left:2px;">41%</span>
+        <span class="pct-bubble" style="top:34px;right:-2px;">26%</span>
+        <span class="pct-bubble" style="bottom:14px;left:12px;">18%</span>
+        <div class="donut-center">
+          <div style="font-size:27px;font-weight:900;">128.6<span style="font-size:14px;"> kg</span></div>
+          <div class="mut" style="font-size:11px;">本季总渔获 · 86%</div>
+        </div>
+      </div>
+      <div class="legend">
+        <span class="pill pill-dark"><i style="background:#5ec8bd;"></i>带鱼</span>
+        <span class="pill pill-dark"><i style="background:#cdf463;"></i>鲅鱼</span>
+        <span class="pill pill-dark"><i style="background:#8b7cf0;"></i>黑头</span>
+        <span class="pill pill-dark"><i style="background:#3a453c;"></i>其他</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;">
+        <div><div style="font-size:21px;font-weight:900;">¥0 空军</div><div class="mut" style="font-size:12px;margin-top:2px;">本季出钓 14 次 · 空军率 7%（船长回填 × 打卡交叉验证）</div></div>
+        <span class="mut" style="font-size:12px;">近 3 月 ▾</span>
+      </div>
+      <svg width="100%" height="92" viewBox="0 0 294 92" style="margin-top:10px;">
+        <path d="M0,74 L30,58 L55,66 L80,30 L105,52 L130,44 L155,18 L180,40 L205,26 L230,48 L255,22 L280,34 L294,30 L294,92 L0,92 Z" fill="rgba(205,244,99,.22)"/>
+        <path d="M0,74 L30,58 L55,66 L80,30 L105,52 L130,44 L155,18 L180,40 L205,26 L230,48 L255,22 L280,34 L294,30" fill="none" stroke="#cdf463" stroke-width="2.5"/>
+        <circle cx="255" cy="22" r="4" fill="#cdf463"/>
+      </svg>
+      <div style="display:flex;justify-content:space-between;font-size:11px;" class="mut"><span>8 月</span><span>9 月</span><span>10 月</span></div>
+    </div>
+
+    <div style="display:flex;gap:10px;margin-top:12px;">
+      <div class="card" style="flex:1;text-align:center;padding:13px;"><div style="font-size:19px;font-weight:900;">23 种</div><div class="mut" style="font-size:11px;margin-top:2px;">鱼种图鉴已点亮</div></div>
+      <div class="card" style="flex:1;text-align:center;padding:13px;"><div style="font-size:19px;font-weight:900;" class="lime">3 张券</div><div class="mut" style="font-size:11px;margin-top:2px;">拼船优惠待用</div></div>
+    </div>
+
+    <div class="tabbar">
+      <div class="tab"><span class="ic">🏠</span>首页</div>
+      <div class="tab"><span class="ic">🎣</span>活动</div>
+      <div class="tab on"><span class="ic">🐟</span>渔获</div>
+      <div class="tab"><span class="ic">👤</span>我的</div>
+    </div>
+  </div></div>
+
+</div>
+
+<script>
+  // 生成 VoltBank 式竖条波纹（模拟水面/声浪肌理）
+  document.querySelectorAll('[data-wave]').forEach(function(el){
+    var N = 46, html = '';
+    for (var i=0;i<N;i++){
+      var h = 34 + Math.round(58*Math.abs(Math.sin(i*0.55)) * (0.45+0.55*Math.abs(Math.sin(i*0.13+1.2))));
+      html += '<i style="height:'+h+'%"></i>';
+    }
+    el.innerHTML = html;
+  });
+</script>
+</body>
+</html>

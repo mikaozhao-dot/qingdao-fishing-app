@@ -61,7 +61,7 @@ class QingdaoFishingApp extends StatelessWidget {
     );
 
     return MaterialApp(
-      title: '拼船海钓',
+      title: '约钓者',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -196,7 +196,7 @@ class _AppShellState extends State<AppShell> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              '青岛海钓',
+              '约钓者',
               style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900),
             ),
             Text(

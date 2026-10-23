@@ -10,7 +10,9 @@
 - 第二段结束：2026-10-23 22:51:23 CST（Unix `1792767083`），在最终提交尝试前记录；提交因仓库元数据只读而未成功。
 - 第二段有效时间：617 秒（10 分 17 秒）。
 - 第三段恢复：2026-10-24 06:28:59 CST（Unix `1792794539`）；此前等待额度恢复的隔夜时段不计时。
-- 第三段结束时间将在最终提交前记录。有效净耗时按 `906 + (结束 Unix 时间 − 1792794539)` 计算；首段 289 秒、第二段 617 秒，暂停区间和隔夜空档均不计入。
+- 第三段结束：`2026-10-24 06:33:21 CST`（Unix `1792794801`）；本计时收尾提交前记录。
+- 第三段有效时间：`262` 秒（`4 分 22 秒`）。
+- 有效净耗时：`1168` 秒（`19 分 28 秒`）。计算：289 + 617 + 第三段；暂停区间和隔夜空档均不计入。
 
 首段暂停前没有生成仓库文件或提交。桌面 stash 保持原样。
 
@@ -50,4 +52,9 @@
 - 实际船图署名 George Yin；图片页为 [Unsplash source](https://unsplash.com/photos/boat-on-body-of-water-across-horizon-during-sunset-UEtC_o4GxFg)，许可为 [Unsplash License](https://unsplash.com/license)。这两项记录在继承的 stash tracked asset note 中，现已同步至当前 `design/assets/asset-notes-v1.md` 与 `design/assets/boat-photos/attribution.md`。该图是大连海面上的真实渔船照片，不代表样例活动中的具体船舶。
 - 概念船图 review 副本为 1200 × 800、267,674 字节（低于 1,000,000 字节）；其视觉条件仍待 Muse 目检，本记录不将该项标为已清除。
 - 浏览器控制策略拒绝打开本地 `file:` URL，并明确禁止用替代浏览器路径绕过该限制。已改做源码级结构、导航目标、素材路径和脚本语法检查；实际浏览器渲染仍需人工打开复核。
-- Git 之前的最终化尝试因元数据权限失败：`git add` 返回 `fatal: Unable to create '/Users/mikao/Documents/ChatGPT/海钓app/qingdao-fishing-app/.git/index.lock': Operation not permitted`，当时没有提交或 push。恢复后已快进到 `81569d8`，未跟踪交付物仍在。最终本地提交哈希与 push 结果将在完成 Git 最终化后补记。
+- Git 之前的最终化尝试因元数据权限失败：`git add` 返回 `fatal: Unable to create '/Users/mikao/Documents/ChatGPT/海钓app/qingdao-fishing-app/.git/index.lock': Operation not permitted`，当时没有提交或 push。恢复后已快进到 `81569d8`，未跟踪交付物仍在。
+
+## 最终 Git 结果
+
+- 原型与素材交付提交：`9e32136600c07c09e6a910b69484ed83aae080aa`，位于本地 `main`，从 `81569d8` 快进推送到 `origin/main` 成功；未改写历史或 force push。
+- 本计时记录的最终收尾提交及其推送状态在试点结项回报中注明。

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>拼船海钓 App · 设计原型 v1</title>
+<style>
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#e9f1f6;color:#12303f;margin:0;padding:26px}
+h1{font-size:23px;margin:0 0 6px}.sub{color:#4d6575;font-size:14px;line-height:1.7;max-width:900px}
+.grid{display:flex;flex-wrap:wrap;gap:26px;margin-top:18px}
+.unit{width:300px}
+.unit h3{font-size:15px;margin:0 0 4px;color:#0a4a73}.unit p{font-size:12.5px;color:#5a7284;line-height:1.6;margin:0 0 8px}
+.phone{width:300px;height:610px;background:#f4f8fb;border-radius:34px;border:2px solid #b9cfdd;box-shadow:0 8px 24px rgba(10,50,80,.14);overflow:hidden;position:relative;font-size:12px}
+.bar{background:#0a6cad;color:#fff;padding:12px 14px 10px;font-weight:700;font-size:14px}
+.bar small{display:block;font-weight:400;font-size:11px;opacity:.85;margin-top:2px}
+.card{background:#fff;border-radius:12px;padding:10px 12px;margin:9px 10px;box-shadow:0 1px 4px rgba(10,50,80,.06)}
+.chip{display:inline-block;border-radius:999px;padding:2.5px 9px;font-size:11px;background:#e3eff7;color:#0a5a8c;margin:0 5px 5px 0}
+.chip.on{background:#0a6cad;color:#fff}.chip.org{background:#ffe9db;color:#c25a12}
+.btn{background:#ff7a29;color:#fff;border-radius:10px;text-align:center;padding:9px;font-weight:700;font-size:13px;margin:9px 10px}
+.btn.blue{background:#0a6cad}
+.row{display:flex;justify-content:space-between;align-items:center}
+.mut{color:#7d95a5;font-size:11px}.price{color:#ff7a29;font-weight:800;font-size:15px}
+.prog{height:6px;background:#e5eef4;border-radius:3px;overflow:hidden;margin-top:5px}.prog i{display:block;height:100%;background:#22a06b}
+.tabs{position:absolute;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #dde8ef;display:flex;justify-content:space-around;padding:8px 0 12px;font-size:11px;color:#7d95a5}
+.tabs b{color:#0a6cad}
+.kv{display:flex;justify-content:space-between;padding:4.5px 0;border-bottom:1px dashed #e3edf3}.kv:last-child{border-bottom:none}
+.seatkey{font-size:11px;color:#5a7284}
+input.f{width:100%;box-sizing:border-box;border:1px solid #cfdfeb;border-radius:8px;padding:7px 9px;font-size:12px;margin:3px 0 7px;background:#fbfdff}
+label{font-size:11px;color:#4d6575;font-weight:600}
+</style></head><body>
+<h1>拼船海钓 App · 设计原型 v1（客户端 + 船长端）</h1>
+<p class="sub">设计语言：海洋蓝主色 + 落日橙行动色，清爽明码、信息密度优先；一个 App 双身份（客户端 / 船长端切换）。下方 10 屏为核心页面示意（数据为样例）。底部附信息架构与页面接口（跳转与数据）说明。</p>
+<div class="grid">
+
+<!-- 1 首页 -->
+<div class="unit"><h3>① 客户端 · 首页</h3><p>双入口分流游客与钓友；当季鱼种带流量；活动卡带成团进度。</p>
+<div class="phone"><div class="bar">拼船海钓 · 青岛<small>📍 小港码头附近 · 今日海况 2 级浪，宜出钓</small></div>
+<div class="card"><div class="row"><b style="font-size:13px">🔍 搜船、鱼种、海域</b><span class="mut">10月25日 周六 ▾</span></div></div>
+<div style="display:flex;gap:8px;margin:0 10px">
+<div class="card" style="flex:1;margin:0;background:#e8f4fd"><b>🎣 第一次海钓</b><div class="mut">体验班 · 全包空手来</div></div>
+<div class="card" style="flex:1;margin:0;background:#eafaf2"><b>🚤 钓友拼船</b><div class="mut">按鱼种拼班出发</div></div></div>
+<div class="card"><b>🐟 当季主攻</b> <span class="mut">10 月窗口期</span><div style="margin-top:6px"><span class="chip on">黄条鰤 · 当季</span><span class="chip">带鱼夜钓</span><span class="chip">墨鱼季</span><span class="chip">黑头肥</span></div></div>
+<div class="card"><div class="row"><b>海丰号 · 沙子口出港</b><span class="price">¥500</span></div>
+<div class="mut">周六 05:30 – 13:30 · 主攻 黄条鰤/鲈鱼 · 船长口碑 4.9 · 空军率 8%</div>
+<div class="prog"><i style="width:83%"></i></div><div class="mut">已订 10/12 · <span style="color:#c25a12;font-weight:700">差 2 人成行</span> · 尾角位可选</div></div>
+<div class="card"><div class="row"><b>蓝鲸号 · 小港出港</b><span class="price">¥299</span></div>
+<div class="mut">周六 08:00 – 12:00 · 体验班 · 近岸平稳 · 亲子友好</div>
+<div class="prog"><i style="width:58%"></i></div><div class="mut">已订 7/12 · 装备全包 · 渔获可带走</div></div>
+<div class="tabs"><b>首页</b><span>发现</span><span>订单</span><span>我的</span></div></div></div>
+
+<!-- 2 活动列表 -->
+<div class="unit"><h3>② 客户端 · 活动列表（筛选）</h3><p>五维筛选置顶：时间、鱼种、海域、舒适度、船大小；再补价格与班次。</p>
+<div class="phone"><div class="bar">本周活动 · 青岛<small>共 46 个班次</small></div>
+<div class="card"><span class="chip on">周六 10/25</span><span class="chip">周日</span><span class="chip">鱼种 ▾</span><span class="chip">海域 ▾</span><span class="chip">舒适度 ▾</span><span class="chip">价格 ▾</span><span class="chip org">只看体验班</span></div>
+<div class="card"><div class="row"><b>海丰号 13米</b><span class="chip" style="background:#eafaf2;color:#177a4c">舒适 · 间距1.8m</span></div><div class="mut">05:30 沙子口 → 田横钓场 · 黄条鰤 · 已订10/12</div><div class="row"><span class="mut">船长 4.9 分 · 复订 61%</span><span class="price">¥500</span></div></div>
+<div class="card"><div class="row"><b>金枪鱼号 14米</b><span class="chip" style="background:#eafaf2;color:#177a4c">宽松 · 间距2.0m</span></div><div class="mut">06:00 积米崖 → 灵山岛 · 真鲷/黑头 · 已订8/12</div><div class="row"><span class="mut">船长 4.8 分 · 有厕所/空调</span><span class="price">¥650</span></div></div>
+<div class="card"><div class="row"><b>蓝鲸号 12米</b><span class="chip" style="background:#fff4e5;color:#a86a12">够用 · 间距1.7m</span></div><div class="mut">08:00 小港 → 近岸礁区 · 体验班 · 已订7/12</div><div class="row"><span class="mut">船长 4.9 分 · 亲子友好</span><span class="price">¥299</span></div></div>
+<div class="card"><div class="row"><b>夜航者号 13米</b><span class="chip" style="background:#eafaf2;color:#177a4c">舒适 · 夜钓灯</span></div><div class="mut">18:30 中港 → 胶州湾 · 带鱼夜钓 · 已订5/12</div><div class="row"><span class="mut">船长 4.7 分 · 夜汛正旺</span><span class="price">¥380</span></div></div>
+<div class="tabs"><b>首页</b><span>发现</span><span>订单</span><span>我的</span></div></div></div>
+
+<!-- 3 活动详情 -->
+<div class="unit"><h3>③ 客户端 · 活动详情</h3><p>信任信息全量前置：口碑、海况、钓组配置、成团状态一屏看完再下单。</p>
+<div class="phone"><div class="bar">海丰号 · 黄条鰤专班<small>周六 05:30 沙子口集合 · 13:30 返港</small></div>
+<div class="card"><div class="row"><b>👨‍✈️ 船长 刘长河</b><span class="chip" style="background:#eafaf2;color:#177a4c">口碑 4.9</span></div><div class="mut">出海 212 趟 · 空军率 8% · 复订率 61% · 评价绑定真实订单</div></div>
+<div class="card"><b>🌊 当日海况</b><div class="mut">风 3 级 · 浪 0.6m · 水温 19.8℃ · 活汛大潮 · 出钓指数 86（适宜）</div></div>
+<div class="card"><b>🎣 钓组配置（船长必填）</b>
+<div class="kv"><span>饵料</span><b>活虾 500g/人 · 船长提供</b></div>
+<div class="kv"><span>主线 / 前导</span><b>PE 2.0 · 碳线 6 号</b></div>
+<div class="kv"><span>铅坠</span><b>水滴坠 100–150g（随潮）</b></div></div>
+<div class="card"><b>🚢 船况</b><div class="mut">13 米 · 12 钓位 · 有厕所/船舱/活鱼舱/鱼探 · 间距 1.8m 舒适</div>
+<div class="prog"><i style="width:83%"></i></div><div class="mut">已订 10/12 · 已达最低成行 · 还差 2 位满员</div></div>
+<div class="btn">选钓位 · ¥500/位</div>
+<div class="tabs"><b>首页</b><span>发现</span><span>订单</span><span>我的</span></div></div></div>
+
+<!-- 4 选位 -->
+<div class="unit"><h3>④ 客户端 · 选钓位（二维定版）</h3><p>按定版模板：三段分区、尾角加价位；已售灰置，点选即显价格。</p>
+<div class="phone"><div class="bar">选钓位 · 海丰号<small>点选空位 · 尾角 6/7 号 +¥50</small></div>
+<div class="card" style="text-align:center">
+<svg viewBox="0 0 260 330" width="215" xmlns="http://www.w3.org/2000/svg">
+<path d="M130,8 C84,32 40,90 37,160 L37,282 Q37,304 62,304 L198,304 Q223,304 223,282 L223,160 C220,90 176,32 130,8 Z" fill="#eaf3fb" stroke="#20507e" stroke-width="2.5"/>
+<line x1="37" y1="118" x2="223" y2="118" stroke="#20507e" stroke-width="1.2"/><line x1="37" y1="212" x2="223" y2="212" stroke="#20507e" stroke-width="1.2"/>
+<rect x="97" y="132" width="66" height="66" rx="8" fill="#dbe7f3" stroke="#20507e"/><text x="130" y="169" text-anchor="middle" font-size="11" fill="#20507e">船舱</text>
+<g font-size="13" font-weight="700" text-anchor="middle">
+<rect x="48" y="34" width="30" height="30" rx="7" fill="#3b82f6"/><text x="63" y="54" fill="#fff">1</text>
+<rect x="44" y="76" width="30" height="30" rx="7" fill="#9fb6c6"/><text x="59" y="96" fill="#fff">2</text>
+<rect x="44" y="136" width="30" height="30" rx="7" fill="#22a06b"/><text x="59" y="156" fill="#fff">3</text>
+<rect x="44" y="172" width="30" height="30" rx="7" fill="#9fb6c6"/><text x="59" y="192" fill="#fff">4</text>
+<rect x="45" y="228" width="30" height="30" rx="7" fill="#e8a13a"/><text x="60" y="248" fill="#fff">5</text>
+<rect x="52" y="268" width="30" height="30" rx="7" fill="#e8a13a"/><text x="67" y="288" fill="#fff">6★</text>
+<rect x="178" y="268" width="30" height="30" rx="7" fill="#ff7a29" stroke="#12303f" stroke-width="2"/><text x="193" y="288" fill="#fff">7★</text>
+<rect x="185" y="228" width="30" height="30" rx="7" fill="#9fb6c6"/><text x="200" y="248" fill="#fff">8</text>
+<rect x="186" y="172" width="30" height="30" rx="7" fill="#22a06b"/><text x="201" y="192" fill="#fff">9</text>
+<rect x="186" y="136" width="30" height="30" rx="7" fill="#22a06b"/><text x="201" y="156" fill="#fff">10</text>
+<rect x="186" y="76" width="30" height="30" rx="7" fill="#3b82f6"/><text x="201" y="96" fill="#fff">11</text>
+<rect x="182" y="34" width="30" height="30" rx="7" fill="#3b82f6"/><text x="197" y="54" fill="#fff">12</text></g>
+</svg>
+<div class="seatkey">蓝 船头 · 绿 过道 · 金 船尾 · 灰 已售 · 橙框 你的选择（7 号尾角）</div></div>
+<div class="card"><div class="row"><span>7 号位（右尾角 ★）</span><b class="price">¥550</b></div><div class="mut">含船位费；保险在下一步单独购买</div></div>
+<div class="btn">确认选位</div>
+<div class="tabs"><b>首页</b><span>发现</span><span>订单</span><span>我的</span></div></div></div>
+
+<!-- 5 订单确认 -->
+<div class="unit"><h3>⑤ 客户端 · 订单确认与保险</h3><p>价格分开列示；保险为必经步骤，点入保险公司页面自付、平台不经手。</p>
+<div class="phone"><div class="bar">确认订单<small>海丰号 · 周六 05:30 · 7 号位</small></div>
+<div class="card"><b>乘船人（实名）</b><div class="mut">赵小明 · 身份证 3702**********1234</div><div class="mut">用于保险投保与出海报备，信息直传保险公司</div></div>
+<div class="card">
+<div class="kv"><span>船位费</span><b>¥550</b></div>
+<div class="kv"><span>平台会员价优惠</span><b style="color:#177a4c">−¥0</b></div>
+<div class="kv"><span>应付（平台）</span><b class="price">¥550</b></div></div>
+<div class="card"><div class="row"><b>🛡 短期意外险（必买）</b><span class="chip org">保险公司页面</span></div>
+<div class="mut">保额 50 万 · 保费 ¥15 · 点击进入保险公司投保，保单由保险公司出具</div>
+<div class="btn blue" style="margin:8px 0 2px">去投保（外部）</div></div>
+<div class="card"><b>退改规则</b><div class="mut">72h 外免费 · 72–24h 扣 30% · 24–6h 扣 60% · 6h 内不退（违约金归船长）</div></div>
+<div class="btn">微信支付 ¥550</div>
+<div class="tabs"><span>首页</span><span>发现</span><b>订单</b><span>我的</span></div></div></div>
+</div>
+<div class="grid">
+<!-- 6 我的 -->
+<div class="unit"><h3>⑥ 客户端 · 我的（会员资产）</h3><p>会员等级、图鉴、券与推广入口都在此——流失成本可视化。</p>
+<div class="phone"><div class="bar">我的<small>黄金会员 · 出海 6 次</small></div>
+<div class="card"><div class="row"><b>🐟 我的鱼种图鉴</b><span class="chip on">7 / 17 已点亮</span></div><div class="prog"><i style="width:41%;background:#0a6cad"></i></div><div class="mut">还差 黄条鰤、真鲷 等 10 种 · 钓获打卡自动点亮</div></div>
+<div class="card"><div class="kv"><span>🎫 券包</span><b>3 张 · 含老带新券 ¥30</b></div>
+<div class="kv"><span>🏆 大鱼榜</span><b>我的鲈鱼 3.2 斤 · 本月第 14</b></div>
+<div class="kv"><span>📜 渔获证书</span><b>2 张可分享</b></div></div>
+<div class="card"><div class="row"><b>📣 推广中心</b><span class="price">已赚 ¥126</span></div><div class="mut">我的推广码 · 带码海报 · 好友首单我得佣金</div></div>
+<div class="card"><div class="kv"><span>订单</span><b>待出航 1 · 待评价 1</b></div>
+<div class="kv"><span>候补</span><b>海丰号周日班 · 第 2 位</b></div>
+<div class="kv"><span>身份</span><b>切换到船长端 ▸</b></div></div>
+<div class="tabs"><span>首页</span><span>发现</span><span>订单</span><b>我的</b></div></div></div>
+
+<!-- 7 鱼种详情 -->
+<div class="unit"><h3>⑦ 客户端 · 鱼种详情（发现）</h3><p>图鉴内容带交易：习性+当季状态+在售活动自动聚合。</p>
+<div class="phone"><div class="bar">黄条鰤<small>Seriola lalandi · 高端目标鱼</small></div>
+<div class="card" style="text-align:center;background:#dceefb"><div style="font-size:52px">🐠</div><div class="mut">标准活体照（图库）+ 平台实拍渔获照</div></div>
+<div class="card"><b>习性</b><div class="mut">暖水性高速掠食者，夏季随暖流北上黄海深水礁与沉船区，体型大、拉力强。</div>
+<div style="margin-top:7px"><span class="chip on">窗口期 7–10 月 · 正当季</span><span class="chip">铁板 / 波扒 / 活饵</span></div></div>
+<div class="card"><div class="row"><b>正在主攻它的活动</b><span class="chip org">本周 6 个班次</span></div>
+<div class="mut">海丰号 周六 05:30 · ¥500 · 差 2 人成行</div>
+<div class="mut">金枪鱼号 周日 06:00 · ¥650 · 已成行</div></div>
+<div class="btn blue">关注此鱼种（开班提醒我）</div>
+<div class="tabs"><span>首页</span><b>发现</b><span>订单</span><span>我的</span></div></div></div>
+
+<!-- 8 船长工作台 -->
+<div class="unit"><h3>⑧ 船长端 · 工作台</h3><p>一屏看清今天：班次、名单、回填待办、收入与口碑。</p>
+<div class="phone"><div class="bar" style="background:#0b4a73">船长工作台 · 海丰号<small>刘长河船长 · 口碑 4.9 · 全年合作船长</small></div>
+<div class="card"><div class="row"><b>明日班次 · 黄条鰤专班</b><span class="chip" style="background:#eafaf2;color:#177a4c">已成行</span></div>
+<div class="mut">05:30 沙子口 · 名单 11/12 人（实名+保险齐）</div>
+<div class="btn blue" style="margin:8px 0 2px">查看名单 / 出航打卡</div></div>
+<div class="card"><div class="kv"><span>待回填</span><b>昨日渔获（影响口碑）</b></div>
+<div class="kv"><span>本周收入</span><b class="price">¥9,720</b></div>
+<div class="kv"><span>待评价</span><b>3 单</b></div></div>
+<div class="card"><b>快捷操作</b><div style="margin-top:6px"><span class="chip on">＋ 一键复发班次</span><span class="chip">发新班</span><span class="chip">我的船档案</span><span class="chip">推广我的船</span></div></div>
+<div class="card"><div class="mut">🌦 明日海况：风 3 级 · 浪 0.6m · 适宜出航</div><div class="mut">📣 平台：周末鲅鱼班流量扶持中，发班优先展示</div></div>
+<div class="tabs"><b>工作台</b><span>班次</span><span>名单</span><span>我的</span></div></div></div>
+
+<!-- 9 发班 -->
+<div class="unit"><h3>⑨ 船长端 · 发布班次</h3><p>全表单选择题：鱼种多选、钓组预设一键带出、保底按总价设。</p>
+<div class="phone"><div class="bar" style="background:#0b4a73">发布班次<small>海丰号 · 复制上周六班次</small></div>
+<div class="card"><label>日期 / 出发 / 返程</label><input class="f" value="10月25日 周六 · 05:30 – 13:30">
+<label>钓点 / 海域</label><input class="f" value="田横钓场（沙子口出港）">
+<label>班次类型</label><div><span class="chip">体验班</span><span class="chip on">专业拼船</span><span class="chip">整船包船</span></div>
+<label>主攻鱼种（必选 1–3）</label><div><span class="chip on">黄条鰤 · 当季</span><span class="chip on">鲈鱼</span><span class="chip">黑头（过季提醒）</span></div>
+<label>钓组配置（预设「铁板常用」带出）</label><input class="f" value="活虾500g · PE2.0 · 碳线6号 · 水滴坠100–150g">
+<label>每位价 / 最低成行总价</label><input class="f" value="¥500 · 保底 ¥5,000"></div>
+<div class="btn">发布班次</div>
+<div class="tabs"><b>工作台</b><span>班次</span><span>名单</span><span>我的</span></div></div></div>
+
+<!-- 10 推广中心 -->
+<div class="unit"><h3>⑩ 推广中心（会员/船长/渠道共用）</h3><p>钱只跟成交走：漏斗四级、佣金冻结可见、带码海报一键生成。</p>
+<div class="phone"><div class="bar">推广中心<small>推广员：赵小明（会员）</small></div>
+<div class="card"><div class="row"><span>累计佣金</span><b class="price">¥386</b></div>
+<div class="kv"><span>可提现</span><b>¥260</b></div>
+<div class="kv"><span>冻结中（行程后 7 天）</span><b>¥126</b></div></div>
+<div class="card"><b>我的推广漏斗（本月）</b>
+<div class="kv"><span>海报扫码</span><b>412</b></div>
+<div class="kv"><span>注册</span><b>96</b></div>
+<div class="kv"><span>首单成交</span><b>21 单</b></div></div>
+<div class="card" style="text-align:center"><div style="font-size:40px">▦</div><div class="mut">我的专属码（船上/朋友圈海报用）</div>
+<div class="btn blue" style="margin:8px 0 2px">生成带码海报</div></div>
+<div class="card"><div class="mut">规则：一级推广 · 佣金来自真实订单 · 自订不计佣 · 退款回滚</div></div>
+<div class="tabs"><span>首页</span><span>发现</span><span>订单</span><b>我的</b></div></div></div>
+</div>
+
+<h2 style="font-size:18px;margin-top:26px">信息架构与页面接口</h2>
+<p class="sub" style="max-width:960px">
+<b>客户端</b>（底部 4 Tab）：首页（双入口+当季鱼种+活动流）→ 活动列表（五维筛选）→ 活动详情（口碑/海况/钓组/成团）→ 选位 → 订单确认（实名+分开列价+保险外链）→ 支付 → 订单页（行前清单/出航状态/未拼满处置进度）→ 返港打卡评价。发现 Tab：鱼种图鉴与海域钓场，内容页自动聚合在售活动。我的 Tab：会员等级、图鉴、券包、候补、渔获证书、推广中心、身份切换。<br>
+<b>船长端</b>（同 App 切换，4 Tab）：工作台（今日班次/名单/回填/收入）→ 发班（预设带出、一键复发）→ 班次管理（成团核算/处置确认/名单导出报备）→ 我的（船档案/口碑数据/履约保证金/全年合作进度）。<br>
+<b>页面间数据接口要点</b>：活动详情的海况与出钓指数由气象数据服务实时填充；选位页座位状态走实时库存锁定（选座后锁位 10 分钟）；订单页保险状态由保险公司接口回查（未投保不能完成出航核销）；船长回填与用户打卡双源数据汇入口碑计算引擎；推广归因码贯穿 H5 落地页→注册→首单全链路。<br>
+<b>H5 获客页</b>：复用客户端活动详情+下单流的轻量版，扫码直达、免下载完成首单，完成页引导装 App 领会员权益。
+</p>
+</body></html>

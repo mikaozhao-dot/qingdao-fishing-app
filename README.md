@@ -1,4 +1,4 @@
-# qingdao-fishing-app · 青岛海钓拼船
+# 约钓者｜青岛海钓拼船
 
 iOS 与 Android 双端海钓拼船应用。第 0 步提供 Flutter 双身份空壳、Node.js REST 单体、PostgreSQL/Redis 本地环境及数据模型；业务交易流程留待后续开发步骤。
 

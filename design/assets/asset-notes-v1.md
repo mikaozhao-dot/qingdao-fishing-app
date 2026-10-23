@@ -25,3 +25,11 @@
 | `fish-photos/black-rockfish.jpg` | 黑头（Sebastes schlegelii） | [Wikimedia Commons: Sebastes schlegelii by OpenCage 2.jpg](https://commons.wikimedia.org/wiki/File:Sebastes_schlegelii_by_OpenCage_2.jpg)，OpenCage | CC BY-SA 2.5 |
 
 这些许可要求保留作者署名、来源和许可链接；带 SA 的图片及其改编素材须按相同或兼容许可共享。
+
+## 船只实景照片（VoltBank v2 全量稿）
+
+| 文件 | 内容 | 来源 / 作者 | 许可与使用 |
+|---|---|---|---|
+| `boat-photos/dalian-fishing-boat-george-yin.jpg` | 大连海面日落中的渔船实景，供拼船活动卡与详情页演示 | [Unsplash 图片页：Boat on body of water across horizon during sunset](https://unsplash.com/photos/boat-on-body-of-water-across-horizon-during-sunset-UEtC_o4GxFg)，George Yin | [Unsplash License](https://unsplash.com/license)；样稿使用 1600×1200 图像，页面裁切展示。此图为大连实景船只照片，不代表样例活动中的具体船舶。 |
+
+Unsplash 许可允许免费复制、修改、分发及商业使用，且不要求署名；样稿仍保留作者与原图链接便于追溯。上线前应以实际合作船只的授权实拍替换活动照片。

@@ -16,6 +16,6 @@
 1. 按 README 启动 Compose，调用 `/health` 与 `/ready`；核数据库迁移和 16 张表。
 2. 对照产品计划核金额与时区字段、最低成行总价、外部保险收款边界。
 3. 对照 `docs/ui-v2-design-system.md` 与冻结评审，核 Flutter token、客户端四 Tab 与双身份切换骨架。
-4. 核 [双端 CI 修正后运行 #40038150689](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40038150689) 的真实构建结果。首次运行的 iOS 模拟器构建已通过，Android 在旧版 SDK 安装动作中失败后已修正；本机缺 Android SDK，Xcode 许可未确认，本地双端打包未成功。真机连通仍待评审环境完成。
+4. 核 [双端 CI 修正后运行 #40038150689](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40038150689) 的构建日志：Android debug APK、iOS 模拟器 App 均已编译成功。本机缺 Android SDK，Xcode 许可未确认，本地双端打包未成功；真机连通仍待评审环境完成。
 
 规格正本与冻结的十屏原型未改。设计评审的四项开发阶段小项会在后续业务页实现时统一处理，当前第 0 步不做业务页。

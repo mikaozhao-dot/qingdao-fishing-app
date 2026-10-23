@@ -30,7 +30,7 @@ flutter build ios --simulator --no-codesign --no-pub
 
 本机尝试 Android 命令返回 `[!] No Android SDK found`；本机尝试 iOS 命令返回 `You have not agreed to the Xcode license agreements`。本机 Xcode 27.1 已安装，但系统当前选中 Command Line Tools 且 Xcode 许可未由设备所有者确认；未代替用户接受许可。本机也未安装 Docker，故 Compose 容器构建未在此机器上运行。**因此截至上述本地尝试，不能声称双端构建或真机验收通过。**
 
-仓库的 `.github/workflows/step0-build.yml` 在 GitHub 托管环境分别构建 Android debug APK 与无签名 iOS 模拟器 App。[首次运行 #40037822335](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40037822335) 中，**iOS 模拟器构建成功**；Android 在 `android-actions/setup-android@v3` 请求已下架的旧版 `tools` 包时失败，尚未进入 Flutter 编译。已改为直接使用托管 runner 自带的 `sdkmanager`，修正后的运行见 [#40038150689](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40038150689)，Android 结果待补记。
+仓库的 `.github/workflows/step0-build.yml` 在 GitHub 托管环境分别构建 Android debug APK 与无签名 iOS 模拟器 App。[首次运行 #40037822335](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40037822335) 中，iOS 模拟器构建成功；Android 在 `android-actions/setup-android@v3` 请求已下架的旧版 `tools` 包时失败，尚未进入 Flutter 编译。改为直接使用托管 runner 自带的 `sdkmanager` 后，[修正运行 #40038150689](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40038150689) **双端均成功**：iOS 日志为 `✓ Built build/ios/iphonesimulator/Runner.app`，Android 日志为 `✓ Built build/app/outputs/flutter-apk/app-debug.apk`。这是编译证据，真机功能和后端实际联动仍需 Muse 评审。
 
 ## 已知边界
 

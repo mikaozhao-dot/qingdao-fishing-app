@@ -5,6 +5,7 @@
 ## 预览
 
 - HTML：`design/b-direction-sample-v1.html`
+- 手机离线预览包：`design/b-direction-sample-v1-mobile.zip`（解压后用手机浏览器打开 `index.html`）
 - 本地启动：在仓库根目录运行 `python3 -m http.server 8083 --bind 127.0.0.1`
 - 预览地址：<http://localhost:8083/design/b-direction-sample-v1.html>
 - 可在手机宽度切换首页 / 活动详情；首页 GPS 按钮展示正式版定位授权说明，不申请真实定位。

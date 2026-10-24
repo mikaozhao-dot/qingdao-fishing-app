@@ -25,8 +25,9 @@
 
 - Xcode `27.1` / CocoaPods `1.17.0` 可用。`flutter doctor -v` 的 Xcode 项通过，没有 license 未同意错误。
 - 最终代码完成后重新运行 `flutter build ios --simulator --no-codesign --no-pub`，本机 iOS 模拟器构建通过。
-- 本机没有 Android SDK，故未在本机生成 Android APK；仓库的 GitHub Actions 双端构建工作流将在代码推回后执行 Android 与 iOS 构建。
-- 本机 `flutter analyze --no-pub` 的分析服务在读取 LSP 消息时抛出 `FormatException: Unexpected end of input` 并以 255 退出，没有返回有效诊断。清理 Dart lint 后，`dart analyze --format=machine` 退出码为 0 且无诊断；托管 CI 的 `flutter analyze` 结果待本次工作流完成后补记。
+- 本机没有 Android SDK，因此未在本机生成 Android APK；GitHub Actions 已成功构建 Android debug APK。
+- 本机 `flutter analyze --no-pub` 的分析服务在读取 LSP 消息时抛出 `FormatException: Unexpected end of input` 并以 255 退出，没有返回有效诊断。清理 Dart lint 后，`dart analyze --format=machine` 退出码为 0 且无诊断；GitHub Actions 的 `flutter analyze` 检查成功。
+- GitHub Actions 工作流 [Step 0 dual-platform builds · run 7](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40063280982) 对提交 `aedbffe488f096cf4725087e06b6f178bf79a846` 的 analyze、Android debug APK 与 iOS simulator 三项任务均成功。
 - iOS 模拟器 UI 冒烟覆盖船长发班表单、两班公开活动列表与活动详情，保存以下 1398×2034 PNG；每张均小于 1 MB：
 
 | 文件 | 字节 | 页面 |
@@ -39,4 +40,4 @@
 
 ## 评审状态
 
-**状态：待 Muse 独立评审；本记录不表示验收通过。** 本次代码推回后请 Muse 按任务书实跑发班、复发、筛选、详情、下架与自动结束链路，并复核三张截图。GitHub Actions 的 analyze、Android debug APK 和 iOS simulator 构建结果待回填。
+**状态：待 Muse 独立评审；本记录不表示验收通过。** 请 Muse 按任务书实跑发班、复发、筛选、详情、下架与自动结束链路，并复核三张截图。上述 CI 构建通过只证明静态分析和双端构建成功，不代表业务验收通过。

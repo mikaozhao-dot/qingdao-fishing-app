@@ -1,6 +1,6 @@
 # 约钓者｜青岛海钓拼船
 
-iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；班次与交易流程留待后续开发步骤。
+iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；第 2 步支持发班与活动只读浏览，预订交易留待后续开发步骤。
 
 ## 仓库结构
 
@@ -40,19 +40,22 @@ flutter pub get
 flutter run
 ```
 
-钓友端 Tab 为首页、活动、订单、我的；船长端为工作台、发班、行程、我的。右上角切换身份；用本地沙盒完成注册、实名，再切换船长端上传资质与船档案。iOS 模拟器默认连接 `http://127.0.0.1:3000`，Android 模拟器默认连接 `http://10.0.2.2:3000`。真机需传入开发机可访问的地址，例如 `flutter run --dart-define=API_BASE_URL=http://<局域网地址>:3000`。管理审核页为 `http://localhost:3000/admin`。
+钓友端 Tab 为首页、活动、订单、我的；船长端为工作台、发班、行程、我的。右上角切换身份；用本地沙盒完成注册、实名，再切换船长端上传资质与船档案。审核通过的船档案可发布班次；钓友可筛选和查看活动，但本阶段不提供选位、下单、锁位或支付。iOS 模拟器默认连接 `http://127.0.0.1:3000`，Android 模拟器默认连接 `http://10.0.2.2:3000`。真机需传入开发机可访问的地址，例如 `flutter run --dart-define=API_BASE_URL=http://<局域网地址>:3000`。管理审核页为 `http://localhost:3000/admin`。
 
-第 0 步构建记录见 `docs/step0-build-notes.md`；第 1 步记录与验收证据见 `docs/step1-build-notes.md`。当前不包含真实短信、实名供应商、支付、保险出单、发班或交易。
+第 0 步构建记录见 `docs/step0-build-notes.md`；第 1 步记录与验收证据见 `docs/step1-build-notes.md`；第 2 步实现与自检见 `docs/step2-build-notes.md`。当前不包含真实短信、实名供应商、真实海况、预订交易、支付或保险出单。
 
 ## 关键文件
 
 - `docs/codex-dev-step0-brief-v1.md`、`docs/dev-step0-kickoff-2026-10-23.md`：第 0 步任务与开工令。
+- `docs/codex-dev-step2-brief-v1.md`、`docs/step2-build-notes.md`：第 2 步发班与活动展示任务、实现记录和待评审事项。
 - `docs/codex-dev-step1-brief-v1.md`、`docs/step1-build-notes.md`、`docs/step1-review-84828e0f87c2.md`、`docs/step1-review-request-2026-10-24.md`：第 1 步任务、实施记录与 Muse 独立评审。
 - `docs/data-model-step1-addendum.md`：只记录第 1 步新增字段与实体，不改数据模型 v1 正本。
+- `docs/data-model-step2-addendum.md`：只记录第 2 步新增字段与座位库存快照口径。
 - `docs/data-model-v1.md`：核心实体、关系和金额/时间口径。
 - `docs/p0-flow-v1.md`、`docs/fish-library-v1.md`：页面流程与鱼种库。
 - `design/review-photos-v2/`：十屏独立 PNG 评审图。
 - `design/step1-review-photos/`：第 1 步截图；`01`–`06` 是 Flutter Web 移动视口预览，`07`–`11` 是 iOS 模拟器设备冒烟证据。
+- `design/step2-review-photos/`：第 2 步发班、活动列表和活动详情的 iOS 模拟器截图。
 
 ## 协作规矩
 

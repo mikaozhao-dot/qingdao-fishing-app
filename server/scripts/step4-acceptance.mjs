@@ -174,6 +174,7 @@ async function main() {
 
   const captain = await makeUser('船长甲', true);
   const angler = await makeUser('钓友甲');
+  const otherCaptain = await makeUser('船长乙', true);
   const boatId = (await pool.query(
     "INSERT INTO boats (captain_user_id,name,length_cm,home_marina_code,seat_count,review_status,template_status) " +
       "VALUES ($1,'验收测试船',1200,'xiaogang',8,'approved','ready') RETURNING id",
@@ -189,7 +190,7 @@ async function main() {
   check(repeated.generated, 0, 'worker does not regenerate an existing checklist');
   const captainItems = await expect('GET', '/captain/fulfillment', captain.token);
   check(captainItems.items.map((item) => item.id).sort(), [departure.id, emptyDepartureId].sort(),
-    'captain sees their confirmed trips');
+    'captain sees only their confirmed trips');
   check('bookedFen' in captainItems.items[0], false, 'trip list does not expose formation amount');
   const emptyTrip = await expect('GET', '/captain/departures/' + emptyDepartureId + '/fulfillment', captain.token);
   check(emptyTrip.checklist.insurance.status, 'check_before_departure', 'empty trip does not imply insurance is checked');
@@ -229,6 +230,11 @@ async function main() {
   check(notifications.count, 1, 'pre-trip notice is recorded once');
   await expect('POST', '/captain/departures/' + departure.id + '/formation/decision', captain.token,
     { action: 'low_seat' }, 404);
+  await expect('GET', '/captain/fulfillment', angler.token, undefined, 403);
+  const otherCaptainItems = await expect('GET', '/captain/fulfillment', otherCaptain.token);
+  check(otherCaptainItems.items.length, 0, 'another captain cannot see the owner trip');
+  await expect('GET', '/captain/departures/' + departure.id + '/fulfillment', otherCaptain.token, undefined, 404);
+  await expect('GET', '/captain/departures/' + departure.id + '/manifest.csv?format=full', otherCaptain.token, undefined, 404);
 
   console.log('Step 4 non-financial acceptance passed: ' + assertions + ' assertions.');
 }

@@ -1,6 +1,6 @@
-# 第 4 步履约子集独立评审请求
+# 第 4 步履约子集复核记录与 v2 验收挂账
 
-状态：等待 Muse 独立评审。本文件不表示 Muse 已收到仓外通知或已验收。
+状态：Muse 于 2026-10-24 对 v1 非金额履约子集有条件通过。Codex 已完成本次两项修正和模拟器截图，作为 v2 任务书 §7 的证据挂账，等待 Muse 在 v2 验收时独立复核。本记录不表示第 4 步 v2 或全量验收完成。
 
 ## 评审范围
 
@@ -25,13 +25,17 @@
 5. 核对移动端订单页与船长行程页没有暴露成团、补差、包船、候补、取消或退改操作。
 6. 检查迁移仅包含履约记录和通知记录，不写入任何资金决定。
 
-## 本地证据
+## 修订与本地证据
 
-- server/scripts/step4-acceptance.mjs：干净本地沙盒数据库 26 项断言通过。
+- 空清单状态修正：零订单不再显示“已核验”，零座位不再显示“已匹配”；各自显示 `check_before_departure` / `review_required`。
+- 反向权限断言：普通钓友访问船长清单返回 403；其他船长无法列出、读取或导出本船长的班次清单。
+- server/scripts/step4-acceptance.mjs：干净本地沙盒数据库 33 项断言通过。
 - npm run check：通过。
 - dart analyze .：通过。
 - flutter build ios --simulator --no-codesign：通过。
 - flutter analyze：当前 Flutter 3.47.8 CLI 的 analysis server 因 LSP 消息截断退出；没有把该命令记为通过。
-- 第 4 步原生截图待补；第 3 步 iOS 模拟器截图已随设计图片提交。
+- iOS 模拟器截图：`design/step4-review-photos/step4-01-captain-itinerary.png`、`design/step4-review-photos/step4-02-angler-itinerary.png`，均小于 1 MB；不作为实机截图或 v2 全量截图的替代。
+
+上述数据仅为 Codex 本地沙盒与 iOS 模拟器证据；Muse 的独立实跑仍待完成。v2 验收所需的选位/补差/成行状态/保险门禁截图以及 CI、双端构建，另按 `docs/codex-dev-step4-brief-v2.md` 留证。
 
 请在评审中将“已实现／已静态检查／已沙盒实测／已原生实测／已生产小额验收”分级写清，并列出缺陷和仍待裁定项。不要将非金额履约子集评为第 4 步全量通过。

@@ -3,6 +3,7 @@ import pg from 'pg';
 import { buildApp } from '../src/app.js';
 import { config } from '../src/config.js';
 import { createSecurity, makeSandboxIdentityNumber } from '../src/security.js';
+import { processConfirmedChecklists } from '../src/step4-routes.js';
 
 if (process.env.STEP4_ACCEPTANCE !== 'true') {
   throw new Error('Set STEP4_ACCEPTANCE=true and use an empty, isolated acceptance database.');
@@ -168,6 +169,10 @@ async function main() {
   const departure = await makeConfirmedDeparture(captain.id, boatId);
   const orderId = await makePaidOrder(angler.id, departure.id, departure.seat);
 
+  const generated = await processConfirmedChecklists(pool);
+  check(generated.generated, 1, 'worker generates a checklist for an already-confirmed trip');
+  const repeated = await processConfirmedChecklists(pool);
+  check(repeated.generated, 0, 'worker does not regenerate an existing checklist');
   const captainItems = await expect('GET', '/captain/fulfillment', captain.token);
   check(captainItems.items.length, 1, 'captain sees confirmed trip');
   check(captainItems.items[0].id, departure.id, 'trip identity matches');

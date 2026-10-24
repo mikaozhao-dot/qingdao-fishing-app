@@ -75,5 +75,5 @@
 - 船长成行确认接口也检查出航时刻；即使短缺快照和船长登记线下金额满足门槛，过期后仍拒绝新增确认记录，保留原短缺状态供人工核查。不新增罚款、取消或退款政策。
 - Dot 后续静态复核指出，批次固定的 `asOf` 可能在航次行锁等待期间过时。`0b0bd70` 在取得航次锁后、写入核算快照前均以数据库 `clock_timestamp()` 重查出航时刻。
 - 空白临时数据库应用迁移 001–011 后，`server/scripts/step4-acceptance.mjs` 通过 **146 项断言**，覆盖刚过出航时刻的任务处理与重跑、船长过期确认拒绝，以及持有航次行锁跨过出航时刻后仍转人工异常且不写快照。验收数据库在测试完成后已删除。
-- 本地 `npm run check`、`dart analyze .`、`dart format --set-exit-if-changed app/lib/step2_flow.dart app/lib/step4_flow.dart` 与 `git diff --check` 均通过。提交 `884d1e8` 的双端 CI [run 40089573657](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40089573657) 已成功；`0b0bd70` 后续提交的 CI 尚待推送触发。
+- 本地 `npm run check`、`dart analyze .`、`dart format --set-exit-if-changed app/lib/step2_flow.dart app/lib/step4_flow.dart` 与 `git diff --check` 均通过。提交 `884d1e8` 的双端 CI [run 40089573657](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40089573657) 已成功，覆盖本轮 Flutter 改动。`0b0bd70` 仅改服务端，当前 GitHub 构建工作流只监听 `app/**`，因此没有新的双端构建；服务端由语法检查和隔离数据库回归验证。
 - F02 首轮修正已收到 Dot 静态补充意见，并已按其锁等待边界补测和修正；更新后的代码与回归证据等待 Muse/dot 再次独立复核，详情见 `docs/step4-f02-followup-review-request-2026-10-24.md`。不代表第 4 步或配额补缺已验收。Dot 的 F01 候补补位边界仍等待 Muse 授权口径，未自行放开截止后的普通售票，也未实现未经授权的候补例外。

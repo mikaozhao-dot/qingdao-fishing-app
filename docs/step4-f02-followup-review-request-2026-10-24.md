@@ -17,7 +17,7 @@
 - 新增断言：过期班次即使留有有效短缺快照且船长线下账达到门槛，接口仍返回 409，状态保持短缺，决定记录数为零。
 - `npm run check`、`dart analyze .`、Dart 格式检查和 `git diff --check` 均通过。
 - 双端 GitHub CI [run 40089573657](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40089573657) 已完成：Flutter analyze、Android debug APK 与 iOS simulator build 全部成功。
-- 该 CI 对应首轮修正 `884d1e8`；包含时钟复核和锁等待回归的 `0b0bd70` 尚未由 CI 覆盖，待推送触发后补记结果。
+- 该 CI 对应首轮修正 `884d1e8`，覆盖其 Flutter 改动。后续 `0b0bd70` 只改服务端；当前双端构建工作流仅监听 `app/**`，所以没有新的双端构建。本请求的服务端补丁以本地语法检查和隔离数据库回归留证，并等待独立复跑。
 
 ## 请独立复核
 

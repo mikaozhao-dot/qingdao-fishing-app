@@ -68,11 +68,12 @@
 
 其余 B1 双账、一轮补差、退改执行及保险门禁继续按最新批准任务书实现。补偿券预算、G 现金退款/同行责任、包船未定分配、真实通道与生产部署仍明确排除。Muse 对 v1 子集的有条件通过不等于 v2 或全量验收；第 4 步 v2 的独立实跑、CI、双端构建、其余原生截图和真实交易均未完成/未授权。
 
-### 复核 F02 过期成行人工异常与释放重试幂等（代码提交 `45231f3`、`884d1e8`）
+### 复核 F02 过期成行人工异常与释放重试幂等（代码提交 `45231f3`、`884d1e8`、`0b0bd70`）
 
-- 离线席位调入平台在客户端重试时复用原请求编号；只有收到成功响应后才释放该编号，避免服务端已提交但响应丢失时重试重复增库。
+- 离线席位调入平台在同一登记弹层内重试时复用原请求编号；只有收到成功响应后才释放该编号，避免服务端已提交但响应丢失时重试重复增库。请求编号未做跨弹层或应用重启持久化。
 - 新增迁移 `011_overdue_formation_manual_review.sql` 与 `formation_overdue` 状态。成团任务锁定航次后若已超过出航时刻，只将班次标为待人工处理，不写成团快照或自动确认；后续任务重跑不再处理该异常。船长与钓友行程状态显示“已过出航时间 · 待人工处理”。
 - 船长成行确认接口也检查出航时刻；即使短缺快照和船长登记线下金额满足门槛，过期后仍拒绝新增确认记录，保留原短缺状态供人工核查。不新增罚款、取消或退款政策。
-- 空白临时数据库应用迁移 001–011 后，`server/scripts/step4-acceptance.mjs` 通过 **140 项断言**，包括刚过出航时间后的任务处理与重跑、过期船长确认拒绝。验收数据库在测试完成后已删除。
-- 本地 `npm run check`、`dart analyze .`、`dart format --set-exit-if-changed app/lib/step2_flow.dart app/lib/step4_flow.dart` 与 `git diff --check` 均通过。新提交的双端 CI [run 40089573657](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40089573657) 已完成：Flutter analyze、Android debug APK 和 iOS simulator build 三项均成功。
-- F02 修复已提交，等待 Muse/dot 对代码和回归证据独立复核，详情见 `docs/step4-f02-followup-review-request-2026-10-24.md`；不代表第 4 步或配额补缺已验收。Dot 的 F01 候补补位边界仍等待 Muse 授权口径，未自行放开截止后的普通售票，也未实现未经授权的候补例外。
+- Dot 后续静态复核指出，批次固定的 `asOf` 可能在航次行锁等待期间过时。`0b0bd70` 在取得航次锁后、写入核算快照前均以数据库 `clock_timestamp()` 重查出航时刻。
+- 空白临时数据库应用迁移 001–011 后，`server/scripts/step4-acceptance.mjs` 通过 **146 项断言**，覆盖刚过出航时刻的任务处理与重跑、船长过期确认拒绝，以及持有航次行锁跨过出航时刻后仍转人工异常且不写快照。验收数据库在测试完成后已删除。
+- 本地 `npm run check`、`dart analyze .`、`dart format --set-exit-if-changed app/lib/step2_flow.dart app/lib/step4_flow.dart` 与 `git diff --check` 均通过。提交 `884d1e8` 的双端 CI [run 40089573657](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40089573657) 已成功；`0b0bd70` 后续提交的 CI 尚待推送触发。
+- F02 首轮修正已收到 Dot 静态补充意见，并已按其锁等待边界补测和修正；更新后的代码与回归证据等待 Muse/dot 再次独立复核，详情见 `docs/step4-f02-followup-review-request-2026-10-24.md`。不代表第 4 步或配额补缺已验收。Dot 的 F01 候补补位边界仍等待 Muse 授权口径，未自行放开截止后的普通售票，也未实现未经授权的候补例外。

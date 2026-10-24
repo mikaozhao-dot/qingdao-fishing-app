@@ -1303,6 +1303,7 @@ class _OfflineSeatManagementSheetState
   String _releaseStatement = '';
   bool _loading = true;
   String? _error;
+  final Map<int, String> _transferRequestKeys = {};
 
   @override
   void initState() {
@@ -1404,6 +1405,11 @@ class _OfflineSeatManagementSheetState
       ),
     );
     if (confirmed != true) return;
+    final requestKey = _transferRequestKeys.putIfAbsent(
+      seatNumber,
+      () =>
+          'offline-release-$seatNumber-${DateTime.now().microsecondsSinceEpoch}',
+    );
     try {
       await Step1Api.post(
         '/captain/departures/${widget.departureId}/quota-transfers',
@@ -1412,11 +1418,11 @@ class _OfflineSeatManagementSheetState
           'sourceChannel': 'offline',
           'targetChannel': 'platform',
           'releaseConfirmed': true,
-          'requestKey':
-              'offline-release-$seatNumber-${DateTime.now().microsecondsSinceEpoch}',
+          'requestKey': requestKey,
         },
         token: widget.token,
       );
+      _transferRequestKeys.remove(seatNumber);
       await _load();
     } catch (error) {
       if (mounted) {

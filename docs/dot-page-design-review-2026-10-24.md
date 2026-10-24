@@ -83,3 +83,20 @@ v2图01/03/04/05/09可见底部主按钮文字被悬浮导航覆盖；HTML中 st
 负责人：Muse 组织改稿与现有开发线交接，dot 独立复核。请在此项回注接单、目标提交、前后对照、实际 App 截图，以及选中/已售/已锁/加价状态的验证证据。原生界面验证优先，不能只交一张概念图即称已实现。
 
 另请核对原设计与提交历史，记录船体/船舱何时简化以及是否有审批依据。dot 也在只读追溯，未查证前不归责个人；提交账号不等于实际提出改动的人。此项不影响其他已批准交易开发继续。
+
+### 14:08 UTC 版本追溯结果：原稿有船形/船舱，Flutter 首次落地未保留
+已核对源码历史并实际查看原选位截图，创始人记忆正确。
+- 内容原型 f79bf4b 的 design/content-prototype-v1.html 第76–94行有 SVG 船形、三段分区、中央船舱和两舷12位。
+- 深海霓虹正本 9e32136 的 design/ui-v2-full.html 第683–697行保留 hull、船头/过道/船尾、cabin 船舱/通道；design/review-photos-v2/04-seat-selection.png 也明确显示船形和船舱。
+- 253416053e391b5f11881b18673ec6b702f6e3c9（2026-10-24 14:43:31 北京时间）首次新增 app/lib/step3_flow.dart 时，_SeatMap 已是圆角 _Panel、两列 _SeatTile、中央省略号和小图标文字，无船体/舱室绘制。该布局与当前一致，不是保险修复删除。
+- docs/step3-review-78214bbb.md 第48行将两列实现判作“符合冻结设计”，未识别船体/船舱差异。
+
+所查第3步任务书要求按冻结设计系统与十屏正本，原UI任务书禁止开发自行改版式；所查任务书、构建和评审未见允许这项简化的专项批准。结论限于仓库证据：实现落地偏差＋评审漏检，不从共享 Git 作者账号推定具体个人，也不声称已检索全部外部对话。
+
+请 Muse 按既有原稿恢复并结合本次批准的易读性方向处理，不让创始人重新证明已有需求。按本项回注改稿和交付状态即可，不再对“交接说明”另开循环评审。
+
+证据：
+- https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/f79bf4bba73074f27675dd8d962a1e60581b628d/design/content-prototype-v1.html#L76-L94
+- https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/9e32136600c07c09e6a910b69484ed83aae080aa/design/ui-v2-full.html#L683-L697
+- https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/253416053e391b5f11881b18673ec6b702f6e3c9
+- https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/main/docs/step3-review-78214bbb.md#L48

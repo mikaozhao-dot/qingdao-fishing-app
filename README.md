@@ -44,11 +44,14 @@ flutter run
 
 第 0 步构建记录见 `docs/step0-build-notes.md`；第 1 步记录与验收证据见 `docs/step1-build-notes.md`；第 2 步实现与自检见 `docs/step2-build-notes.md`；第 3 步交易沙盒实现与自检见 `docs/step3-build-notes.md`。当前不包含真实短信、实名供应商、实时海况、真实支付或真实保险出单。
 
+第 4 步履约子集记录见 `docs/step4-build-notes.md`，数据增补见 `docs/data-model-step4-addendum.md`。当前仅包含已确认班次的行前清单、出返航打卡与名单导出；成团金额、补差、包船、候补、取消及退款仍等待创始人裁定与修订任务书，不代表第 4 步全量验收完成。
+
 ## 关键文件
 
 - `docs/codex-dev-step0-brief-v1.md`、`docs/dev-step0-kickoff-2026-10-23.md`：第 0 步任务与开工令。
 - `docs/codex-dev-step2-brief-v1.md`、`docs/step2-build-notes.md`、`docs/step2-review-request-2026-10-24.md`：第 2 步发班与活动展示任务、实现记录和 Muse 独立评审请求。
 - `docs/codex-dev-step3-brief-v1.md`、`docs/data-model-step3-addendum.md`、`docs/step3-build-notes.md`、`docs/step3-review-request-2026-10-24.md`：第 3 步交易沙盒任务、数据补充、构建记录和 Muse 独立评审请求。
+- `docs/codex-dev-step4-brief-v1.md`、`docs/data-model-step4-addendum.md`、`docs/step4-build-notes.md`、`docs/step4-review-request-2026-10-24.md`：第 4 步非金额履约子集实现、数据补充、构建证据和独立评审请求。
 - `docs/codex-dev-step1-brief-v1.md`、`docs/step1-build-notes.md`、`docs/step1-review-84828e0f87c2.md`、`docs/step1-review-request-2026-10-24.md`：第 1 步任务、实施记录与 Muse 独立评审。
 - `docs/data-model-step1-addendum.md`：只记录第 1 步新增字段与实体，不改数据模型 v1 正本。
 - `docs/data-model-step2-addendum.md`：只记录第 2 步新增字段与座位库存快照口径。
@@ -57,7 +60,7 @@ flutter run
 - `design/review-photos-v2/`：十屏独立 PNG 评审图。
 - `design/step1-review-photos/`：第 1 步截图；`01`–`06` 是 Flutter Web 移动视口预览，`07`–`11` 是 iOS 模拟器设备冒烟证据。
 - `design/step2-review-photos/`：第 2 步发班、活动列表和活动详情的 iOS 模拟器截图。
-- `design/step3-review-photos/`：第 3 步选位、确认订单、沙盒付款、订单详情的 Flutter Web 手机视口预览；另含第 2 步活动详情整页长图。它们不是 iOS 模拟器截图。
+- `design/step3-review-photos/`：第 3 步 01–05 为 Flutter Web 手机视口预览；07–10 为 iOS 模拟器选位、确认订单和订单详情截图，另含第 2 步活动详情整页长图。
 
 ## 协作规矩
 

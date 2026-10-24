@@ -419,7 +419,8 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         `SELECT s.id,s.seat_number,s.seat_side,s.seat_section,s.is_premium,s.price_fen,s.status,
                 h.id AS hold_id,h.user_id AS hold_user_id,h.expires_at AS hold_expires_at
          FROM seat_inventory s LEFT JOIN seat_holds h ON h.id=s.hold_id AND h.status='active'
-         WHERE s.departure_id=$1 ORDER BY s.seat_number`,
+         WHERE s.departure_id=$1 AND s.sale_channel='platform'
+         ORDER BY s.seat_number`,
         [request.params.id],
       );
       return {
@@ -455,7 +456,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       }
       const seats = await client.query(
         `SELECT id,seat_number,price_fen,is_premium,status,hold_id
-         FROM seat_inventory WHERE departure_id=$1 AND id=ANY($2::uuid[])
+         FROM seat_inventory WHERE departure_id=$1 AND sale_channel='platform' AND id=ANY($2::uuid[])
          ORDER BY seat_number FOR UPDATE`,
         [request.params.id, seatIds],
       );

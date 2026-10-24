@@ -112,6 +112,29 @@ function validateDepartureBody(body) {
   const sternSurchargeFen = validInteger(body.sternSurchargeFen, { min: 0 });
   const minimumTotalFen = validInteger(body.minimumTotalFen, { min: 1 });
   const remarks = String(body.remarks ?? '').trim();
+  const hasPlatformQuota = Object.hasOwn(body, 'platformQuotaSeats');
+  const hasOfflineQuota = Object.hasOwn(body, 'offlineQuotaSeats');
+  const manualSupply = body.manualSupply;
+
+  if (manualSupply !== undefined && typeof manualSupply !== 'boolean') return { error: '供给方式无效' };
+  if (hasPlatformQuota !== hasOfflineQuota) return { error: '平台与线下配额需要同时填写' };
+  if (manualSupply === true && (hasPlatformQuota || hasOfflineQuota)) {
+    return { error: '人工确认供给无需填写平台或线下配额' };
+  }
+  if (manualSupply === false && !hasPlatformQuota) return { error: '请填写平台与线下席位配额' };
+  const platformQuotaSeats = hasPlatformQuota
+    ? validInteger(body.platformQuotaSeats, { min: 0, max: 30 }) : null;
+  const offlineQuotaSeats = hasOfflineQuota
+    ? validInteger(body.offlineQuotaSeats, { min: 0, max: 30 }) : null;
+  if (hasPlatformQuota && (platformQuotaSeats === null || offlineQuotaSeats === null)) {
+    return { error: '平台与线下席位配额需为 0–30 的整数' };
+  }
+  if (hasPlatformQuota && platformQuotaSeats + offlineQuotaSeats < 1) {
+    return { error: '至少分配一个平台或线下席位' };
+  }
+  if (hasPlatformQuota && platformQuotaSeats === 0 && manualSupply === false) {
+    return { error: '没有平台席位时请使用人工确认供给' };
+  }
 
   if (!boatId) return { error: '请选择已审核通过的船档案' };
   if (!TRIP_TYPES[tripType]) return { error: '请选择班次类型' };
@@ -153,8 +176,38 @@ function validateDepartureBody(body) {
       bookingDeadline, marinaCode, targetAreaCode, fishCodes,
       pricePerSeatFen, sternSurchargeFen, minimumTotalFen,
       remarks, rigConfig: body.rigConfig,
+      quotaInput: hasPlatformQuota
+        ? { platformQuotaSeats, offlineQuotaSeats }
+        : null,
+      manualSupplyInput: manualSupply,
     },
   };
+}
+
+function departureQuotas(value, seatCount) {
+  if (!value.quotaInput) {
+    return { platformQuotaSeats: 0, offlineQuotaSeats: seatCount, manualSupply: true };
+  }
+  const { platformQuotaSeats, offlineQuotaSeats } = value.quotaInput;
+  if (platformQuotaSeats + offlineQuotaSeats > seatCount) return { error: '配额总数不能超过船只模板席位数' };
+  if (platformQuotaSeats === 0) {
+    if (value.manualSupplyInput === false) return { error: '没有平台席位时请使用人工确认供给' };
+    return { platformQuotaSeats, offlineQuotaSeats, manualSupply: true };
+  }
+  return { platformQuotaSeats, offlineQuotaSeats, manualSupply: false };
+}
+
+function validTransferRequest(body) {
+  const seatNumber = validInteger(body?.seatNumber, { min: 1, max: 30 });
+  const sourceChannel = String(body?.sourceChannel ?? '');
+  const targetChannel = String(body?.targetChannel ?? '');
+  const requestKey = String(body?.requestKey ?? '').trim();
+  if (seatNumber === null) return { error: '席位编号无效' };
+  if (!['platform', 'offline'].includes(sourceChannel)
+      || !['platform', 'offline'].includes(targetChannel)
+      || sourceChannel === targetChannel) return { error: '配额转移方向无效' };
+  if (!/^[A-Za-z0-9_.:-]{1,80}$/.test(requestKey)) return { error: '转移请求编号无效' };
+  return { value: { seatNumber, sourceChannel, targetChannel, requestKey } };
 }
 
 function validateSeatLayout(layout, seatCount) {
@@ -230,6 +283,10 @@ function serializeDeparture(row, { seats = null, security }) {
     bookedAmountFen: 0,
     remainingMinimumFen: minTotal,
     totalSeatCount: boat.seatCount,
+    platformQuotaSeats: Number(row.platform_quota_seats ?? 0),
+    offlineQuotaSeats: Number(row.offline_quota_seats ?? 0),
+    manualSupply: Boolean(row.manual_supply),
+    instantConfirmationAvailable: Number(row.platform_quota_seats ?? 0) > 0 && !row.manual_supply,
     remarks: row.remarks ?? '',
     captainName,
     boat,
@@ -253,6 +310,7 @@ const DEPARTURE_SELECT = `
          d.departure_at, d.return_at, d.target_area_code, d.marina_code,
          d.minimum_sailing_total_fen, d.price_per_seat_fen, d.stern_surcharge_fen,
          d.booking_deadline, d.status, d.remarks, d.created_at,
+         d.seat_template_count, d.platform_quota_seats, d.offline_quota_seats, d.manual_supply,
          b.name AS boat_name, b.length_cm, b.seat_count AS boat_seat_count,
          b.seat_template_code, b.comfort_level, b.comfort_spacing_cm, b.facilities,
          cp.captain_name_ciphertext, st.layout AS seat_layout,
@@ -275,7 +333,7 @@ async function loadDeparture(pool, id) {
 async function loadSeats(pool, departureId) {
   const result = await pool.query(
     `SELECT seat_number, seat_side, seat_section, is_premium, status, price_fen
-     FROM seat_inventory WHERE departure_id=$1 ORDER BY seat_number`,
+     FROM seat_inventory WHERE departure_id=$1 AND sale_channel='platform' ORDER BY seat_number`,
     [departureId],
   );
   return result.rows;
@@ -319,12 +377,15 @@ async function insertDeparture(client, boat, userId, value) {
     `INSERT INTO departures
        (boat_id, captain_user_id, trip_type, departure_at, meeting_at, return_at,
         target_area_code, marina_code, minimum_sailing_total_fen, price_per_seat_fen,
-        whole_boat_price_fen, booking_deadline, status, stern_surcharge_fen, remarks)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,'open',$12,$13)
+        whole_boat_price_fen, booking_deadline, status, stern_surcharge_fen, remarks,
+        seat_template_count, platform_quota_seats, offline_quota_seats, manual_supply)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,'open',$12,$13,$14,$15,$16,$17)
      RETURNING id`,
     [boat.id, userId, value.tripType, value.departureAt, value.meetingAt, value.returnAt,
       value.targetAreaCode, value.marinaCode, value.minimumTotalFen, value.pricePerSeatFen,
-      value.bookingDeadline, value.sternSurchargeFen, value.remarks],
+      value.bookingDeadline, value.sternSurchargeFen, value.remarks,
+      Number(boat.seat_count ?? boat.seatCount ?? boat.layout.length),
+      value.platformQuotaSeats, value.offlineQuotaSeats, value.manualSupply],
   );
   const departureId = inserted.rows[0].id;
   await client.query(
@@ -350,7 +411,9 @@ async function insertDeparture(client, boat, userId, value) {
             $3 + CASE WHEN seat.premium THEN $4 ELSE 0 END,
             seat.side, seat.section, seat.premium
      FROM jsonb_to_recordset($2::jsonb)
-       AS seat(number smallint, side varchar, section varchar, premium boolean)`,
+       AS seat(number smallint, side varchar, section varchar, premium boolean)
+     JOIN departure_seat_quotas quota
+       ON quota.departure_id=$1 AND quota.seat_number=seat.number AND quota.sale_channel='platform'`,
     [departureId, JSON.stringify(boat.layout), value.pricePerSeatFen, value.sternSurchargeFen],
   );
   return departureId;
@@ -490,7 +553,15 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
         await client.query('ROLLBACK');
         return sendError(reply, 403, '只能使用已审核且钓位模板可用的船档案发班');
       }
-      departureId = await insertDeparture(client, boat, request.user.id, validated.value);
+      const quotas = departureQuotas(validated.value, Number(boat.seat_count));
+      if (quotas.error) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 400, quotas.error);
+      }
+      departureId = await insertDeparture(client, boat, request.user.id, {
+        ...validated.value,
+        ...quotas,
+      });
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -512,6 +583,188 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
     return {
       items: result.rows.map((row) => serializeDeparture(row, { security })),
     };
+  });
+
+  app.post('/captain/departures/:id/quota-transfers', { preHandler: requireUser }, async (request, reply) => {
+    if (!await captainApproved(pool, request.user.id)) return sendError(reply, 403, '船长资质尚未审核通过');
+    const validated = validTransferRequest(request.body);
+    if (validated.error) return sendError(reply, 400, validated.error);
+    const { seatNumber, sourceChannel, targetChannel, requestKey } = validated.value;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const departureResult = await client.query(
+        `SELECT id,boat_id,status,departure_at,booking_deadline,seat_template_count,
+                platform_quota_seats,offline_quota_seats,price_per_seat_fen,stern_surcharge_fen
+         FROM departures
+         WHERE id=$1 AND captain_user_id=$2 FOR UPDATE`,
+        [request.params.id, request.user.id],
+      );
+      const departure = departureResult.rows[0];
+      if (!departure) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 404, '班次不存在');
+      }
+      if (departure.status !== 'open' || new Date(departure.departure_at) <= new Date()
+          || new Date(departure.booking_deadline) <= new Date()) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '只有未出航且仍在报名的班次可以调额');
+      }
+      if (seatNumber > Number(departure.seat_template_count)) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 404, '席位不在当前船只模板内');
+      }
+
+      const previous = await client.query(
+        `SELECT seat_number,source_channel,target_channel,platform_quota_after,offline_quota_after
+         FROM departure_quota_transfers WHERE departure_id=$1 AND request_key=$2`,
+        [departure.id, requestKey],
+      );
+      if (previous.rowCount) {
+        const item = previous.rows[0];
+        if (Number(item.seat_number) !== seatNumber || item.source_channel !== sourceChannel
+            || item.target_channel !== targetChannel) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 409, '转移请求编号已用于其他操作');
+        }
+        await client.query('COMMIT');
+        const platformQuotaSeats = Number(item.platform_quota_after);
+        return {
+          departureId: departure.id,
+          seatNumber,
+          sourceChannel,
+          targetChannel,
+          platformQuotaSeats,
+          offlineQuotaSeats: Number(item.offline_quota_after),
+          manualSupply: platformQuotaSeats === 0,
+          instantConfirmationAvailable: platformQuotaSeats > 0,
+          replayed: true,
+        };
+      }
+
+      const slotResult = await client.query(
+        `SELECT sale_channel FROM departure_seat_quotas
+         WHERE departure_id=$1 AND seat_number=$2 FOR UPDATE`,
+        [departure.id, seatNumber],
+      );
+      if (!slotResult.rowCount) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '该席位尚未分配给平台或线下配额');
+      }
+      if (slotResult.rows[0].sale_channel !== sourceChannel) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '席位当前不属于请求的来源配额');
+      }
+
+      const inventoryResult = await client.query(
+        `SELECT id,status,hold_id,sale_channel FROM seat_inventory
+         WHERE departure_id=$1 AND seat_number=$2 FOR UPDATE`,
+        [departure.id, seatNumber],
+      );
+      const inventory = inventoryResult.rows[0];
+      if (sourceChannel === 'platform') {
+        if (!inventory || inventory.sale_channel !== 'platform' || inventory.status !== 'available' || inventory.hold_id) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 409, '已售或已锁定席位不能转出平台配额');
+        }
+        const references = await client.query(
+          `SELECT EXISTS (SELECT 1 FROM booking_orders WHERE seat_inventory_id=$1
+                           AND status IN ('pending_payment','paid','completed'))
+                  OR EXISTS (SELECT 1 FROM seat_hold_items WHERE seat_inventory_id=$1 AND status='active') AS used`,
+          [inventory.id],
+        );
+        if (references.rows[0].used) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 409, '已有订单或有效锁位记录的席位不能调出');
+        }
+        await client.query(
+          `UPDATE seat_inventory SET sale_channel='offline',status='blocked',updated_at=now()
+           WHERE id=$1`,
+          [inventory.id],
+        );
+      } else if (inventory) {
+        if (inventory.sale_channel !== 'offline' || inventory.status !== 'blocked' || inventory.hold_id) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 409, '线下席位存在有效库存状态，无法转入平台');
+        }
+        const references = await client.query(
+          `SELECT EXISTS (SELECT 1 FROM booking_orders WHERE seat_inventory_id=$1
+                           AND status IN ('pending_payment','paid','completed'))
+                  OR EXISTS (SELECT 1 FROM seat_hold_items WHERE seat_inventory_id=$1 AND status='active') AS used`,
+          [inventory.id],
+        );
+        if (references.rows[0].used) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 409, '已有订单或有效锁位记录的席位不能调入');
+        }
+        await client.query(
+          `UPDATE seat_inventory SET sale_channel='platform',status='available',hold_id=NULL,
+             hold_expires_at=NULL,updated_at=now() WHERE id=$1`,
+          [inventory.id],
+        );
+      } else {
+        const opened = await client.query(
+          `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,is_premium)
+           SELECT $1,seat.number,$4 + CASE WHEN seat.premium THEN $5 ELSE 0 END,
+                  seat.side,seat.section,seat.premium
+           FROM boats b JOIN seat_templates st ON st.code=b.seat_template_code
+           CROSS JOIN LATERAL jsonb_to_recordset(st.layout)
+             AS seat(number smallint,side varchar,section varchar,premium boolean)
+           WHERE b.id=$2 AND seat.number=$3 RETURNING id`,
+          [departure.id, departure.boat_id, seatNumber,
+            Number(departure.price_per_seat_fen), Number(departure.stern_surcharge_fen ?? 0)],
+        );
+        if (!opened.rowCount) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 409, '船只模板缺少该席位，无法开放平台库存');
+        }
+      }
+
+      const platformDelta = sourceChannel === 'platform' ? -1 : 1;
+      const offlineDelta = -platformDelta;
+      const platformQuotaSeats = Number(departure.platform_quota_seats) + platformDelta;
+      const offlineQuotaSeats = Number(departure.offline_quota_seats) + offlineDelta;
+      if (platformQuotaSeats < 0 || offlineQuotaSeats < 0) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '当前配额数量与席位分配记录不一致');
+      }
+      await client.query(
+        `UPDATE departure_seat_quotas SET sale_channel=$3,updated_at=now()
+         WHERE departure_id=$1 AND seat_number=$2`,
+        [departure.id, seatNumber, targetChannel],
+      );
+      await client.query(
+        `UPDATE departures SET platform_quota_seats=$2,offline_quota_seats=$3,
+             manual_supply=$4,updated_at=now() WHERE id=$1`,
+        [departure.id, platformQuotaSeats, offlineQuotaSeats, platformQuotaSeats === 0],
+      );
+      await client.query(
+        `INSERT INTO departure_quota_transfers
+           (departure_id,actor_user_id,seat_number,source_channel,target_channel,request_key,
+            platform_quota_after,offline_quota_after)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [departure.id, request.user.id, seatNumber, sourceChannel, targetChannel, requestKey,
+          platformQuotaSeats, offlineQuotaSeats],
+      );
+      await client.query('COMMIT');
+      return {
+        departureId: departure.id,
+        seatNumber,
+        sourceChannel,
+        targetChannel,
+        platformQuotaSeats,
+        offlineQuotaSeats,
+        manualSupply: platformQuotaSeats === 0,
+        instantConfirmationAvailable: platformQuotaSeats > 0,
+        replayed: false,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      request.log.error({ err: error }, 'Departure quota transfer failed');
+      return sendError(reply, 500, '配额调整失败，请稍后重试');
+    } finally {
+      client.release();
+    }
   });
 
   app.post('/captain/departures/:id/withdraw', { preHandler: requireUser }, async (request, reply) => {
@@ -616,6 +869,9 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
         minimumTotalFen: Number(source.minimum_sailing_total_fen),
         pricePerSeatFen: Number(source.price_per_seat_fen),
         sternSurchargeFen: Number(source.stern_surcharge_fen ?? 0),
+        platformQuotaSeats: Number(source.platform_quota_seats),
+        offlineQuotaSeats: Number(source.offline_quota_seats),
+        manualSupply: Boolean(source.manual_supply),
         remarks: source.remarks ?? '',
         fishCodes: fishResult.rows.map((row) => row.fish_code),
         rigConfig: {

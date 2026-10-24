@@ -13,7 +13,7 @@ if (!config.databaseUrl || !config.redisUrl) throw new Error('DATABASE_URL and R
 const testConfig = {
   ...config,
   nodeEnv: 'test',
-  logLevel: 'silent',
+  logLevel: process.env.TEST_LOG_LEVEL ?? 'silent',
   piiEncryptionKeyHex: config.piiEncryptionKeyHex || '11'.repeat(32),
   phoneHashKeyHex: config.phoneHashKeyHex || '22'.repeat(32),
 };
@@ -88,9 +88,10 @@ async function makeConfirmedDeparture(captainId, boatId) {
     const departureId = (await client.query(
       "INSERT INTO departures " +
         "(boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code," +
-        "minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status) " +
+        "minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status," +
+        "seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply) " +
         "VALUES ($1,$2,'pro_fishing',now()+interval '72 hours',now()+interval '71 hours 30 minutes'," +
-        "now()+interval '78 hours','qd_coast','xiaogang',10000,5000,now()+interval '69 hours','confirmed') " +
+        "now()+interval '78 hours','qd_coast','xiaogang',10000,5000,now()+interval '69 hours','confirmed',8,8,0,false) " +
         'RETURNING id',
       [boatId, captainId],
     )).rows[0].id;
@@ -113,9 +114,10 @@ async function makeEmptyConfirmedDeparture(captainId, boatId) {
   const result = await pool.query(
     "INSERT INTO departures " +
       "(boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code," +
-      "minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status) " +
+      "minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status," +
+      "seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply) " +
       "VALUES ($1,$2,'pro_fishing',now()+interval '72 hours',now()+interval '71 hours 30 minutes'," +
-      "now()+interval '78 hours','qd_coast','xiaogang',10000,5000,now()+interval '69 hours','confirmed') " +
+      "now()+interval '78 hours','qd_coast','xiaogang',10000,5000,now()+interval '69 hours','confirmed',8,0,8,true) " +
       'RETURNING id',
     [boatId, captainId],
   );
@@ -167,6 +169,14 @@ async function scalar(sql, values = []) {
   return (await pool.query(sql, values)).rows[0];
 }
 
+function shanghaiDateAfter(days) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(Date.now() + days * 24 * 60 * 60 * 1000));
+  const date = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  return `${date.year}-${date.month}-${date.day}`;
+}
+
 async function main() {
   const existing = await scalar('SELECT count(*)::integer AS count FROM users');
   if (existing.count !== 0) throw new Error('Acceptance database must be empty; no fixture data was inserted.');
@@ -180,6 +190,114 @@ async function main() {
       "VALUES ($1,'验收测试船',1200,'xiaogang',8,'approved','ready') RETURNING id",
     [captain.id],
   )).rows[0].id;
+
+  const quotaBoatId = (await pool.query(
+    "INSERT INTO boats (captain_user_id,name,length_cm,home_marina_code,seat_template_code,seat_count,review_status,template_status) " +
+      "VALUES ($1,'配额验收船',1200,'xiaogang','qingdao-12-seat-v1',12,'approved','ready') RETURNING id",
+    [captain.id],
+  )).rows[0].id;
+  const quotaPublish = await request('POST', '/captain/departures', captain.token, {
+    boatId: quotaBoatId,
+    tripType: 'pro_fishing',
+    departureDate: shanghaiDateAfter(3),
+    meetingTime: '04:30',
+    departureTime: '05:00',
+    returnTime: '12:00',
+    bookingDeadlineTime: '04:00',
+    targetAreaCode: 'qingdao_nearshore',
+    marinaCode: 'xiaogang',
+    fishCodes: ['sea_bass'],
+    pricePerSeatFen: 50000,
+    sternSurchargeFen: 10000,
+    minimumTotalFen: 100000,
+    remarks: '',
+    manualSupply: false,
+    platformQuotaSeats: 4,
+    offlineQuotaSeats: 6,
+    rigConfig: {
+      baitTypes: ['live_shrimp'], baitGramsPerPerson: 200, baitSupply: 'captain_provided',
+      mainLinePe: 1.5, leaderLineNumber: 5, sinkerShape: 'water_drop', sinkerMinGrams: 40, sinkerMaxGrams: 80,
+    },
+  });
+  check(quotaPublish.status, 201, 'captain can publish an isolated platform/offline quota');
+  const quotaDeparture = quotaPublish.body.departure;
+  check(quotaDeparture.platformQuotaSeats, 4, 'published platform quota is four seats');
+  check(quotaDeparture.offlineQuotaSeats, 6, 'published offline quota is six seats');
+  check(quotaDeparture.instantConfirmationAvailable, true, 'segregated platform seats allow instant seat selection');
+  check(quotaDeparture.seats.map((seat) => seat.number), [1, 2, 3, 4], 'only platform seats enter online inventory');
+  const unassignedEleventh = await scalar(
+    "SELECT count(*)::integer AS count FROM seat_inventory WHERE departure_id=$1 AND seat_number=11",
+    [quotaDeparture.id],
+  );
+  check(unassignedEleventh.count, 0, 'the eleventh template seat is not sold when only ten seats are allocated');
+  const offlineSeatFive = await scalar(
+    "SELECT q.sale_channel, count(s.id)::integer AS inventory_count FROM departure_seat_quotas q " +
+      "LEFT JOIN seat_inventory s ON s.departure_id=q.departure_id AND s.seat_number=q.seat_number " +
+      "WHERE q.departure_id=$1 AND q.seat_number=5 GROUP BY q.sale_channel",
+    [quotaDeparture.id],
+  );
+  check(offlineSeatFive.sale_channel, 'offline', 'the fifth template seat belongs to the offline quota');
+  check(offlineSeatFive.inventory_count, 0, 'offline seats do not receive platform inventory rows');
+
+  const seatsBeforeTransfer = await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token);
+  check(seatsBeforeTransfer.seats.length, 4, 'seat API exposes only the four platform quota seats');
+  await expect('POST', '/departures/' + quotaDeparture.id + '/seat-holds', angler.token,
+    { seatIds: ['00000000-0000-4000-8000-000000000011'] }, 404);
+  const lockedHold = await expect('POST', '/departures/' + quotaDeparture.id + '/seat-holds', angler.token,
+    { seatIds: [seatsBeforeTransfer.seats[0].id] }, 201);
+  await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
+    { seatNumber: 1, sourceChannel: 'platform', targetChannel: 'offline', requestKey: 'quota-locked-seat' }, 409);
+  await pool.query("UPDATE seat_holds SET expires_at=now()-interval '1 second' WHERE id=$1", [lockedHold.holdId]);
+  await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token);
+
+  const openedOffline = await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
+    { seatNumber: 5, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-open-seat-5' });
+  check(openedOffline.platformQuotaSeats, 5, 'transferring one offline seat expands platform quota');
+  check(openedOffline.offlineQuotaSeats, 5, 'transferring one offline seat reduces offline quota');
+  const replayedOpen = await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
+    { seatNumber: 5, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-open-seat-5' });
+  check(replayedOpen.replayed, true, 'repeating a transfer request is idempotent');
+  check((await scalar('SELECT count(*)::integer AS count FROM seat_inventory WHERE departure_id=$1 AND seat_number=5',
+    [quotaDeparture.id])).count, 1, 'an idempotent transfer does not create duplicate inventory');
+  await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
+    { seatNumber: 6, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-open-seat-5' }, 409);
+  const returnedPlatformSeat = await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
+    { seatNumber: 5, sourceChannel: 'platform', targetChannel: 'offline', requestKey: 'quota-return-seat-5' });
+  check(returnedPlatformSeat.platformQuotaSeats, 4, 'a free platform seat can return to the offline quota');
+  check(returnedPlatformSeat.offlineQuotaSeats, 6, 'returning a free seat restores the offline quota');
+  check((await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token)).seats.length, 4,
+    'a transferred offline seat disappears from online seat selection');
+  check((await scalar("SELECT status || ':' || sale_channel AS state FROM seat_inventory WHERE departure_id=$1 AND seat_number=5",
+    [quotaDeparture.id])).state, 'blocked:offline', 'transferred inventory is frozen before it leaves the platform channel');
+
+  const competingTransfers = await Promise.all([
+    request('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
+      { seatNumber: 6, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-race-a' }),
+    request('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
+      { seatNumber: 6, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-race-b' }),
+  ]);
+  check(competingTransfers.map((result) => result.status).sort(), [200, 409],
+    'concurrent transfers of one seat can only succeed once');
+
+  const legacyPublish = await request('POST', '/captain/departures', captain.token, {
+    boatId: quotaBoatId,
+    tripType: 'pro_fishing',
+    departureDate: shanghaiDateAfter(4),
+    meetingTime: '04:30', departureTime: '05:00', returnTime: '12:00', bookingDeadlineTime: '04:00',
+    targetAreaCode: 'qingdao_nearshore', marinaCode: 'xiaogang', fishCodes: ['sea_bass'],
+    pricePerSeatFen: 50000, sternSurchargeFen: 10000, minimumTotalFen: 100000, remarks: '',
+    rigConfig: {
+      baitTypes: ['live_shrimp'], baitGramsPerPerson: 200, baitSupply: 'captain_provided',
+      mainLinePe: 1.5, leaderLineNumber: 5, sinkerShape: 'water_drop', sinkerMinGrams: 40, sinkerMaxGrams: 80,
+    },
+  });
+  check(legacyPublish.status, 201, 'legacy publish request remains supported as manual confirmation supply');
+  check(legacyPublish.body.departure.manualSupply, true, 'unsegregated supply is explicitly marked manual');
+  check(legacyPublish.body.departure.instantConfirmationAvailable, false,
+    'unsegregated supply does not promise instant confirmation');
+  check(legacyPublish.body.departure.platformQuotaSeats, 0, 'unsegregated supply opens no platform quota');
+  check(legacyPublish.body.departure.seats.length, 0, 'unsegregated supply creates no online inventory');
+
   const departure = await makeConfirmedDeparture(captain.id, boatId);
   const orderId = await makePaidOrder(angler.id, departure.id, departure.seat);
   const emptyDepartureId = await makeEmptyConfirmedDeparture(captain.id, boatId);

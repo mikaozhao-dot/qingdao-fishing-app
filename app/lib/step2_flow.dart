@@ -348,6 +348,8 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
   final _price = TextEditingController(text: '500');
   final _surcharge = TextEditingController(text: '100');
   final _minimum = TextEditingController(text: '3000');
+  final _platformQuota = TextEditingController(text: '12');
+  final _offlineQuota = TextEditingController(text: '0');
   final _baitGrams = TextEditingController(text: '300');
   final _sinkerMin = TextEditingController(text: '80');
   final _sinkerMax = TextEditingController(text: '120');
@@ -369,6 +371,7 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
   int _leaderNumber = 5;
   String _sinkerShape = 'long_bar';
   bool _submitting = false;
+  bool _manualSupply = false;
   String? _error;
 
   @override
@@ -377,6 +380,7 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
     if (widget.boats.isNotEmpty) {
       _boatId = '${widget.boats.first['id']}';
       _marina = '${widget.boats.first['defaultMarinaCode'] ?? _marina}';
+      _platformQuota.text = '${widget.boats.first['seatCount'] ?? 0}';
     }
     final fish = _fishOptions
         .where((entry) => entry['code'] == _fishCode)
@@ -399,6 +403,8 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
     _price.dispose();
     _surcharge.dispose();
     _minimum.dispose();
+    _platformQuota.dispose();
+    _offlineQuota.dispose();
     _baitGrams.dispose();
     _sinkerMin.dispose();
     _sinkerMax.dispose();
@@ -494,6 +500,19 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
       setState(() => _error = _boatId == null ? '请选择可用船档案' : '至少选择一种目标鱼');
       return;
     }
+    final boatSeatCount =
+        int.tryParse('${_selectedBoat?['seatCount'] ?? ''}') ?? 0;
+    final platformQuota = int.tryParse(_platformQuota.text);
+    final offlineQuota = int.tryParse(_offlineQuota.text);
+    if (!_manualSupply &&
+        (platformQuota == null ||
+            offlineQuota == null ||
+            platformQuota < 1 ||
+            offlineQuota < 0 ||
+            platformQuota + offlineQuota > boatSeatCount)) {
+      setState(() => _error = '平台席位需至少 1 位，平台与线下配额之和不能超过船只模板席位数');
+      return;
+    }
     setState(() {
       _submitting = true;
       _error = null;
@@ -513,6 +532,13 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
         'pricePerSeatFen': _yuanToFen(_price.text),
         'sternSurchargeFen': _yuanToFen(_surcharge.text),
         'minimumTotalFen': _yuanToFen(_minimum.text),
+        if (_manualSupply)
+          'manualSupply': true
+        else ...{
+          'manualSupply': false,
+          'platformQuotaSeats': platformQuota!,
+          'offlineQuotaSeats': offlineQuota!,
+        },
         'remarks': _remarks.text.trim(),
         'rigConfig': {
           'baitTypes': _baitTypes,
@@ -531,7 +557,11 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('班次已发布'),
-          content: const Text('班次与 12 个只读钓位库存已生成。当前版本暂不提供订位和支付。'),
+          content: Text(
+            _manualSupply
+                ? '班次已按人工确认供给发布，没有开放平台即时订位。'
+                : '班次已发布：平台专售 $platformQuota 位，线下 $offlineQuota 位。未分配席位不会进入平台库存。',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -599,7 +629,11 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
                   onChanged: (value) => setState(() {
                     _boatId = value;
                     final boat = _selectedBoat;
-                    if (boat != null) _marina = '${boat['defaultMarinaCode']}';
+                    if (boat != null) {
+                      _marina = '${boat['defaultMarinaCode']}';
+                      _platformQuota.text = '${boat['seatCount'] ?? 0}';
+                      _offlineQuota.text = '0';
+                    }
                   }),
                 ),
                 _OptionRow(
@@ -856,8 +890,62 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
               ],
             ),
             _FormSection(
-              title: '价格与说明',
+              title: '席位配额',
               index: '03',
+              children: [
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('人工确认供给'),
+                  subtitle: const Text('不开放平台即时订位，由船长线下确认供给。'),
+                  value: _manualSupply,
+                  onChanged: (value) => setState(() => _manualSupply = value),
+                ),
+                if (!_manualSupply) ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _platformQuota,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: '平台专售',
+                            suffixText: '位',
+                          ),
+                          validator: (value) =>
+                              int.tryParse(value ?? '') == null ||
+                                  int.parse(value!) < 0
+                              ? '请输入整数'
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _offlineQuota,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: '线下专售',
+                            suffixText: '位',
+                          ),
+                          validator: (value) =>
+                              int.tryParse(value ?? '') == null ||
+                                  int.parse(value!) < 0
+                              ? '请输入整数'
+                              : null,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Text(
+                    '平台与线下席位互不混卖；未分配的模板席位不会开放。已锁定或售出的席位不能调额。',
+                    style: _smallNote,
+                  ),
+                ],
+              ],
+            ),
+            _FormSection(
+              title: '价格与说明',
+              index: '04',
               children: [
                 Row(
                   children: [
@@ -1235,6 +1323,10 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
     final premiumPrice = _money(item['premiumSeatPriceFen']);
     final booked = item['bookedSeatCount'] ?? 0;
     final total = item['totalSeatCount'] ?? seats.length;
+    final platformQuota = item['platformQuotaSeats'] ?? total;
+    final instantConfirmation =
+        item['instantConfirmationAvailable'] != false &&
+        item['manualSupply'] != true;
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 8, 18, 36),
       children: [
@@ -1279,8 +1371,17 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
         _PricePanel(
           price: price,
           premium: premiumPrice,
-          seats: '$booked/$total',
+          seats: '$booked/$platformQuota',
         ),
+        if (item['manualSupply'] == true)
+          const Padding(
+            padding: EdgeInsets.only(top: 12),
+            child: _NoteCard(
+              icon: Icons.support_agent_outlined,
+              title: '人工确认供给',
+              body: '席位需由船长线下确认；当前不支持在线锁位或支付。',
+            ),
+          ),
         const SizedBox(height: 14),
         _DetailSection(
           title: '出航安排',
@@ -1324,13 +1425,23 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
                   '${_metres(boat['lengthCm'])} 米 · ${boat['seatCount']} 位 · ${boat['comfortLabel'] ?? '舒适度待核定'}',
             ),
             _DetailRow(
+              icon: Icons.event_seat_outlined,
+              label: '席位配额',
+              value: item['manualSupply'] == true
+                  ? '人工确认供给 · 平台未开放即时订位'
+                  : '平台专售 $platformQuota 位 · 线下专售 ${item['offlineQuotaSeats'] ?? 0} 位',
+            ),
+            _DetailRow(
               icon: Icons.star_border_rounded,
               label: '船上设施',
               value: _facilityNames(boat['facilities']),
             ),
             const Text('钓位示意（只读）', style: _labelStyle),
             const SizedBox(height: 8),
-            _SeatDiagram(seats: seats),
+            _SeatDiagram(
+              seats: seats,
+              manualSupply: item['manualSupply'] == true,
+            ),
           ],
         ),
         _DetailSection(
@@ -1425,7 +1536,7 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
           ],
         ),
         const SizedBox(height: 12),
-        if (widget.allowBooking)
+        if (widget.allowBooking && instantConfirmation)
           FilledButton.icon(
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
@@ -1437,6 +1548,12 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
             ),
             icon: const Icon(Icons.event_seat_outlined),
             label: const Text('选择座位'),
+          )
+        else if (widget.allowBooking)
+          const _NoteCard(
+            icon: Icons.support_agent_outlined,
+            title: '请联系船长确认席位',
+            body: '该班次没有开放平台即时订位，当前不能在线锁位或支付。',
           )
         else
           const Text(
@@ -1787,8 +1904,9 @@ class _ActivityCard extends StatelessWidget {
                         : '${_metres(boat['lengthCm'])} 米船',
                   ),
                   _Tag(
-                    '${item['bookedSeatCount'] ?? 0}/${item['totalSeatCount'] ?? 0} 位',
+                    '${item['bookedSeatCount'] ?? 0}/${item['platformQuotaSeats'] ?? item['totalSeatCount'] ?? 0} 平台位',
                   ),
+                  if (item['manualSupply'] == true) const _Tag('人工确认供给'),
                   if (captain) _Tag(_tripTypeName(item['tripType'])),
                 ],
               ),
@@ -1909,7 +2027,7 @@ class _PricePanel extends StatelessWidget {
         Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            const Text('班次座位', style: _smallBody),
+            const Text('平台专售席位', style: _smallBody),
             const SizedBox(height: 5),
             Text(
               '$seats 位',
@@ -1927,15 +2045,16 @@ class _PricePanel extends StatelessWidget {
 }
 
 class _SeatDiagram extends StatelessWidget {
-  const _SeatDiagram({required this.seats});
+  const _SeatDiagram({required this.seats, this.manualSupply = false});
   final List<Map<String, dynamic>> seats;
+  final bool manualSupply;
   @override
   Widget build(BuildContext context) {
     if (seats.isEmpty) {
-      return const _NoteCard(
+      return _NoteCard(
         icon: Icons.event_seat_outlined,
-        title: '钓位图待生成',
-        body: '本班次没有可展示的座位模板。',
+        title: manualSupply ? '平台未开放选位' : '钓位图待生成',
+        body: manualSupply ? '本班次按人工确认供给，不提供在线选位。' : '本班次没有可展示的座位模板。',
       );
     }
     return Container(

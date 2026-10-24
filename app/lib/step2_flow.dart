@@ -3160,6 +3160,7 @@ String _dateAfter(int days) {
 
 String _statusName(dynamic value) => switch (value) {
   'published' => '报名中',
+  'formation_overdue' => '已过出航时间 · 待人工处理',
   'withdrawn' => '已下架',
   'ended' => '已结束',
   _ => '待发布',

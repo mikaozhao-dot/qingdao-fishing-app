@@ -332,7 +332,10 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
     try {
       final results = await Future.wait([
         Step1Api.get('/orders/${widget.orderId}', token: widget.token),
-        Step1Api.get('/orders/${widget.orderId}/fulfillment', token: widget.token),
+        Step1Api.get(
+          '/orders/${widget.orderId}/fulfillment',
+          token: widget.token,
+        ),
       ]);
       if (!mounted) return;
       setState(() {
@@ -374,9 +377,15 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
               children: [
                 const _Eyebrow('YOUR TRIP'),
                 const SizedBox(height: 8),
-                Text((_order['boatName'] ?? '出海班次').toString(), style: _headline),
+                Text(
+                  (_order['boatName'] ?? '出海班次').toString(),
+                  style: _headline,
+                ),
                 const SizedBox(height: 5),
-                Text('订单 ${_order['orderNumber'] ?? widget.orderId}', style: _muted),
+                Text(
+                  '订单 ${_order['orderNumber'] ?? widget.orderId}',
+                  style: _muted,
+                ),
                 const SizedBox(height: 16),
                 _Card(
                   child: Column(
@@ -384,14 +393,25 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
                     children: [
                       Row(
                         children: [
-                          const Expanded(child: Text('出海安排', style: _sectionTitle)),
+                          const Expanded(
+                            child: Text('出海安排', style: _sectionTitle),
+                          ),
                           _StagePill(label: _departureStatus(status)),
                         ],
                       ),
                       const SizedBox(height: 12),
-                      _InfoLine(label: '出航时间', value: _dateTime(departure['departureAt'])),
-                      _InfoLine(label: '集合码头', value: (departure['marinaCode'] ?? '待通知').toString()),
-                      _InfoLine(label: '集合时间', value: _dateTime(departure['meetingAt'])),
+                      _InfoLine(
+                        label: '出航时间',
+                        value: _dateTime(departure['departureAt']),
+                      ),
+                      _InfoLine(
+                        label: '集合码头',
+                        value: (departure['marinaCode'] ?? '待通知').toString(),
+                      ),
+                      _InfoLine(
+                        label: '集合时间',
+                        value: _dateTime(departure['meetingAt']),
+                      ),
                     ],
                   ),
                 ),
@@ -399,7 +419,10 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
                 OutlinedButton.icon(
                   onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
-                      builder: (_) => OrderDetailPage(orderId: widget.orderId, token: widget.token),
+                      builder: (_) => OrderDetailPage(
+                        orderId: widget.orderId,
+                        token: widget.token,
+                      ),
                     ),
                   ),
                   icon: const Icon(Icons.receipt_long_outlined),
@@ -407,8 +430,15 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
                 ),
                 if (checklist.isNotEmpty) ...[
                   const SizedBox(height: 10),
-                  _ChecklistSummary(checklist: checklist, onTap: _showChecklist),
-                ] else if (['confirmed', 'in_progress', 'completed'].contains(status)) ...[
+                  _ChecklistSummary(
+                    checklist: checklist,
+                    onTap: _showChecklist,
+                  ),
+                ] else if ([
+                  'confirmed',
+                  'in_progress',
+                  'completed',
+                ].contains(status)) ...[
                   const SizedBox(height: 10),
                   const _NoticeCard(message: '行前清单正在生成，请稍后刷新查看。'),
                 ],
@@ -449,7 +479,9 @@ class _CaptainTripCard extends StatelessWidget {
                     const SizedBox(height: 3),
                     Text(
                       (item['marinaCode'] ?? '码头待定').toString() +
-                          (item['tripType'] == 'pro_fishing' ? ' · 专业海钓' : ' · 海上体验'),
+                          (item['tripType'] == 'pro_fishing'
+                              ? ' · 专业海钓'
+                              : ' · 海上体验'),
                       style: _muted,
                     ),
                   ],
@@ -836,6 +868,7 @@ String _dateTime(dynamic value) {
 String _departureStatus(String status) => switch (status) {
   'open' || 'forming' => '待确认',
   'handling_shortfall' => '待处置 · 未达成行门槛',
+  'formation_overdue' => '已过出航时间 · 待人工处理',
   'confirmed' => '平台已成行',
   'captain_confirmed' => '船长已确认成行',
   'weather_cancelled' => '天气取消',

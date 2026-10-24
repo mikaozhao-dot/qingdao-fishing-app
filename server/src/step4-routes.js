@@ -99,7 +99,7 @@ async function loadFormationAccounts(client, departureId) {
 
 /** Capture the approved T-1 18:00 Asia/Shanghai checkpoint once per departure. */
 export async function processFormationChecks(pool, asOf = new Date(), onError = () => {}) {
-  if (!pool) return { checked: 0, deferred: 0 };
+  if (!pool) return { checked: 0, deferred: 0, overdue: 0 };
   const due = await pool.query(
     `SELECT d.id FROM departures d
      WHERE d.status IN ('open','forming') AND ${confirmationAtSql('d')} <= $1
@@ -109,11 +109,14 @@ export async function processFormationChecks(pool, asOf = new Date(), onError = 
   );
   let checked = 0;
   let deferred = 0;
+  let overdue = 0;
   for (const candidate of due.rows) {
     try {
       const outcome = await withTransaction(pool, async (client) => {
         const departure = await client.query(
-          `SELECT d.id,d.status,${confirmationAtSql('d')} AS confirmation_at
+          `SELECT d.id,d.status,d.departure_at,
+                  (d.departure_at <= $2::timestamptz) AS is_overdue,
+                  ${confirmationAtSql('d')} AS confirmation_at
            FROM departures d WHERE d.id=$1 AND d.status IN ('open','forming')
              AND ${confirmationAtSql('d')} <= $2
              AND NOT EXISTS (SELECT 1 FROM departure_formation_snapshots s WHERE s.departure_id=d.id)
@@ -121,6 +124,13 @@ export async function processFormationChecks(pool, asOf = new Date(), onError = 
           [candidate.id, asOf],
         );
         if (!departure.rowCount) return 'already_checked';
+        if (departure.rows[0].is_overdue) {
+          await client.query(
+            "UPDATE departures SET status='formation_overdue',updated_at=now() WHERE id=$1",
+            [candidate.id],
+          );
+          return 'overdue';
+        }
         const pending = await client.query(
           `SELECT EXISTS (SELECT 1 FROM booking_orders
              WHERE departure_id=$1 AND status='pending_payment') AS has_pending_payment`,
@@ -145,12 +155,13 @@ export async function processFormationChecks(pool, asOf = new Date(), onError = 
         return result;
       });
       if (outcome === 'deferred') deferred += 1;
+      else if (outcome === 'overdue') overdue += 1;
       else if (outcome !== 'already_checked') checked += 1;
     } catch (error) {
       onError(error);
     }
   }
-  return { checked, deferred };
+  return { checked, deferred, overdue };
 }
 
 function checklistFromRow(row) {
@@ -352,6 +363,9 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
         const departure = await requireCaptainOwnership(client, request.params.id, request.user.id, true);
         if (!departure) return { error: [404, '班次不存在'] };
         if (departure.status !== 'handling_shortfall') return { error: [409, '当前班次不在待处置状态'] };
+        if (new Date(departure.departure_at) <= new Date()) {
+          return { error: [409, '出航时间已过，成行确认需人工处理'] };
+        }
         const snapshot = await client.query(
           'SELECT outcome FROM departure_formation_snapshots WHERE departure_id=$1 FOR UPDATE',
           [departure.id],

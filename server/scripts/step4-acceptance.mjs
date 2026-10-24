@@ -473,6 +473,59 @@ async function main() {
   await expect('POST', '/captain/departures/' + formationDepartureId + '/formation/decision', captain.token,
     { action: 'captain_confirmed', basisNote: '重复确认' }, 409);
 
+  const overdueDepartureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',now()-interval '2 minutes',now()-interval '32 minutes',
+        now()+interval '7 hours','qd_coast','xiaogang',5000,5000,
+        now()-interval '2 hours','open',8,8,0,false) RETURNING id`,
+    [boatId, captain.id],
+  )).rows[0].id;
+  const overdueAsOf = new Date();
+  const overdueCheckpoint = await processFormationChecks(pool, overdueAsOf);
+  check(overdueCheckpoint.overdue, 1, 'a departure just past its sailing time becomes a manual exception');
+  check(overdueCheckpoint.checked, 0, 'an overdue departure does not receive a formation decision');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [overdueDepartureId])).status,
+    'formation_overdue', 'overdue departure remains explicitly visible for manual handling');
+  check((await scalar('SELECT count(*)::integer AS count FROM departure_formation_snapshots WHERE departure_id=$1',
+    [overdueDepartureId])).count, 0, 'overdue departure receives no new formation snapshot');
+  const overdueRerun = await processFormationChecks(pool, overdueAsOf);
+  check(overdueRerun.overdue, 0, 'rerunning the worker does not reopen the overdue exception');
+  check((await scalar('SELECT count(*)::integer AS count FROM departure_formation_snapshots WHERE departure_id=$1',
+    [overdueDepartureId])).count, 0, 'worker rerun still creates no overdue confirmation');
+
+  const expiredCaptainDepartureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',now()-interval '2 minutes',now()-interval '32 minutes',
+        now()+interval '7 hours','qd_coast','xiaogang',5000,5000,
+        now()-interval '2 hours','handling_shortfall',8,8,0,false) RETURNING id`,
+    [boatId, captain.id],
+  )).rows[0].id;
+  await pool.query(
+    `INSERT INTO departure_formation_snapshots
+       (departure_id,confirmation_at,checked_at,threshold_fen,platform_ticket_net_fen,penalty_pool_fen,
+        successful_supplement_fen,platform_verifiable_fen,captain_offline_declared_fen,outcome)
+     VALUES ($1,now()-interval '1 day',now()-interval '1 day',5000,4500,0,0,4500,500,'shortfall')`,
+    [expiredCaptainDepartureId],
+  );
+  await pool.query(
+    `INSERT INTO departure_offline_ledger_entries
+       (departure_id,captain_user_id,amount_delta_fen,note,request_key)
+     VALUES ($1,$2,500,'验收模拟线下收入','expired-captain-001')`,
+    [expiredCaptainDepartureId, captain.id],
+  );
+  await expect('POST', '/captain/departures/' + expiredCaptainDepartureId + '/formation/decision', captain.token,
+    { action: 'captain_confirmed', basisNote: '线下账本与平台账核对一致' }, 409);
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [expiredCaptainDepartureId])).status,
+    'handling_shortfall', 'expired captain confirmation leaves the shortfall for manual review');
+  check((await scalar('SELECT count(*)::integer AS count FROM departure_captain_formation_decisions WHERE departure_id=$1',
+    [expiredCaptainDepartureId])).count, 0, 'expired captain confirmation saves no decision');
+
   const autoDepartureId = (await pool.query(
     `INSERT INTO departures
        (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,

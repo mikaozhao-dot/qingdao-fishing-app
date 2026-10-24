@@ -553,6 +553,16 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '该座位锁定已用于创建订单');
       }
+      const departure = await client.query(
+        `SELECT id FROM departures
+         WHERE id=$1 AND status='open' AND departure_at>now() AND booking_deadline>now()
+         FOR UPDATE`,
+        [hold.departure_id],
+      );
+      if (!departure.rowCount) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '班次已停止报名，不能创建订单');
+      }
       const seatResult = await client.query(
         `SELECT i.seat_inventory_id,i.seat_number,i.price_fen,i.is_premium,s.status,s.hold_id
          FROM seat_hold_items i JOIN seat_inventory s ON s.id=i.seat_inventory_id

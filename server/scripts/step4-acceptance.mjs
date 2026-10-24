@@ -183,6 +183,23 @@ async function main() {
   const departure = await makeConfirmedDeparture(captain.id, boatId);
   const orderId = await makePaidOrder(angler.id, departure.id, departure.seat);
   const emptyDepartureId = await makeEmptyConfirmedDeparture(captain.id, boatId);
+  const editable = await pool.query(
+    'UPDATE departures SET minimum_sailing_total_fen=12000 WHERE id=$1 RETURNING minimum_sailing_total_fen',
+    [emptyDepartureId],
+  );
+  check(Number(editable.rows[0].minimum_sailing_total_fen), 12000,
+    'threshold remains editable before the first order');
+  let priceFreezeError;
+  try {
+    await pool.query(
+      'UPDATE departures SET minimum_sailing_total_fen=12000,price_per_seat_fen=6000 WHERE id=$1',
+      [departure.id],
+    );
+  } catch (error) {
+    priceFreezeError = error;
+  }
+  check(priceFreezeError?.constraint ?? null, 'departure_price_frozen_after_order',
+    'price and threshold are frozen after the first order');
 
   const generated = await processConfirmedChecklists(pool);
   check(generated.generated, 2, 'worker generates checklists for already-confirmed trips');
@@ -236,7 +253,7 @@ async function main() {
   await expect('GET', '/captain/departures/' + departure.id + '/fulfillment', otherCaptain.token, undefined, 404);
   await expect('GET', '/captain/departures/' + departure.id + '/manifest.csv?format=full', otherCaptain.token, undefined, 404);
 
-  console.log('Step 4 non-financial acceptance passed: ' + assertions + ' assertions.');
+  console.log('Step 4 acceptance passed: ' + assertions + ' assertions.');
 }
 
 try {

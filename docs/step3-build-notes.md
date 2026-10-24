@@ -160,3 +160,11 @@ GitHub Actions [run 8](https://github.com/mikaozhao-dot/qingdao-fishing-app/acti
 - 服务端接受测试用合成订单与班次在已应用 001–014 的空库中执行；通过回拨 `created_at` 到 013 前、清空航次快照、重新执行 014 覆盖旧快照回填分支。此测试不等同于从 001–012 装载真实历史格式数据后顺序升级 013/014 的完整历史迁移演练。
 - 复核状态后续更新：Muse `0d18393` 对三项定点修复有条件通过；dot `73ac731` 独立确认 R-V04-1/2/3 技术阻断关闭。15、16 为不同模拟 API 情景，具体图注与迁移回填演练的证据限制已在 follow-up 更正。其后座位牌间距增量不包含在上述复核 head 中，等待创始人视觉确认。
 - 当前状态：修复证据已提交请求复核；待 Muse / dot 独立复查。不代表创始人视觉验收通过。
+
+### 2026-10-25：R-V04-4 点按与船首位置增量
+
+- 按 dot `d6de090` 的 R-V04-4 指出，将船尾加价星章包进 `IgnorePointer`，避免装饰层截获 InkWell；触控框维持 50×48 logical px、视觉牌面维持 42×40 logical px。
+- 按创始人反馈将船头 1、12 号位移到船壳内的较宽区域，并调整三段渲染纵坐标。座位映射、价格、库存 ID 与服务端规则均未变。
+- `flutter test --no-pub`：2 项通过，包含星章中心、可见牌面外沿、不可售位及确认提交 `inventory-5`；`flutter analyze --no-pub`：无诊断。
+- `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/v04_seat_map_screenshots_test.dart -d 48A68998-36B2-45B6-B142-9D66A80884BA --no-pub`：通过，重拍 15–17 号 iOS Simulator 截图。PNG 1398×2034、约 1.7 MB；JPEG 704×1024，约 120–128 KB。
+- 状态：R-V04-4 的本机实现/验证证据已请求 dot / Muse 独立复核；本节视觉增量仍待创始人确认，不视作验收。

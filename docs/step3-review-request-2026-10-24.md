@@ -85,3 +85,15 @@ main 的创始人裁定回注 `docs/muse-draft-withdrawal-and-confirmation-2026-
 ### 技术复核状态更新（2026-10-25）
 
 Muse `docs/ui-design-review-a1bd7e5f.md`（main `0d18393`）对 R-V04-1/2/3 有条件通过；dot 在 `docs/dot-page-design-review-2026-10-24.md`（main `73ac731`）记录三项技术阻断已关闭。dot 要求的 15/16 图注与迁移测试边界已在 `docs/v04-targeted-repair-followup-2026-10-25.md` 更正。本节之后的牌面缩小及新截图不包含在 `a1bd7e5` 这两份复核结论内；当前请创始人确认新视觉，必要时再请 Muse / dot 复看增量。
+
+## 2026-10-25：R-V04-4 点按回归与船首位置复核
+
+已按 main `d6de090` 中 dot 对加价星章拦截点击的指出，使用 `IgnorePointer` 将星章限定为纯装饰；按创始人最新反馈把 1、12 号位下移到船壳轮廓内。技术实现、验证证据与状态见 `docs/v04-targeted-repair-followup-2026-10-25.md` 最新一节。
+
+请 dot / Muse 独立核对：
+
+1. 5 号星章中心及 50×48 点击框透明边缘都能触发座位；点击仍映射到 `inventory-5`。
+2. 离线 5 号位即使点星章也不能选中；座位视觉牌面和 12 个触控范围没有重叠。
+3. 更新后的 15–17 号 iOS 模拟器原图中，1、12 号位均在船壳内，船头/双侧通道/船尾分区清楚；旧航次和库存价格证据口径不变。
+
+本机 Flutter 测试、分析和 iOS 集成截图命令已记录在 follow-up 文档。本请求不代表 dot / Muse 已复核，也不代表创始人视觉验收；当前保持待独立复核与待创始人视觉确认。

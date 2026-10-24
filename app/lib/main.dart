@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'fishing_tokens.dart';
 import 'step1_flow.dart';
 import 'step2_flow.dart';
-import 'step3_flow.dart';
+import 'step4_flow.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -184,11 +184,16 @@ class _AppShellState extends State<AppShell> {
       body: SafeArea(
         top: false,
         child: tab.label == '订单' && _role == AppRole.angler
-            ? Step3OrdersWorkspace(
+            ? Step4AnglerWorkspace(
                 token: _sessionToken,
                 onOpenProfile: () => setState(() => _selectedIndex = 3),
                 onTokenChanged: (token) =>
                     setState(() => _sessionToken = token),
+              )
+            : tab.label == '行程' && _role == AppRole.captain
+            ? Step4CaptainWorkspace(
+                token: _sessionToken,
+                onOpenProfile: () => setState(() => _selectedIndex = 3),
               )
             : tab.label == '我的'
             ? Step1Workspace(

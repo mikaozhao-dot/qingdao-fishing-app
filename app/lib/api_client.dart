@@ -44,6 +44,22 @@ class Step1Api {
     return _decode(response);
   }
 
+  static Future<String> getText(String path, {String? token}) async {
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl$path'),
+          headers: token == null
+              ? const {}
+              : {'authorization': 'Bearer $token'},
+        )
+        .timeout(const Duration(seconds: 12));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      throw Exception(body['error'] ?? '请求失败（${response.statusCode}）');
+    }
+    return response.body;
+  }
+
   static Map<String, dynamic> _decode(http.Response response) {
     final data = response.body.isEmpty
         ? <String, dynamic>{}

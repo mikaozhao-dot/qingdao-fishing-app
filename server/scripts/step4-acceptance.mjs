@@ -139,10 +139,10 @@ async function makePaidOrder(userId, departureId, seat) {
         "VALUES ($1,$2,$3,$4,'paid')",
       [orderId, seat.id, seat.seat_number, seat.price_fen],
     );
-    await client.query(
+    const passengerResult = await client.query(
       "INSERT INTO order_passengers " +
         "(order_id,seat_inventory_id,full_name_ciphertext,identity_number_ciphertext,phone_ciphertext,identity_verified_at) " +
-        'VALUES ($1,$2,$3,$4,$5,now())',
+        'VALUES ($1,$2,$3,$4,$5,now()) RETURNING id',
       [
         orderId,
         seat.id,
@@ -154,6 +154,15 @@ async function makePaidOrder(userId, departureId, seat) {
     await client.query(
       "INSERT INTO insurance_policies (order_id,provider_code,status) VALUES ($1,'sandbox','issued')",
       [orderId],
+    );
+    await client.query(
+      `INSERT INTO passenger_insurance_coverages
+         (departure_id,order_id,passenger_id,coverage_start_at,coverage_end_at,status,
+          provider_code,provider_policy_reference,verified_at)
+       SELECT d.id,$1,op.id,d.departure_at,d.return_at,'effective','sandbox','sandbox_policy_' || $1::text,now()
+       FROM order_passengers op JOIN departures d ON d.id=$2
+       WHERE op.id=$3`,
+      [orderId, departureId, passengerResult.rows[0].id],
     );
     await client.query('COMMIT');
     return orderId;
@@ -197,6 +206,7 @@ async function main() {
 
   const captain = await makeUser('船长甲', true);
   const angler = await makeUser('钓友甲');
+  const secondAngler = await makeUser('钓友乙');
   const otherCaptain = await makeUser('船长乙', true);
   const boatId = (await pool.query(
     "INSERT INTO boats (captain_user_id,name,length_cm,home_marina_code,seat_count,review_status,template_status) " +
@@ -692,6 +702,52 @@ async function main() {
   const orderFlow = await expect('GET', '/orders/' + orderId + '/fulfillment', angler.token);
   check(orderFlow.departure.status, 'confirmed', 'angler sees confirmed trip status');
   check(Boolean(orderFlow.checklist), true, 'angler can read the generated checklist');
+
+  const gateDeparture = await makeConfirmedDeparture(captain.id, boatId);
+  const gateOrderOne = await makePaidOrder(angler.id, gateDeparture.id, gateDeparture.seat);
+  const gateSeatTwo = (await pool.query(
+    `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
+     VALUES ($1,2,5000,'port','mid','booked') RETURNING id,seat_number,price_fen`,
+    [gateDeparture.id],
+  )).rows[0];
+  const gateOrderTwo = await makePaidOrder(secondAngler.id, gateDeparture.id, gateSeatTwo);
+  const passengerTwo = await scalar('SELECT id FROM order_passengers WHERE order_id=$1', [gateOrderTwo]);
+  const missingTripCoverage = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);
+  check(missingTripCoverage.requiredCoverage.status, 'not_verified',
+    'missing voyage-level required coverage fails closed');
+  check(missingTripCoverage.canDepartureProceed, false,
+    'unverified voyage-level coverage blocks the whole departure');
+  check(missingTripCoverage.passengers.every((passenger) => !passenger.canBoard), true,
+    'voyage-level block prevents every passenger from boarding');
+  check(missingTripCoverage.manualBypassAllowed, false,
+    'captain cannot manually bypass the insurance gate');
+  await expect('POST', `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
+    { status: 'effective' });
+  const readyTripCoverage = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);
+  check(readyTripCoverage.canDepartureProceed, true, 'verified voyage-level coverage permits the remaining trip gate');
+  check(readyTripCoverage.passengers.map((passenger) => passenger.canBoard), [true, true],
+    'each paid passenger with effective individual coverage can board');
+  await expect('POST', `/orders/${gateOrderTwo}/passengers/${passengerTwo.id}/insurance/sandbox`, secondAngler.token,
+    { status: 'failed', failureReason: 'insurer_rejected' });
+  const onePassengerBlocked = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);
+  check(onePassengerBlocked.canDepartureProceed, true,
+    'one passenger insurance failure does not unconditionally stop the whole departure');
+  check(onePassengerBlocked.passengers.map((passenger) => passenger.canBoard), [true, false],
+    'individual insurance failure blocks only the affected passenger');
+  check(onePassengerBlocked.passengers[1].failureReason, 'insurer_rejected',
+    'passenger-specific failure reason remains visible to the captain');
+  const orderInsurance = await expect('GET', `/orders/${gateOrderTwo}/insurance/status`, secondAngler.token);
+  check(orderInsurance.insurance.passengerCoverages[0].status, 'failed',
+    'order insurance status reports the server-verified passenger result');
+  check((await scalar('SELECT status FROM insurance_policies WHERE order_id=$1', [gateOrderTwo])).status,
+    'issued', 'a previous order-level success does not override a failed passenger-specific verification');
+  await expect('POST', `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
+    { status: 'failed', failureReason: 'platform_supplier_fault' });
+  const missingRequiredCoverage = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);
+  check(missingRequiredCoverage.canDepartureProceed, false,
+    'missing vessel-level required coverage blocks the whole departure');
+  check(missingRequiredCoverage.passengers.every((passenger) => !passenger.canBoard), true,
+    'whole-departure insurance block supersedes individual passenger readiness');
 
   await expect('POST', '/captain/departures/' + departure.id + '/checkin', captain.token, { event: 'departed' });
   check((await scalar('SELECT status FROM departures WHERE id=$1', [departure.id])).status, 'in_progress',

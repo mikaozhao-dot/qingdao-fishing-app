@@ -115,6 +115,30 @@ class _Step4CaptainWorkspaceState extends State<Step4CaptainWorkspace> {
     }
   }
 
+  Future<void> _showInsuranceGate(Map<String, dynamic> item) async {
+    if (widget.token == null) return;
+    try {
+      final result = await Step1Api.get(
+        '/captain/departures/${item['id']}/insurance-gate',
+        token: widget.token,
+      );
+      if (!mounted) return;
+      showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        isScrollControlled: true,
+        builder: (context) => _InsuranceGateSheet(gate: result),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString().replaceFirst('Exception: ', '')),
+        ),
+      );
+    }
+  }
+
   Future<void> _shareManifest(Map<String, dynamic> item, String format) async {
     if (widget.token == null) return;
     try {
@@ -184,6 +208,7 @@ class _Step4CaptainWorkspaceState extends State<Step4CaptainWorkspace> {
                 onCheckin: (event) => _checkin(item, event),
                 onManifest: (format) => _shareManifest(item, format),
                 onChecklist: () => _showChecklist(item),
+                onInsuranceGate: () => _showInsuranceGate(item),
               ),
             ),
           ),
@@ -454,12 +479,14 @@ class _CaptainTripCard extends StatelessWidget {
     required this.onCheckin,
     required this.onManifest,
     required this.onChecklist,
+    required this.onInsuranceGate,
   });
 
   final Map<String, dynamic> item;
   final ValueChanged<String> onCheckin;
   final ValueChanged<String> onManifest;
   final VoidCallback onChecklist;
+  final VoidCallback onInsuranceGate;
 
   @override
   Widget build(BuildContext context) {
@@ -506,6 +533,11 @@ class _CaptainTripCard extends StatelessWidget {
                   icon: const Icon(Icons.checklist_outlined),
                   label: const Text('行前清单'),
                 ),
+                OutlinedButton.icon(
+                  onPressed: onInsuranceGate,
+                  icon: const Icon(Icons.verified_user_outlined),
+                  label: const Text('登船门禁'),
+                ),
               ],
             ),
             const SizedBox(height: 8),
@@ -517,6 +549,14 @@ class _CaptainTripCard extends StatelessWidget {
               onPressed: () => onCheckin('returned'),
               icon: const Icon(Icons.anchor_outlined),
               label: const Text('返航打卡'),
+            ),
+          ],
+          if (status == 'captain_confirmed') ...[
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: onInsuranceGate,
+              icon: const Icon(Icons.verified_user_outlined),
+              label: const Text('核对登船门禁'),
             ),
           ],
           if (status == 'completed') ...[
@@ -663,6 +703,143 @@ class _ChecklistSheet extends StatelessWidget {
     );
   }
 }
+
+class _InsuranceGateSheet extends StatelessWidget {
+  const _InsuranceGateSheet({required this.gate});
+  final Map<String, dynamic> gate;
+
+  @override
+  Widget build(BuildContext context) {
+    final required = _map(gate['requiredCoverage']);
+    final passengers = _maps(gate['passengers']);
+    final tripReady = gate['canDepartureProceed'] == true;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const _Eyebrow('BOARDING · INSURANCE CHECK'),
+            const SizedBox(height: 8),
+            const Text('登船门禁', style: _headline),
+            const SizedBox(height: 14),
+            _Card(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('航次必需保障', style: _sectionTitle),
+                  const SizedBox(height: 7),
+                  Text(
+                    _insuranceGateStatus('${required['status']}'),
+                    style: TextStyle(
+                      color: tripReady
+                          ? FishingTokens.brand
+                          : Colors.orangeAccent,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (required['failureReason'] != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      _insuranceFailureReason('${required['failureReason']}'),
+                      style: _muted,
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Text(
+                    tripReady ? '航次必需保障已核验。' : '航次必需保障未核实，全船暂不能登船。',
+                    style: _body,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text('乘客保障', style: _sectionTitle),
+            const SizedBox(height: 8),
+            if (passengers.isEmpty)
+              const _NoticeCard(message: '暂无已支付乘客。')
+            else
+              ...passengers.map((passenger) {
+                final canBoard = passenger['canBoard'] == true;
+                final seatNumber = passenger['seatNumber'];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _Card(
+                    child: Row(
+                      children: [
+                        Icon(
+                          canBoard
+                              ? Icons.check_circle_outline
+                              : Icons.block_outlined,
+                          color: canBoard
+                              ? FishingTokens.brand
+                              : Colors.orangeAccent,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                seatNumber == null ? '乘客' : '$seatNumber 号钓位',
+                                style: _sectionTitle,
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                _insuranceGateStatus('${passenger['status']}'),
+                                style: _muted,
+                              ),
+                              if (passenger['failureReason'] != null)
+                                Text(
+                                  _insuranceFailureReason(
+                                    '${passenger['failureReason']}',
+                                  ),
+                                  style: _muted,
+                                ),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          canBoard ? '可登船' : '暂不能登船',
+                          style: TextStyle(
+                            color: canBoard
+                                ? FishingTokens.brand
+                                : Colors.orangeAccent,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            const SizedBox(height: 8),
+            const Text(
+              '仅依据保险机构回查的有效状态放行；单个乘客问题不自动拦停其他乘客，也不能人工跳过门禁。',
+              style: _smallNote,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _insuranceGateStatus(String status) => switch (status) {
+  'effective' => '保障已核实生效',
+  'pending_verification' => '待核实',
+  'failed' => '保障未生效',
+  'not_insured' => '尚未投保',
+  _ => '未核实',
+};
+
+String _insuranceFailureReason(String reason) => switch (reason) {
+  'platform_supplier_fault' => '平台或供应商故障',
+  'data_error' => '资料有误',
+  'insurer_rejected' => '保险机构拒保',
+  'payment_failed' => '保费支付失败',
+  _ => '失败原因待核实',
+};
 
 class _ChecklistSummary extends StatelessWidget {
   const _ChecklistSummary({required this.checklist, required this.onTap});

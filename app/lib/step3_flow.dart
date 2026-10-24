@@ -783,6 +783,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     final seats = _maps(order['seats']);
     final passengers = _maps(order['passengers']);
     final insurance = _map(order['insurance']);
+    final passengerCoverages = _maps(insurance['passengerCoverages']);
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
@@ -879,6 +880,19 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                 ),
                 const SizedBox(height: 4),
                 const Text('保险费由持牌保险机构独立收取，不计入本订单，平台不代收。', style: _noteStyle),
+                if (passengerCoverages.isNotEmpty) ...[
+                  const Divider(height: 20),
+                  for (final coverage in passengerCoverages)
+                    _InfoRow(
+                      label: coverage['seatNumber'] == null
+                          ? '乘客保障'
+                          : '钓位 ${coverage['seatNumber']} 保障',
+                      value: _passengerInsuranceStatus(
+                        '${coverage['status']}',
+                        coverage['failureReason']?.toString(),
+                      ),
+                    ),
+                ],
                 if (insurance['checkoutUrl'] != null) ...[
                   const SizedBox(height: 6),
                   SelectableText(
@@ -1387,6 +1401,22 @@ String _insuranceStatus(String status) => switch (status) {
   'issued' => '已收到沙盒投保成功回传。',
   'failed' => '沙盒投保未完成。',
   _ => '尚未开始；请通过持牌保险机构入口独立投保。',
+};
+
+String _passengerInsuranceStatus(String status, String? failureReason) =>
+    switch (status) {
+      'effective' => '保险机构回查已核实生效',
+      'pending_verification' => '等待保险机构核实，暂不能登船',
+      'failed' => '未生效 · ${_insuranceFailureReason(failureReason)}',
+      _ => '尚未投保，暂不能登船',
+    };
+
+String _insuranceFailureReason(String? reason) => switch (reason) {
+  'platform_supplier_fault' => '平台或供应商故障',
+  'data_error' => '资料有误',
+  'insurer_rejected' => '保险机构拒保',
+  'payment_failed' => '保费支付失败',
+  _ => '失败原因待核实',
 };
 
 String _newIdempotencyKey() {

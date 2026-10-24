@@ -185,7 +185,7 @@ async function loadOrder(pool, orderId, userId, security) {
   );
   if (!orderResult.rowCount) return null;
   const row = orderResult.rows[0];
-  const [seatResult, passengerResult] = await Promise.all([
+  const [seatResult, passengerResult, coverageResult] = await Promise.all([
     pool.query(
       `SELECT seat_number,price_fen FROM booking_order_seats
        WHERE order_id=$1 ORDER BY seat_number`,
@@ -198,6 +198,15 @@ async function loadOrder(pool, orderId, userId, security) {
        WHERE op.order_id=$1 ORDER BY s.seat_number NULLS LAST,op.id`,
       [orderId],
     ),
+    pool.query(
+      `SELECT s.seat_number,c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,
+              c.provider_policy_reference,c.verified_at
+       FROM passenger_insurance_coverages c
+       JOIN order_passengers op ON op.id=c.passenger_id
+       LEFT JOIN seat_inventory s ON s.id=op.seat_inventory_id
+       WHERE c.order_id=$1 ORDER BY s.seat_number NULLS LAST,op.id`,
+      [orderId],
+    ),
   ]);
   const passengers = passengerResult.rows.map((passenger) => ({
     seatNumber: passenger.seat_number === null ? null : Number(passenger.seat_number),
@@ -205,6 +214,16 @@ async function loadOrder(pool, orderId, userId, security) {
     identityNumber: maskIdentity(security.decrypt(passenger.identity_number_ciphertext)),
     phone: maskPhone(security.decrypt(passenger.phone_ciphertext)),
   }));
+  const coverageStatuses = coverageResult.rows.map((coverage) => coverage.status);
+  const aggregatedInsuranceStatus = coverageStatuses.length === 0
+    ? (row.insurance_status ?? 'not_started')
+    : coverageStatuses.every((status) => status === 'effective')
+      ? 'issued'
+      : coverageStatuses.includes('failed')
+        ? 'failed'
+        : coverageStatuses.includes('pending_verification')
+          ? 'checkout_started'
+          : 'not_started';
   return {
     id: row.id,
     orderNumber: row.order_number,
@@ -228,9 +247,18 @@ async function loadOrder(pool, orderId, userId, security) {
     holdExpiresAt: row.hold_expires_at,
     paidAt: row.paid_at,
     insurance: {
-      status: row.insurance_status ?? 'not_started',
+      status: aggregatedInsuranceStatus,
       checkoutUrl: row.checkout_url,
       policyReference: row.provider_policy_reference,
+      passengerCoverages: coverageResult.rows.map((coverage) => ({
+        seatNumber: coverage.seat_number === null ? null : Number(coverage.seat_number),
+        status: coverage.status,
+        failureReason: coverage.failure_reason,
+        coverageStartAt: coverage.coverage_start_at,
+        coverageEndAt: coverage.coverage_end_at,
+        policyReference: coverage.provider_policy_reference,
+        verifiedAt: coverage.verified_at,
+      })),
       premiumCollectedByPlatform: false,
     },
     createdAt: row.created_at,
@@ -626,6 +654,15 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         );
       }
       await client.query(
+        `INSERT INTO passenger_insurance_coverages
+           (departure_id,order_id,passenger_id,coverage_start_at,coverage_end_at,status)
+         SELECT d.id,$1,op.id,d.departure_at,d.return_at,'not_insured'
+         FROM order_passengers op JOIN departures d ON d.id=$2
+         WHERE op.order_id=$1
+         ON CONFLICT (passenger_id,departure_id,coverage_start_at,coverage_end_at) DO NOTHING`,
+        [orderId, hold.departure_id],
+      );
+      await client.query(
         `INSERT INTO insurance_policies (order_id,provider_code,status)
          VALUES ($1,'sandbox','not_started')`,
         [orderId],
@@ -795,6 +832,12 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
          WHERE id=$1`,
         [result.rows[0].policy_id, url, `sandbox_policy_${result.rows[0].policy_id}`],
       );
+      await pool.query(
+        `UPDATE passenger_insurance_coverages SET status='pending_verification',failure_reason=NULL,
+           updated_at=now()
+         WHERE order_id=$1 AND status <> 'effective'`,
+        [request.params.id],
+      );
       return { adapter: 'sandbox', checkoutUrl: url, status: 'checkout_started', premiumCollectedByPlatform: false };
     } catch (error) {
       request.log.warn({ err: error }, 'Sandbox insurance adapter is not configured');
@@ -805,16 +848,45 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
   app.get('/orders/:id/insurance/status', { preHandler: requireUser }, async (request, reply) => {
     if (!validUuid(request.params.id)) return sendError(reply, 400, '订单编号无效');
     const result = await pool.query(
-      `SELECT ip.status,ip.provider_code,ip.provider_policy_reference,ip.issued_at
+      `SELECT ip.status,ip.provider_code,ip.provider_policy_reference,ip.issued_at,o.id AS order_id
        FROM insurance_policies ip JOIN booking_orders o ON o.id=ip.order_id
        WHERE o.id=$1 AND o.buyer_user_id=$2`,
       [request.params.id, request.user.id],
     );
     if (!result.rowCount) return sendError(reply, 404, '订单投保记录不存在');
+    const coverages = await pool.query(
+      `SELECT s.seat_number,c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,
+              c.provider_policy_reference,c.verified_at
+       FROM passenger_insurance_coverages c
+       JOIN order_passengers op ON op.id=c.passenger_id
+       LEFT JOIN seat_inventory s ON s.id=op.seat_inventory_id
+       WHERE c.order_id=$1 ORDER BY s.seat_number NULLS LAST,op.id`,
+      [result.rows[0].order_id],
+    );
+    const coverageStatuses = coverages.rows.map((coverage) => coverage.status);
+    const aggregatedStatus = coverageStatuses.length === 0
+      ? result.rows[0].status
+      : coverageStatuses.every((status) => status === 'effective')
+        ? 'issued'
+        : coverageStatuses.includes('failed')
+          ? 'failed'
+          : coverageStatuses.includes('pending_verification')
+            ? 'checkout_started'
+            : 'not_started';
     return { insurance: {
-      status: result.rows[0].status, adapter: result.rows[0].provider_code,
+      status: aggregatedStatus, adapter: result.rows[0].provider_code,
       policyReference: result.rows[0].provider_policy_reference,
-      issuedAt: result.rows[0].issued_at, premiumCollectedByPlatform: false,
+      issuedAt: result.rows[0].issued_at,
+      passengerCoverages: coverages.rows.map((coverage) => ({
+        seatNumber: coverage.seat_number === null ? null : Number(coverage.seat_number),
+        status: coverage.status,
+        failureReason: coverage.failure_reason,
+        coverageStartAt: coverage.coverage_start_at,
+        coverageEndAt: coverage.coverage_end_at,
+        policyReference: coverage.provider_policy_reference,
+        verifiedAt: coverage.verified_at,
+      })),
+      premiumCollectedByPlatform: false,
     } };
   });
 
@@ -839,9 +911,55 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
        WHERE id=$1 RETURNING status,provider_policy_reference,issued_at`,
       [policy.rows[0].id, issued ? 'issued' : 'not_started', issued, `sandbox_policy_${policy.rows[0].id}`],
     );
+    await pool.query(
+      `UPDATE passenger_insurance_coverages SET status=$2,failure_reason=NULL,
+         provider_code='sandbox',provider_policy_reference=$3,
+         verified_at=CASE WHEN $2='effective' THEN now() ELSE NULL END,updated_at=now()
+       WHERE order_id=$1`,
+      [request.params.id, issued ? 'effective' : 'not_insured',
+        issued ? result.rows[0].provider_policy_reference : null],
+    );
     return { insurance: {
       status: result.rows[0].status, policyReference: result.rows[0].provider_policy_reference,
       issuedAt: result.rows[0].issued_at, premiumCollectedByPlatform: false,
     } };
   });
+
+  app.post('/orders/:id/passengers/:passengerId/insurance/sandbox',
+    { preHandler: requireUser }, async (request, reply) => {
+      if (config.nodeEnv === 'production') return sendError(reply, 404, '沙盒保险状态入口未开放');
+      if (!validUuid(request.params.id) || !validUuid(request.params.passengerId)) {
+        return sendError(reply, 400, '订单或乘客编号无效');
+      }
+      const status = request.body?.status;
+      const failureReason = request.body?.failureReason ?? null;
+      const allowedStatuses = ['not_insured','pending_verification','effective','failed'];
+      const allowedReasons = ['platform_supplier_fault','data_error','insurer_rejected','payment_failed'];
+      if (!allowedStatuses.includes(status)
+          || (status === 'failed' && !allowedReasons.includes(failureReason))
+          || (status !== 'failed' && failureReason !== null)) {
+        return sendError(reply, 400, '沙盒保险状态或失败原因无效');
+      }
+      const result = await pool.query(
+        `UPDATE passenger_insurance_coverages c
+         SET status=$3,failure_reason=$4,provider_code='sandbox',
+             provider_policy_reference=CASE WHEN $3='effective' THEN COALESCE(c.provider_policy_reference,
+               'sandbox_passenger_' || c.passenger_id::text) ELSE c.provider_policy_reference END,
+             verified_at=CASE WHEN $3='effective' THEN now() ELSE NULL END,updated_at=now()
+         FROM booking_orders o
+         WHERE c.order_id=o.id AND o.id=$1 AND o.buyer_user_id=$2
+           AND o.status='paid' AND c.passenger_id=$5
+         RETURNING c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,c.verified_at`,
+        [request.params.id, request.user.id, status, failureReason, request.params.passengerId],
+      );
+      if (!result.rowCount) return sendError(reply, 404, '已支付订单中的乘客投保记录不存在');
+      return { insurance: {
+        status: result.rows[0].status,
+        failureReason: result.rows[0].failure_reason,
+        coverageStartAt: result.rows[0].coverage_start_at,
+        coverageEndAt: result.rows[0].coverage_end_at,
+        verifiedAt: result.rows[0].verified_at,
+        premiumCollectedByPlatform: false,
+      } };
+    });
 }

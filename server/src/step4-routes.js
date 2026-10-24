@@ -412,6 +412,123 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
       return result;
     });
 
+  app.get('/captain/departures/:id/insurance-gate',
+    { preHandler: [requireUser, requireCaptain] }, async (request, reply) => {
+      if (!validUuid(request.params.id)) return sendError(reply, 400, '班次编号无效');
+      const result = await withTransaction(pool, async (client) => {
+        const departure = await requireCaptainOwnership(client, request.params.id, request.user.id);
+        if (!departure) return { error: [404, '班次不存在'] };
+        if (!['confirmed','captain_confirmed','in_progress'].includes(departure.status)) {
+          return { error: [409, '仅已确认的班次可以核对登船门禁'] };
+        }
+        await client.query(
+          `INSERT INTO departure_required_insurance (departure_id)
+           VALUES ($1) ON CONFLICT (departure_id) DO NOTHING`,
+          [departure.id],
+        );
+        await client.query(
+          `INSERT INTO passenger_insurance_coverages
+             (departure_id,order_id,passenger_id,coverage_start_at,coverage_end_at,status,
+              provider_code,provider_policy_reference,verified_at)
+           SELECT o.departure_id,o.id,op.id,d.departure_at,d.return_at,
+             CASE ip.status WHEN 'issued' THEN 'effective'
+               WHEN 'checkout_started' THEN 'pending_verification' ELSE 'not_insured' END,
+             ip.provider_code,ip.provider_policy_reference,ip.issued_at
+           FROM booking_orders o
+           JOIN departures d ON d.id=o.departure_id
+           JOIN order_passengers op ON op.order_id=o.id
+           LEFT JOIN insurance_policies ip ON ip.order_id=o.id
+           WHERE o.departure_id=$1 AND o.status='paid'
+           ON CONFLICT (passenger_id,departure_id,coverage_start_at,coverage_end_at) DO NOTHING`,
+          [departure.id],
+        );
+        const [requiredResult, passengerResult] = await Promise.all([
+          client.query(
+            `SELECT coverage_code,status,failure_reason,provider_policy_reference,verified_at
+             FROM departure_required_insurance WHERE departure_id=$1`,
+            [departure.id],
+          ),
+          client.query(
+            `SELECT s.seat_number,c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,c.verified_at
+             FROM booking_orders o
+             JOIN order_passengers op ON op.order_id=o.id
+             LEFT JOIN seat_inventory s ON s.id=op.seat_inventory_id
+             LEFT JOIN passenger_insurance_coverages c ON c.passenger_id=op.id
+               AND c.departure_id=o.departure_id
+               AND c.coverage_start_at=$2 AND c.coverage_end_at=$3
+             WHERE o.departure_id=$1 AND o.status='paid'
+             ORDER BY s.seat_number NULLS LAST,op.id`,
+            [departure.id, departure.departure_at, departure.return_at],
+          ),
+        ]);
+        const required = requiredResult.rows[0];
+        const tripCoverageReady = required?.status === 'effective';
+        const passengers = passengerResult.rows.map((row) => {
+          const status = row.status ?? 'not_insured';
+          return {
+            seatNumber: row.seat_number === null ? null : Number(row.seat_number),
+            status,
+            failureReason: row.failure_reason,
+            coverageStartAt: row.coverage_start_at,
+            coverageEndAt: row.coverage_end_at,
+            canBoard: tripCoverageReady && status === 'effective',
+            blockReason: !tripCoverageReady
+              ? 'departure_required_coverage_missing'
+              : status === 'effective' ? null : 'passenger_coverage_not_effective',
+          };
+        });
+        return {
+          departureId: departure.id,
+          canDepartureProceed: tripCoverageReady,
+          requiredCoverage: {
+            code: required?.coverage_code ?? 'vessel_liability',
+            status: required?.status ?? 'not_verified',
+            failureReason: required?.failure_reason ?? null,
+            verifiedAt: required?.verified_at ?? null,
+            blocksDeparture: !tripCoverageReady,
+          },
+          passengers,
+          manualBypassAllowed: false,
+        };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return result;
+    });
+
+  app.post('/captain/departures/:id/required-insurance/sandbox',
+    { preHandler: [requireUser, requireCaptain] }, async (request, reply) => {
+      if (config.nodeEnv === 'production') return sendError(reply, 404, '沙盒保险状态入口未开放');
+      if (!validUuid(request.params.id)) return sendError(reply, 400, '班次编号无效');
+      const status = request.body?.status;
+      const failureReason = request.body?.failureReason ?? null;
+      const allowedStatuses = ['not_verified','pending_verification','effective','failed'];
+      const allowedReasons = ['platform_supplier_fault','data_error','insurer_rejected','payment_failed'];
+      if (!allowedStatuses.includes(status)
+          || (status === 'failed' && !allowedReasons.includes(failureReason))
+          || (status !== 'failed' && failureReason !== null)) {
+        return sendError(reply, 400, '沙盒航次保险状态或失败原因无效');
+      }
+      const result = await withTransaction(pool, async (client) => {
+        const departure = await requireCaptainOwnership(client, request.params.id, request.user.id, true);
+        if (!departure) return { error: [404, '班次不存在'] };
+        await client.query(
+          `INSERT INTO departure_required_insurance
+             (departure_id,status,failure_reason,provider_code,provider_policy_reference,verified_at,updated_at)
+           VALUES ($1,$2,$3,'sandbox',CASE WHEN $2='effective' THEN 'sandbox_vessel_' || $1::text END,
+             CASE WHEN $2='effective' THEN now() END,now())
+           ON CONFLICT (departure_id) DO UPDATE SET status=EXCLUDED.status,
+             failure_reason=EXCLUDED.failure_reason,provider_code=EXCLUDED.provider_code,
+             provider_policy_reference=EXCLUDED.provider_policy_reference,
+             verified_at=EXCLUDED.verified_at,updated_at=now()
+           RETURNING coverage_code,status,failure_reason,verified_at`,
+          [departure.id, status, failureReason],
+        );
+        return { requiredCoverage: result.rows[0] };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return result;
+    });
+
   app.get('/captain/fulfillment', { preHandler: [requireUser, requireCaptain] }, async (request) => {
     const result = await pool.query(
       "SELECT d.id,d.status,d.trip_type,d.departure_at,d.meeting_at,d.marina_code " +

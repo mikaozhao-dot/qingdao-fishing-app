@@ -29,7 +29,7 @@
 
 - 空清单状态修正：零订单不再显示“已核验”，零座位不再显示“已匹配”；各自显示 `check_before_departure` / `review_required`。
 - 反向权限断言：普通钓友访问船长清单返回 403；其他船长无法列出、读取或导出本船长的班次清单。
-- server/scripts/step4-acceptance.mjs：干净本地沙盒数据库 33 项断言通过。
+- server/scripts/step4-acceptance.mjs：干净本地沙盒数据库 35 项断言通过；新增首单前门槛可调、首单后价格与门槛冻结断言。
 - npm run check：通过。
 - dart analyze .：通过。
 - flutter build ios --simulator --no-codesign：通过。

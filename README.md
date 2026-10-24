@@ -44,7 +44,7 @@ flutter run
 
 第 0 步构建记录见 `docs/step0-build-notes.md`；第 1 步记录与验收证据见 `docs/step1-build-notes.md`；第 2 步实现与自检见 `docs/step2-build-notes.md`；第 3 步交易沙盒实现与自检见 `docs/step3-build-notes.md`。当前不包含真实短信、实名供应商、实时海况、真实支付或真实保险出单。
 
-第 4 步当前执行范围以 `docs/codex-dev-step4-brief-v2.md` 和 `docs/current-rules-index.md` 为准；履约子集和本轮实现状态见 `docs/step4-build-notes.md`。非金额履约子集已获 Muse 有条件通过，已补空单状态与反向权限断言并留存 iOS 模拟器截图。按创始人批准 A–E 的 v2 范围仍在实现中，不代表第 4 步全量验收或真实交易获准。
+第 4 步当前执行范围以 `docs/codex-dev-step4-brief-v2.md` 和 `docs/current-rules-index.md` 为准；履约子集和本轮实现状态见 `docs/step4-build-notes.md`。非金额履约子集已获 Muse 有条件通过，已补空单状态与反向权限断言并留存 iOS 模拟器截图；v2 首单后价格冻结已实现，其余 A–E 仍在实现中，不代表第 4 步全量验收或真实交易获准。
 
 ## 关键文件
 

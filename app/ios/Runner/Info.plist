@@ -16,6 +16,10 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>qingdao_fishing_app</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于上传船舶外观、甲板、船舱、厕所和船长资质照片。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于连接约钓者服务，并在本地联调时连接开发机上的测试后端。</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

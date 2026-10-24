@@ -1,6 +1,6 @@
 # 第 4 步构建记录
 
-状态：v1 非金额履约子集已实现；Muse 于 2026-10-24 给出有条件通过。Codex 已修正空单清单状态、补反向权限断言并重拍 iOS 模拟器截图，现作为 v2 任务书 §7 的关闭证据。v2 已开始实施：首单冻结、配额隔离与 B1 确认时点均有代码切片；配额来源释放契约刚补交，待 Muse/dot 独立复核，尚非完整验收。其余 A–E 尚未完成。本文不表示第 4 步全量验收或真实交易获准。
+状态：v1 非金额履约子集已实现；Muse 于 2026-10-24 有条件通过。第 4 步 v2 已开始，首单冻结、配额隔离、B1 确认时点及保险门禁均有代码切片。Muse 的 F02/Q01–Q03 独立复跑报告（145/146/145 项零失败）已交 Dot 核验，汇总仍待更新。保险门禁后端首片修复已由 Dot 定点复核通过并通过数据库 CI；原生界面走查与截图以及其余 A–E 切片仍开放。本文不表示第 4 步 v2 全量验收或真实交易获准。
 
 ## 范围
 
@@ -78,10 +78,13 @@
 - 本地 `npm run check`、`dart analyze .`、`dart format --set-exit-if-changed app/lib/step2_flow.dart app/lib/step4_flow.dart` 与 `git diff --check` 均通过。提交 `884d1e8` 的双端 CI [run 40089573657](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40089573657) 已成功，覆盖本轮 Flutter 改动。`0b0bd70` 仅改服务端，当前 GitHub 构建工作流只监听 `app/**`，因此没有新的双端构建；服务端由语法检查和隔离数据库回归验证。
 - Muse 在 `docs/ui-design-review-83d28771.md` 对配额、B1 双账与 F02 已交付区间给出**有条件通过**，明确不等于第 4 步 v2 全量验收；Dot 的 F02 定点代码/用例复核已关闭固定 `asOf` 锁等待缺口。146 项本地隔离数据库证据之外，GitHub Actions 独立空库复跑 [run 40095067592](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40095067592) 已在新建 PostgreSQL 17/Redis 7 服务中应用迁移 001–011，并通过 **146 项断言**。首次运行 [run 40094860581](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40094860581) 因工作流未给 64 位十六进制环境变量加引号，YAML 将其解析成数值而失败；提交 `3fe5ddc` 修复后复跑通过。此为独立数据库运行证据，Q01–Q03/F02 的独立评审裁定仍待 Muse/Dot；不等于第 4 步 v2 全量验收。F01 候补补位授权窗口和其余 v2 切片继续开放，未改普通售票截止或扩大业务规则。详情见 `docs/step4-f02-followup-review-request-2026-10-24.md`。
 
-### 保险门禁首片（提交 `9ef52cdb`；未验收）
+### 保险门禁后端修复（提交 `7cd8c8d`；Dot 定点复核通过）
 
-- 首片代码提交 `9ef52cdb` 与夹具类型修正 `611483f` 已入 main。双端构建 [CI 40096010858](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40096010858) 通过；数据库验收 [CI 40096010846](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40096010846) 与 [CI 40096143370](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40096143370) 失败，故本片不验收。
-- 本地 PostgreSQL 17.11 空库应用迁移 001–012 成功。沙盒门禁脚本最终停在“已生效的乘客可登船”断言：航次保障已生效，但两位乘客的保障记录未被查到。代码追踪发现门禁查询使用 `departure.return_at`，而 `requireCaptainOwnership` 查询未取该字段，时段连接因此为空。此为诊断结果，尚未提交修复。
-- dot 复核见 `docs/dot-insurance-gate-review-2026-10-24.md`：还要求修正沙盒成功响应的查询结果变量，并验证旧订单级 `issued` 状态不能自动覆盖新的航次保障时段。当前本地仅有未提交的 SQL 参数类型与返回值诊断修正；完整验收未通过，不代表 Muse 验收。
-- 下一步需处理上述查询与时段边界，再由同一数据库 CI 重跑。投保失败现金退款、同行责任、真实保险及生产接入仍排除；第 4 步 v2 其余 A–E 切片仍开放。
+- 首片代码提交 `9ef52cdb` 与夹具修正 `611483f` 已入 main。Dot 的 I01/I02 修复复核见 `docs/dot-insurance-gate-review-2026-10-24.md`。
+- I01：航次沙盒接口保存并返回 INSERT 结果；UUID 与 `varchar(24)` 状态比较均显式定型。乘客和订单级沙盒状态写入也修正了同类状态参数推断冲突，并补成功响应断言。
+- I02：门禁查询仅读取与数据库中当前出航和返航时刻完全匹配的乘客保障记录。移除每次读取时把旧订单级 `issued` 状态补成当前时段有效保障的逻辑；迁移 012 的一次性兼容回填保留。查询在 PostgreSQL 内直接联结两个时段边界，避免 JavaScript `Date` 往返丢失时间戳微秒精度。
+- 新增用例：订单级沙盒投保虽仍为 `issued`，班次时段改变后乘客保障不自动移到新时段、该乘客仍不能登船；并验证航次沙盒接口返回已保存状态。
+- 本地 `npm run check` 通过；PostgreSQL 17.11/Redis 7 空库应用迁移 001–012 后，验收脚本通过 **174 项断言**。GitHub Actions [run 40097350087](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40097350087) 在 PostgreSQL 17/Redis 7 新环境应用迁移 001–012 并通过 **175 项断言**。计数相差 1 来自现有并发竞态用例的条件断言是否触发；两边都没有失败断言。
+- 双端构建 [run 40096010858](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40096010858) 已通过首片 UI/模型代码；修复提交只改服务端与验收脚本，没有改移动端。
+- Dot 确认本批门禁 API、状态标记及覆盖时段边界阻塞已关闭，毋须再派重复复跑。**后续待验收：** 保险门禁原生界面操作与截图、完整 D、其余第 4 步 v2 切片。未接真实保险、支付、退款或生产服务；本片通过不代表 Muse 已全量验收或第 4 步 v2 完成。
 

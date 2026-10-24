@@ -560,6 +560,8 @@ export function registerStep1Routes(app, { pool, config }) {
       client.release();
     }
   });
+
+  return { requireUser };
 }
 
 export const step1Options = Object.freeze({ marinas: MARINAS, facilities: [...FACILITIES] });

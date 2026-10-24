@@ -3,6 +3,7 @@ import pg from 'pg';
 import { createClient } from 'redis';
 import { config } from './config.js';
 import { registerStep1Routes } from './step1-routes.js';
+import { registerStep2Routes } from './step2-routes.js';
 
 const { Pool } = pg;
 
@@ -80,7 +81,8 @@ export function buildApp(runtimeConfig = config) {
     };
   });
 
-  registerStep1Routes(app, { pool, config: runtimeConfig });
+  const { requireUser } = registerStep1Routes(app, { pool, config: runtimeConfig });
+  registerStep2Routes(app, { pool, config: runtimeConfig, requireUser });
 
   app.addHook('onClose', async () => {
     await pool?.end();

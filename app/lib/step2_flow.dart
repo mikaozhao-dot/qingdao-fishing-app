@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api_client.dart';
 import 'fishing_tokens.dart';
+import 'step3_flow.dart';
 
 class Step2Workspace extends StatefulWidget {
   const Step2Workspace({
@@ -303,8 +304,11 @@ class _Step2WorkspaceState extends State<Step2Workspace> {
   Future<void> _openDetail(Map<String, dynamic> item) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            DepartureDetailPage(id: '${item['id']}', token: widget.token!),
+        builder: (_) => DepartureDetailPage(
+          id: '${item['id']}',
+          token: widget.token!,
+          allowBooking: !_isCaptain,
+        ),
       ),
     );
   }
@@ -1421,20 +1425,40 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
           ],
         ),
         const SizedBox(height: 12),
-        const Text(
-          '本版本不支持订位、选座、锁位与支付。',
-          textAlign: TextAlign.center,
-          style: _smallNote,
-        ),
+        if (widget.allowBooking)
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => SeatSelectionPage(
+                  departureId: widget.id,
+                  token: widget.token,
+                ),
+              ),
+            ),
+            icon: const Icon(Icons.event_seat_outlined),
+            label: const Text('选择座位'),
+          )
+        else
+          const Text(
+            '本阶段船长端只管理班次，不支持为自有班次订位。',
+            textAlign: TextAlign.center,
+            style: _smallNote,
+          ),
       ],
     );
   }
 }
 
 class DepartureDetailPage extends StatefulWidget {
-  const DepartureDetailPage({required this.id, required this.token, super.key});
+  const DepartureDetailPage({
+    required this.id,
+    required this.token,
+    required this.allowBooking,
+    super.key,
+  });
   final String id;
   final String token;
+  final bool allowBooking;
   @override
   State<DepartureDetailPage> createState() => _DepartureDetailPageState();
 }
@@ -1758,7 +1782,9 @@ class _ActivityCard extends StatelessWidget {
                 children: [
                   ...fish.map((target) => _Tag('${target['name']}')),
                   _Tag(
-                    boat['lengthCm'] == null ? '船' : '${_metres(boat['lengthCm'])} 米船',
+                    boat['lengthCm'] == null
+                        ? '船'
+                        : '${_metres(boat['lengthCm'])} 米船',
                   ),
                   _Tag(
                     '${item['bookedSeatCount'] ?? 0}/${item['totalSeatCount'] ?? 0} 位',

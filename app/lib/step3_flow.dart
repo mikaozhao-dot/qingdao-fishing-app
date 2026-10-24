@@ -132,6 +132,7 @@ class _SeatSelectionPageState extends State<SeatSelectionPage> {
   bool _loading = true;
   bool _submitting = false;
   String? _error;
+  String? _layoutError;
 
   @override
   void initState() {
@@ -143,6 +144,7 @@ class _SeatSelectionPageState extends State<SeatSelectionPage> {
     setState(() {
       _loading = true;
       _error = null;
+      _layoutError = null;
     });
     try {
       final result = await Step1Api.get(
@@ -151,13 +153,23 @@ class _SeatSelectionPageState extends State<SeatSelectionPage> {
       );
       if (!mounted) return;
       final seats = _maps(result['seats']);
+      final missingPosition = seats.where((seat) {
+        final side = seat['side'];
+        final section = seat['section'];
+        return (side != 'port' && side != 'starboard') ||
+            !_seatSectionBands.containsKey('$section');
+      }).toList();
       setState(() {
         _seats = seats;
+        _layoutError = missingPosition.isEmpty
+            ? null
+            : '钓位 ${missingPosition.first['number'] ?? '未知'} 缺少舷侧或分区资料，暂不能安全展示和锁位。';
         final availableIds = seats
             .where((seat) => seat['status'] == 'available')
             .map((seat) => '${seat['id']}')
             .toSet();
         _selected.removeWhere((id) => !availableIds.contains(id));
+        if (_layoutError != null) _selected.clear();
       });
     } catch (error) {
       if (mounted) {
@@ -222,23 +234,25 @@ class _SeatSelectionPageState extends State<SeatSelectionPage> {
         : _error != null
         ? _ErrorCard(message: _error!, onRetry: _load)
         : ListView(
-            padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 20),
             children: [
               const _Eyebrow('SEAT MAP'),
               const SizedBox(height: 8),
               const Text('挑选同行座位', style: _titleStyle),
               const SizedBox(height: 6),
               const Text('最多 6 位 · 锁位成功后保留 10 分钟', style: _bodyStyle),
-              const SizedBox(height: 18),
-              const _SeatLegend(),
               const SizedBox(height: 14),
+              const _SeatLegend(),
+              const SizedBox(height: 12),
               _SeatMap(
                 seats: _seats,
                 selectedIds: _selected,
+                layoutError: _layoutError,
                 onTap: (seat) {
                   final id = '${seat['id']}';
-                  if (seat['status'] != 'available' &&
-                      !_selected.contains(id)) {
+                  if (_layoutError != null ||
+                      (seat['status'] != 'available' &&
+                          !_selected.contains(id))) {
                     return;
                   }
                   setState(() {
@@ -253,41 +267,73 @@ class _SeatSelectionPageState extends State<SeatSelectionPage> {
                   });
                 },
               ),
-              const SizedBox(height: 14),
-              _Panel(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('价格小结', style: _sectionStyle),
-                    const SizedBox(height: 8),
-                    Text('已选 ${_selected.length} 位', style: _bodyStyle),
-                    const SizedBox(height: 4),
-                    Text(_money(_totalFen), style: _priceStyle),
-                    const SizedBox(height: 8),
-                    const Text(
-                      '金额由服务端按座位价格重新核算；尾角位加价会计入总额。',
-                      style: _noteStyle,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _selected.isEmpty || _submitting ? null : _holdSeats,
-                icon: _submitting
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.lock_clock_outlined),
-                label: Text(
-                  _submitting
-                      ? '正在锁位…'
-                      : '锁定 ${_selected.length} 个座位 · ${_money(_totalFen)}',
-                ),
-              ),
             ],
+          ),
+    bottomNavigationBar: _loading || _error != null
+        ? null
+        : SafeArea(
+            top: false,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
+              decoration: const BoxDecoration(
+                color: FishingTokens.background,
+                border: Border(top: BorderSide(color: FishingTokens.line)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _selectedSeatSummary(_seats, _selected),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: _sectionStyle,
+                            ),
+                            Text(
+                              '共 ${_selected.length} 位 · 合计 ${_money(_totalFen)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: _noteStyle,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed:
+                          _selected.isEmpty ||
+                              _submitting ||
+                              _layoutError != null
+                          ? null
+                          : _holdSeats,
+                      icon: _submitting
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.lock_clock_outlined),
+                      label: Text(
+                        _submitting
+                            ? '正在锁位…'
+                            : '锁定 ${_selected.length} 位 · ${_money(_totalFen)}',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
   );
 }
@@ -968,79 +1014,320 @@ class _SeatMap extends StatelessWidget {
   const _SeatMap({
     required this.seats,
     required this.selectedIds,
+    required this.layoutError,
     required this.onTap,
   });
   final List<Map<String, dynamic>> seats;
   final Set<String> selectedIds;
+  final String? layoutError;
   final ValueChanged<Map<String, dynamic>> onTap;
 
   @override
-  Widget build(BuildContext context) {
-    final port = seats.where((seat) => seat['side'] == 'port').toList();
-    final starboard =
-        seats.where((seat) => seat['side'] == 'starboard').toList()..sort(
-          (left, right) =>
-              _number(right['number']).compareTo(_number(left['number'])),
-        );
-    return _Panel(
-      child: Column(
-        children: [
-          const Icon(
-            Icons.directions_boat_filled_outlined,
-            color: FishingTokens.secondary,
-          ),
-          const Text('船头', style: _noteStyle),
-          const SizedBox(height: 12),
-          for (
-            var index = 0;
-            index < max(port.length, starboard.length);
-            index++
+  Widget build(BuildContext context) => _Panel(
+    child: layoutError != null
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('座位位置待核对', style: _sectionStyle),
+              const SizedBox(height: 6),
+              Text(layoutError!, style: _bodyStyle),
+            ],
           )
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
+        : Column(
+            children: [
+              const Row(
                 children: [
-                  Expanded(
-                    child: index < port.length
-                        ? _SeatTile(
-                            seat: port[index],
-                            selected: selectedIds.contains(
-                              '${port[index]['id']}',
-                            ),
-                            onTap: () => onTap(port[index]),
-                          )
-                        : const SizedBox.shrink(),
+                  Expanded(child: Text('左舷 · PORT', style: _noteStyle)),
+                  Icon(
+                    Icons.arrow_upward_rounded,
+                    color: FishingTokens.secondary,
+                    size: 14,
                   ),
-                  const SizedBox(width: 12),
-                  const SizedBox(
-                    width: 56,
-                    child: Icon(
-                      Icons.more_horiz,
-                      color: FishingTokens.muted,
-                      size: 18,
+                  SizedBox(width: 4),
+                  Text('船头', style: _noteStyle),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Text('右舷 · STARBOARD', style: _noteStyle),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: index < starboard.length
-                        ? _SeatTile(
-                            seat: starboard[index],
-                            selected: selectedIds.contains(
-                              '${starboard[index]['id']}',
-                            ),
-                            onTap: () => onTap(starboard[index]),
-                          )
-                        : const SizedBox.shrink(),
                   ),
                 ],
               ),
-            ),
-          const SizedBox(height: 4),
-          const Text('船尾', style: _noteStyle),
-        ],
-      ),
+              const SizedBox(height: 4),
+              const Text('位置示意 · 非等比例船型图', style: _noteStyle),
+              const SizedBox(height: 10),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final width = constraints.maxWidth;
+                  final tileWidth = min(80.0, max(58.0, width * .225));
+                  const tileHeight = 52.0;
+                  final mapHeight = _seatMapHeight(seats);
+                  final positions = _deriveSeatPositions(seats);
+                  return SizedBox(
+                    width: width,
+                    height: mapHeight,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Positioned.fill(
+                          child: CustomPaint(painter: _BoatHullPainter()),
+                        ),
+                        Positioned(
+                          left: width * .355,
+                          top: mapHeight * .44,
+                          width: width * .29,
+                          height: mapHeight * .12,
+                          child: const _CabinSchematic(),
+                        ),
+                        for (final section in _seatSectionBands.keys)
+                          Positioned(
+                            left: width * .5 - 37,
+                            top:
+                                mapHeight * _sectionLabelPosition(section) - 11,
+                            width: 74,
+                            height: 22,
+                            child: _SectionLabel(
+                              label: _seatSectionLabel(section),
+                            ),
+                          ),
+                        for (final position in positions)
+                          Positioned(
+                            left: width * position.x - tileWidth / 2,
+                            top: mapHeight * position.y - tileHeight / 2,
+                            width: tileWidth,
+                            height: tileHeight,
+                            child: _SeatTile(
+                              seat: position.seat,
+                              selected: selectedIds.contains(
+                                '${position.seat['id']}',
+                              ),
+                              onTap: () => onTap(position.seat),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+  );
+}
+
+const _seatSectionBands = <String, (double, double)>{
+  'bow': (.04, .31),
+  'mid': (.365, .635),
+  'stern': (.69, .96),
+};
+
+class _SeatPosition {
+  const _SeatPosition({required this.seat, required this.x, required this.y});
+  final Map<String, dynamic> seat;
+  final double x;
+  final double y;
+}
+
+List<_SeatPosition> _deriveSeatPositions(List<Map<String, dynamic>> seats) {
+  final groups = <String, List<Map<String, dynamic>>>{};
+  for (final seat in seats) {
+    final side = '${seat['side']}';
+    final section = '${seat['section']}';
+    if ((side != 'port' && side != 'starboard') ||
+        !_seatSectionBands.containsKey(section)) {
+      continue;
+    }
+    groups.putIfAbsent('$side:$section', () => []).add(seat);
+  }
+
+  final positions = <_SeatPosition>[];
+  for (final entry in groups.entries) {
+    final parts = entry.key.split(':');
+    final side = parts[0];
+    final section = parts[1];
+    final band = _seatSectionBands[section]!;
+    final group = entry.value
+      ..sort((left, right) {
+        final ascending = _number(
+          left['number'],
+        ).compareTo(_number(right['number']));
+        return side == 'port' ? ascending : -ascending;
+      });
+    for (var index = 0; index < group.length; index++) {
+      positions.add(
+        _SeatPosition(
+          seat: group[index],
+          x: side == 'port' ? .18 : .82,
+          y: band.$1 + (index + .5) * (band.$2 - band.$1) / group.length,
+        ),
+      );
+    }
+  }
+  return positions;
+}
+
+double _seatMapHeight(List<Map<String, dynamic>> seats) {
+  final groupCounts = <String, int>{};
+  for (final seat in seats) {
+    final side = '${seat['side']}';
+    final section = '${seat['section']}';
+    if ((side != 'port' && side != 'starboard') ||
+        !_seatSectionBands.containsKey(section)) {
+      continue;
+    }
+    final key = '$side:$section';
+    groupCounts.update(key, (count) => count + 1, ifAbsent: () => 1);
+  }
+  var requiredHeight = 410.0;
+  for (final entry in groupCounts.entries) {
+    final section = entry.key.split(':')[1];
+    final band = _seatSectionBands[section]!;
+    requiredHeight = max(
+      requiredHeight,
+      60 * entry.value / (band.$2 - band.$1),
     );
   }
+  return requiredHeight;
+}
+
+double _sectionCenter(String section) {
+  final band = _seatSectionBands[section]!;
+  return (band.$1 + band.$2) / 2;
+}
+
+double _sectionLabelPosition(String section) {
+  if (section == 'mid') return _seatSectionBands[section]!.$1;
+  return _sectionCenter(section);
+}
+
+String _seatSectionLabel(String section) => switch (section) {
+  'bow' => '船头',
+  'mid' => '过道',
+  'stern' => '船尾',
+  _ => '',
+};
+
+class _BoatHullPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final width = size.width;
+    final height = size.height;
+    final hull = Path()
+      ..moveTo(width * .5, height * .02)
+      ..cubicTo(
+        width * .76,
+        height * .02,
+        width * .94,
+        height * .065,
+        width * .97,
+        height * .16,
+      )
+      ..lineTo(width * .97, height * .88)
+      ..quadraticBezierTo(width * .97, height * .98, width * .86, height * .98)
+      ..lineTo(width * .14, height * .98)
+      ..quadraticBezierTo(width * .03, height * .98, width * .03, height * .88)
+      ..lineTo(width * .03, height * .16)
+      ..cubicTo(
+        width * .06,
+        height * .065,
+        width * .24,
+        height * .02,
+        width * .5,
+        height * .02,
+      )
+      ..close();
+
+    canvas.drawPath(
+      hull,
+      Paint()
+        ..color = FishingTokens.surfaceTint.withValues(alpha: .28)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawPath(
+      hull,
+      Paint()
+        ..color = FishingTokens.secondary.withValues(alpha: .78)
+        ..strokeWidth = 1.6
+        ..style = PaintingStyle.stroke,
+    );
+
+    final detailPaint = Paint()
+      ..color = FishingTokens.line
+      ..strokeWidth = 1;
+    for (final y in [.3375, .6625]) {
+      canvas.drawLine(
+        Offset(width * .34, height * y),
+        Offset(width * .66, height * y),
+        detailPaint,
+      );
+    }
+    for (var y = height * .075; y < height * .94; y += 13) {
+      canvas.drawLine(
+        Offset(width * .5, y),
+        Offset(width * .5, min(y + 5, height * .94)),
+        detailPaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _BoatHullPainter oldDelegate) => false;
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: FishingTokens.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: FishingTokens.line),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: FishingTokens.secondary,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _CabinSchematic extends StatelessWidget {
+  const _CabinSchematic();
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: '中央船舱与通道位置示意，非等比例，不代表真实尺寸与结构',
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: FishingTokens.surface.withValues(alpha: .94),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: FishingTokens.secondary.withValues(alpha: .8),
+        ),
+      ),
+      child: const Center(
+        child: Text(
+          '船舱\n通道',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: FishingTokens.secondary,
+            fontSize: 9,
+            height: 1.1,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _SeatTile extends StatelessWidget {
@@ -1057,6 +1344,17 @@ class _SeatTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = '${seat['status']}';
     final available = status == 'available';
+    final premium = seat['isPremium'] == true;
+    final statusLabel = selected ? '已选' : _seatStatus(status);
+    final stateIcon = selected
+        ? Icons.check_circle
+        : status == 'sold'
+        ? Icons.person_off_outlined
+        : status == 'locked' || status == 'held-by-me'
+        ? Icons.lock_outline
+        : status == 'blocked'
+        ? Icons.block_outlined
+        : Icons.radio_button_unchecked;
     final color = selected
         ? FishingTokens.brand
         : status == 'sold'
@@ -1069,41 +1367,95 @@ class _SeatTile extends StatelessWidget {
     return Semantics(
       button: available,
       label:
-          '钓位 ${seat['number']}，${_seatStatus(status)}${seat['isPremium'] == true ? '，尾角位' : ''}',
+          '钓位 ${seat['number']}，$statusLabel${premium ? '，尾角加价位，${_money(_number(seat['priceFen']))}每位' : ''}',
       child: InkWell(
         onTap: available ? onTap : null,
         borderRadius: BorderRadius.circular(14),
         child: Container(
-          constraints: const BoxConstraints(minHeight: 54),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
           decoration: BoxDecoration(
             color: color.withValues(alpha: selected ? .95 : .7),
             border: Border.all(
-              color: seat['isPremium'] == true
+              color: selected || premium
                   ? FishingTokens.brand
                   : FishingTokens.line,
+              width: selected ? 2 : 1,
             ),
             borderRadius: BorderRadius.circular(14),
           ),
           child: Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                '${seat['number']}${seat['isPremium'] == true ? ' ★' : ''}',
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: selected
-                      ? FishingTokens.background
-                      : FishingTokens.ink,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    '${seat['number']}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      color: selected
+                          ? FishingTokens.background
+                          : FishingTokens.ink,
+                    ),
+                  ),
+                  if (selected) ...[
+                    const SizedBox(width: 2),
+                    const Icon(
+                      Icons.check_circle,
+                      size: 11,
+                      color: FishingTokens.background,
+                    ),
+                  ],
+                  if (premium) ...[
+                    const SizedBox(width: 2),
+                    Icon(
+                      Icons.star_rounded,
+                      size: 11,
+                      color: selected
+                          ? FishingTokens.background
+                          : FishingTokens.brand,
+                    ),
+                  ],
+                ],
+              ),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      stateIcon,
+                      size: 9,
+                      color: selected
+                          ? FishingTokens.background
+                          : FishingTokens.secondary,
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      premium ? '加价位 · $statusLabel' : statusLabel,
+                      style: TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.w700,
+                        color: selected
+                            ? FishingTokens.background
+                            : FishingTokens.secondary,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 2),
-              Text(
-                _money(_number(seat['priceFen'])),
-                style: TextStyle(
-                  fontSize: 10,
-                  color: selected
-                      ? FishingTokens.background
-                      : FishingTokens.secondary,
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  '${_money(_number(seat['priceFen']))}/位',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: selected
+                        ? FishingTokens.background
+                        : FishingTokens.ink,
+                  ),
                 ),
               ),
             ],
@@ -1122,29 +1474,27 @@ class _SeatLegend extends StatelessWidget {
     spacing: 12,
     runSpacing: 8,
     children: [
-      _LegendItem(color: FishingTokens.surfaceTint, label: '可选'),
-      _LegendItem(color: Color(0xFF78694E), label: '已锁定'),
-      _LegendItem(color: Color(0xFF5D6961), label: '已售'),
-      _LegendItem(color: FishingTokens.brand, label: '尾角位加价'),
+      _LegendItem(icon: Icons.radio_button_unchecked, label: '可选'),
+      _LegendItem(icon: Icons.person_off_outlined, label: '已售'),
+      _LegendItem(icon: Icons.lock_outline, label: '已锁'),
+      _LegendItem(icon: Icons.check_circle_outline, label: '已选'),
+      _LegendItem(icon: Icons.star_outline, label: '尾角加价'),
     ],
   );
 }
 
 class _LegendItem extends StatelessWidget {
-  const _LegendItem({required this.color, required this.label});
-  final Color color;
+  const _LegendItem({required this.icon, required this.label});
+  final IconData icon;
   final String label;
   @override
   Widget build(BuildContext context) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(3),
-        ),
+      Icon(
+        icon,
+        color: label == '尾角加价' ? FishingTokens.brand : FishingTokens.secondary,
+        size: 13,
       ),
       const SizedBox(width: 5),
       Text(label, style: _noteStyle),
@@ -1366,6 +1716,19 @@ int _number(dynamic value) =>
     value is num ? value.toInt() : int.tryParse('$value') ?? 0;
 
 String _money(int fen) => '¥${(fen / 100).toStringAsFixed(2)}';
+
+String _selectedSeatSummary(
+  List<Map<String, dynamic>> seats,
+  Set<String> selectedIds,
+) {
+  final numbers =
+      seats
+          .where((seat) => selectedIds.contains('${seat['id']}'))
+          .map((seat) => _number(seat['number']))
+          .toList()
+        ..sort();
+  return numbers.isEmpty ? '未选择座位' : '钓位 ${numbers.join('、')}';
+}
 
 String _passengerLabel(
   List<Map<String, dynamic>> passengers,

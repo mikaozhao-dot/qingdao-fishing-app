@@ -1,0 +1,61 @@
+name: Step 4 isolated database acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/step4-database-acceptance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: qingdao_step4_acceptance
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d qingdao_step4_acceptance"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/qingdao_step4_acceptance
+      REDIS_URL: redis://127.0.0.1:6379
+      PII_ENCRYPTION_KEY_HEX: 1111111111111111111111111111111111111111111111111111111111111111
+      PHONE_HASH_KEY_HEX: 2222222222222222222222222222222222222222222222222222222222222222
+      STEP4_ACCEPTANCE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+      - name: Apply database migrations
+        working-directory: server
+        run: npm run migrate
+      - name: Run Step 4 database acceptance
+        working-directory: server
+        run: npm run smoke:step4

@@ -27,7 +27,7 @@
 
 ## 本地证据
 
-- server/scripts/step4-acceptance.mjs：干净本地沙盒数据库 24 项断言通过。
+- server/scripts/step4-acceptance.mjs：干净本地沙盒数据库 26 项断言通过。
 - npm run check：通过。
 - dart analyze .：通过。
 - flutter build ios --simulator --no-codesign：通过。

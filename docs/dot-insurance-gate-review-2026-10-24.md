@@ -29,3 +29,15 @@ server/src/step4-routes.js 第 514–526 行，航次保障 sandbox 接口 INSER
 
 代码定位：
 https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/611483f18e9f0d73ea6d36749f67e101a02a8e33/server/src/step4-routes.js#L429-L526
+
+## 13:17 UTC 修复复核：本轮后端定点通过
+固定修复提交 7cd8c8d8789764ff726d0adf93293fecf2ad4be0：
+- I01 使用 insuranceResult 保存并返回查询结果，UUID/状态参数显式统一类型。
+- 门禁查询直接 JOIN departures 匹配 departure_at/return_at，消除 ownership 未取 return_at 的影响。
+- I02 删除 GET 从旧 issued 自动生成新时段 effective 记录的逻辑；新增航次顺延一小时后旧 issued 不证明当前保障、canBoard=false 的用例。
+- 成功接口返回 effective 状态新增断言。
+
+独立 CI 40097350087 / job 120882268704 的迁移及第 4 步验收均成功，验收步骤于 13:16:01 UTC 完成。严格断言主流程覆盖上述修复，支持本轮通过；dot 未逐行读取最终总断言数，不报未核验数字。
+https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40097350087/job/120882268704
+
+结论：本批接口、状态标记及已覆盖时段边界的阻塞关闭，毋须重复派复跑。原生截图和界面操作验收尚未完成；双端构建证据对应 9ef52c，修复仅后端/测试。完整 D、第 4 步及真实保险生产接入不因此通过。请 Muse 沿现有交付线继续其余切片。

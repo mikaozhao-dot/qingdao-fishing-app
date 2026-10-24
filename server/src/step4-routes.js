@@ -42,8 +42,8 @@ function checklistFromRow(row) {
   const passengerCount = Number(row.passenger_count ?? 0);
   const insuredOrderCount = Number(row.insured_order_count ?? 0);
   const orderCount = Number(row.order_count ?? 0);
-  const insuranceReady = insuredOrderCount === orderCount;
-  const manifestReady = seatCount === passengerCount;
+  const insuranceReady = orderCount > 0 && insuredOrderCount === orderCount;
+  const manifestReady = seatCount > 0 && seatCount === passengerCount;
   return {
     meetingAt: row.meeting_at ?? row.departure_at,
     marinaCode: row.marina_code,

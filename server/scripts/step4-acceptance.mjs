@@ -109,6 +109,19 @@ async function makeConfirmedDeparture(captainId, boatId) {
   }
 }
 
+async function makeEmptyConfirmedDeparture(captainId, boatId) {
+  const result = await pool.query(
+    "INSERT INTO departures " +
+      "(boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code," +
+      "minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status) " +
+      "VALUES ($1,$2,'pro_fishing',now()+interval '72 hours',now()+interval '71 hours 30 minutes'," +
+      "now()+interval '78 hours','qd_coast','xiaogang',10000,5000,now()+interval '69 hours','confirmed') " +
+      'RETURNING id',
+    [boatId, captainId],
+  );
+  return result.rows[0].id;
+}
+
 async function makePaidOrder(userId, departureId, seat) {
   const client = await pool.connect();
   try {
@@ -168,15 +181,19 @@ async function main() {
   )).rows[0].id;
   const departure = await makeConfirmedDeparture(captain.id, boatId);
   const orderId = await makePaidOrder(angler.id, departure.id, departure.seat);
+  const emptyDepartureId = await makeEmptyConfirmedDeparture(captain.id, boatId);
 
   const generated = await processConfirmedChecklists(pool);
-  check(generated.generated, 1, 'worker generates a checklist for an already-confirmed trip');
+  check(generated.generated, 2, 'worker generates checklists for already-confirmed trips');
   const repeated = await processConfirmedChecklists(pool);
   check(repeated.generated, 0, 'worker does not regenerate an existing checklist');
   const captainItems = await expect('GET', '/captain/fulfillment', captain.token);
-  check(captainItems.items.length, 1, 'captain sees confirmed trip');
-  check(captainItems.items[0].id, departure.id, 'trip identity matches');
+  check(captainItems.items.map((item) => item.id).sort(), [departure.id, emptyDepartureId].sort(),
+    'captain sees their confirmed trips');
   check('bookedFen' in captainItems.items[0], false, 'trip list does not expose formation amount');
+  const emptyTrip = await expect('GET', '/captain/departures/' + emptyDepartureId + '/fulfillment', captain.token);
+  check(emptyTrip.checklist.insurance.status, 'check_before_departure', 'empty trip does not imply insurance is checked');
+  check(emptyTrip.checklist.manifest.status, 'review_required', 'empty trip does not imply passenger manifest is matched');
 
   const detail = await expect('GET', '/captain/departures/' + departure.id + '/fulfillment', captain.token);
   check(detail.checklist.manifest.status, 'matched', 'passenger and seat counts match');

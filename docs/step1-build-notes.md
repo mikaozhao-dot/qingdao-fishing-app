@@ -25,7 +25,7 @@ FormatException: Unexpected end of input
 analysis server exited with code 255
 ```
 
-因此以完整项目 `dart analyze` 作为当前静态分析证据，但不把 Flutter 命令的服务崩溃记作 `flutter analyze` 通过；该验收条件仍待分析服务恢复后关闭。
+该次本机命令不作为通过证据。之后按 Muse 工单改由托管 CI 执行，关闭结果和完整日志归档见下文。
 
 ## 后端链路实跑
 
@@ -48,18 +48,19 @@ analysis server exited with code 255
 
 在临时 Flutter Web scaffolding 中以 393×852 移动视口运行 Flutter 界面，通过 `API_BASE_URL` 连接本机 API；完成手机号登录、实名表单、已验证账号、船长档案表单、设施与照片类别展示，以及已审核船档案和模板查看。`design/step1-review-photos/` 中的 6 张截图均小于 1 MB，供查看布局。
 
-这些截图是 Chrome 中的移动尺寸 Web 预览，不是 iOS/Android 模拟器或真机截图，不能替代任务书要求的设备冒烟。当前环境缺 Android SDK，Xcode 安装不完整，CocoaPods 未安装；设备联调条件仍待有完整工具链的环境完成。
+这些截图是 Chrome 中的移动尺寸 Web 预览，不是 iOS/Android 模拟器或真机截图，不能替代任务书要求的设备冒烟。当时的本机环境缺 Android SDK，Xcode 工具链初始化不完整，CocoaPods 未安装；设备联调条件仍待有完整工具链的环境完成。
 
 ## Muse 独立评审与跟进
 
-- Muse 于 2026-10-24 在 `docs/step1-review-84828e0f87c2.md` 给出**有条件通过**：后端主链路及库级核查的 31 项断言通过；`flutter analyze` 全量通过输出与设备冒烟仍未关闭。此结论不替代未完成的验收项。
+- Muse 于 2026-10-24 在 `docs/step1-review-84828e0f87c2.md` 给出**有条件通过**：后端主链路及库级核查的 31 项断言通过；当时 `flutter analyze` 全量通过输出与设备冒烟仍未关闭。此结论不替代未完成的验收项。
 - Muse 指出的 `estimatedSpacingCm` 类型不一致已在 `f835a6b` 修复：提交接口和档案读取接口现在均把 PostgreSQL numeric 序列化为 JSON 数字，并在数据库值为空时保留 `null`。本地 `node --check server/src/step1-routes.js` 通过。
 - GitHub Actions 双端构建已由 Codex 独立核对通过：[运行 #40043599384](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40043599384)，iOS 模拟器构建与 Android debug APK 均成功；Muse 评审环境当时无法读取 Actions，因此未把此项计入其独立核验。
-- 本机 `flutter doctor`（2026-10-24）显示 Flutter 3.47.8 可用、Android SDK 缺失、Xcode 工具链初始化不完整、CocoaPods 未安装。补查确认 Xcode 27.1 已安装并被选中，`xcodebuild -version` 成功，`xcodebuild -license check` 退出码为 0；没有发现 license 未同意提示。`flutter doctor` 仍建议运行 `xcodebuild -runFirstLaunch`，本轮未运行该初始化命令。
-- `flutter devices` 只列出 macOS 与 Chrome，没有 iOS/Android 模拟器或实体手机。本轮按评审要求重跑 `flutter analyze --no-pub`，仍以 `FormatException: Unexpected end of input` 在 LSP 消息读取阶段退出（exit 255），未产生 Dart 诊断；此项仍未通过。
+- 本机初检 `flutter doctor`（2026-10-24）显示 Flutter 3.47.8 可用、Android SDK 缺失、Xcode 工具链初始化不完整、CocoaPods 未安装。补查确认 Xcode 27.1 已安装并被选中，`xcodebuild -version` 成功，`xcodebuild -license check` 退出码为 0；没有发现 license 未同意提示。初检时 `flutter doctor` 仍建议运行 `xcodebuild -runFirstLaunch`，本机未运行该初始化命令。
+- 本机按评审要求重跑 `flutter analyze --no-pub`，仍以 `FormatException: Unexpected end of input` 在 LSP 消息读取阶段退出（exit 255），未产生 Dart 诊断。随后按 Muse 工单 `docs/step1-analyze-ci-order-2026-10-24.md` 增加托管分析 job；GitHub Actions 运行 [#40049325934](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40049325934) 的 `analyze` job 成功，执行 `flutter analyze --no-pub`，原始输出为 `Analyzing app...` / `No issues found! (ran in 4.5s)`。完整日志作为 artifact `flutter-analyze-40049325934` 上传（artifact ID `12542732319`）；因此 `flutter analyze` 验收按工单条件关闭。本地 LSP 故障记录保留为环境问题。
+- Muse 新工单记录创始人已完成 Xcode license 与 first-run 初始化。当前 `flutter devices` 仍只列出 macOS 与 Chrome，没有 iOS/Android 模拟器或实体手机。
 
 ## 未关闭事项
 
-- Muse 独立评审已完成，结论为有条件通过；仍待关闭的是任务书验收第 4 项的全量 `flutter analyze` 通过输出，以及至少 3 张、每张小于 1 MB 的模拟器/真机主要页面截图。现有 Web 预览不能代替设备验收。
-- 当前环境缺 Android SDK 与 CocoaPods；Xcode 尚需完成 Flutter doctor 提示的 first-run 初始化。工具链和模拟器/真机准备好后再完成设备冒烟。`flutter analyze --no-pub` 的 LSP 服务崩溃不能记作通过，`dart analyze` 通过也不能替代该条件。
+- Muse 独立评审已完成，结论为有条件通过。按工单通过托管 CI 的全量 `flutter analyze` 已关闭；仍未关闭的是任务书验收第 4 项的设备冒烟：至少 3 张、每张小于 1 MB 的模拟器/真机主要页面截图。现有 Web 预览不能代替设备验收。
+- 当前设备列表没有 Android/iOS 模拟器或实体手机。工单要求安装模拟器前先向创始人报备（需数 GB 空间）；目前尚未安装模拟器，也未取得真机冒烟截图。待设备条件具备后完成冒烟。
 - 照片当前保存在本地对象存储桩；生产部署需接入正式对象存储与真实供应商前重新审查密钥配置、权限和数据保留策略。

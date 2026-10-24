@@ -37,6 +37,56 @@ async function requireCaptainOwnership(client, departureId, userId, lock = false
   return result.rows[0] ?? null;
 }
 
+async function loadFormationAccounts(client, departureId) {
+  const result = await client.query(
+    `SELECT d.id,d.minimum_sailing_total_fen,d.departure_at,d.status,
+       COALESCE((
+         SELECT SUM(ROUND((o.seat_fee_fen-o.discount_fen)::numeric * 0.9))
+         FROM booking_orders o
+         WHERE o.departure_id=d.id AND o.status='paid'
+       ),0)::bigint AS platform_ticket_net_fen,
+       COALESCE((
+         SELECT SUM(amount_delta_fen)
+         FROM departure_offline_ledger_entries e
+         WHERE e.departure_id=d.id
+       ),0)::bigint AS offline_declared_fen
+     FROM departures d WHERE d.id=$1`,
+    [departureId],
+  );
+  if (!result.rowCount) return null;
+  const row = result.rows[0];
+  const platformTicketNetFen = Number(row.platform_ticket_net_fen);
+  const offlineDeclaredFen = Number(row.offline_declared_fen);
+  const thresholdFen = Number(row.minimum_sailing_total_fen);
+  const platformVerifiableFen = platformTicketNetFen;
+  return {
+    departureId: row.id,
+    departureStatus: row.status,
+    departureAt: row.departure_at,
+    thresholdFen,
+    platform: {
+      ticketNetFen: platformTicketNetFen,
+      penaltyPoolFen: 0,
+      successfulSupplementFen: 0,
+      verifiableTotalFen: platformVerifiableFen,
+      remainingFen: Math.max(0, thresholdFen - platformVerifiableFen),
+      meetsThreshold: platformVerifiableFen >= thresholdFen,
+    },
+    captainOffline: {
+      declaredFen: offlineDeclaredFen,
+      remainingAfterDeclarationFen: Math.max(0, thresholdFen - platformVerifiableFen - offlineDeclaredFen),
+      supportsCaptainConfirmation: platformVerifiableFen < thresholdFen
+        && platformVerifiableFen + offlineDeclaredFen >= thresholdFen,
+      statement: '船长自报线下台账，未经平台核验，不计入自动成行金额。',
+    },
+    sourceCoverage: {
+      platformTicketNet: 'live_paid_orders',
+      penaltyPool: 'not_implemented',
+      successfulSupplement: 'not_implemented',
+    },
+  };
+}
+
 function checklistFromRow(row) {
   const seatCount = Number(row.seat_count ?? 0);
   const passengerCount = Number(row.passenger_count ?? 0);
@@ -158,6 +208,73 @@ function csvCell(value) {
 export function registerStep4Routes(app, { pool, config, requireUser }) {
   const security = createSecurity(config);
   const requireCaptain = captainPreHandler(pool);
+
+  app.get('/captain/departures/:id/formation-accounts',
+    { preHandler: [requireUser, requireCaptain] }, async (request, reply) => {
+      if (!validUuid(request.params.id)) return sendError(reply, 400, '班次编号无效');
+      const result = await withTransaction(pool, async (client) => {
+        const departure = await requireCaptainOwnership(client, request.params.id, request.user.id);
+        if (!departure) return { error: [404, '班次不存在'] };
+        return { accounts: await loadFormationAccounts(client, departure.id) };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return result;
+    });
+
+  app.post('/captain/departures/:id/offline-ledger',
+    { preHandler: [requireUser, requireCaptain] }, async (request, reply) => {
+      if (!validUuid(request.params.id)) return sendError(reply, 400, '班次编号无效');
+      const amountDeltaFen = request.body?.amountDeltaFen;
+      const note = typeof request.body?.note === 'string' ? request.body.note.trim() : '';
+      const requestKey = typeof request.body?.requestKey === 'string' ? request.body.requestKey.trim() : '';
+      if (!Number.isSafeInteger(amountDeltaFen) || amountDeltaFen === 0
+          || Math.abs(amountDeltaFen) > 2_000_000_000) {
+        return sendError(reply, 400, '台账金额需为非零整数分');
+      }
+      if (!note || note.length > 200) return sendError(reply, 400, '请填写 1–200 字的台账依据');
+      if (requestKey.length < 8 || requestKey.length > 100) {
+        return sendError(reply, 400, '台账请求编号需为 8–100 个字符');
+      }
+      const result = await withTransaction(pool, async (client) => {
+        const departure = await requireCaptainOwnership(client, request.params.id, request.user.id, true);
+        if (!departure) return { error: [404, '班次不存在'] };
+        if (!['open', 'forming', 'handling_shortfall'].includes(departure.status)
+            || new Date(departure.departure_at) <= new Date()) {
+          return { error: [409, '当前班次不能登记线下台账'] };
+        }
+        const replay = await client.query(
+          `SELECT id,amount_delta_fen,note,created_at FROM departure_offline_ledger_entries
+           WHERE departure_id=$1 AND request_key=$2`,
+          [departure.id, requestKey],
+        );
+        if (replay.rowCount) {
+          const entry = replay.rows[0];
+          if (Number(entry.amount_delta_fen) !== amountDeltaFen || entry.note !== note) {
+            return { error: [409, '台账请求编号已用于其他内容'] };
+          }
+          return { entry, idempotentReplay: true,
+            accounts: await loadFormationAccounts(client, departure.id) };
+        }
+        const balance = await client.query(
+          `SELECT COALESCE(SUM(amount_delta_fen),0)::bigint AS declared_fen
+           FROM departure_offline_ledger_entries WHERE departure_id=$1`,
+          [departure.id],
+        );
+        const nextBalance = Number(balance.rows[0].declared_fen) + amountDeltaFen;
+        if (nextBalance < 0) return { error: [409, '冲减金额不能超过已登记的线下台账'] };
+        const inserted = await client.query(
+          `INSERT INTO departure_offline_ledger_entries
+             (departure_id,captain_user_id,amount_delta_fen,note,request_key)
+           VALUES ($1,$2,$3,$4,$5)
+           RETURNING id,amount_delta_fen,note,created_at`,
+          [departure.id, request.user.id, amountDeltaFen, note, requestKey],
+        );
+        return { entry: inserted.rows[0], idempotentReplay: false,
+          accounts: await loadFormationAccounts(client, departure.id) };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return reply.code(result.idempotentReplay ? 200 : 201).send(result);
+    });
 
   app.get('/captain/fulfillment', { preHandler: [requireUser, requireCaptain] }, async (request) => {
     const result = await pool.query(

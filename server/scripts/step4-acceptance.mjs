@@ -298,6 +298,54 @@ async function main() {
   check(legacyPublish.body.departure.platformQuotaSeats, 0, 'unsegregated supply opens no platform quota');
   check(legacyPublish.body.departure.seats.length, 0, 'unsegregated supply creates no online inventory');
 
+  const formationDepartureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',now()+interval '10 days',now()+interval '10 days'-interval '30 minutes',
+        now()+interval '10 days'+'7 hours','qd_coast','xiaogang',5000,5000,
+        now()+interval '9 days','open',8,8,0,false) RETURNING id`,
+    [boatId, captain.id],
+  )).rows[0].id;
+  const formationSeat = (await pool.query(
+    `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
+     VALUES ($1,1,5000,'port','mid','booked') RETURNING id,seat_number,price_fen`,
+    [formationDepartureId],
+  )).rows[0];
+  await makePaidOrder(angler.id, formationDepartureId, formationSeat);
+  const initialAccounts = await expect('GET',
+    '/captain/departures/' + formationDepartureId + '/formation-accounts', captain.token);
+  check(initialAccounts.accounts.platform.ticketNetFen, 4500,
+    'formation preview applies the approved 90 percent ticket net');
+  check(initialAccounts.accounts.platform.meetsThreshold, false,
+    'offline declarations never make the platform ledger automatically meet threshold');
+  check(initialAccounts.accounts.captainOffline.supportsCaptainConfirmation, false,
+    'captain confirmation path is false before offline evidence is recorded');
+  await expect('GET', '/captain/departures/' + formationDepartureId + '/formation-accounts', angler.token,
+    undefined, 403);
+  await expect('GET', '/captain/departures/' + formationDepartureId + '/formation-accounts', otherCaptain.token,
+    undefined, 404);
+  const offlineEntry = await expect('POST',
+    '/captain/departures/' + formationDepartureId + '/offline-ledger', captain.token,
+    { amountDeltaFen: 500, note: '验收模拟线下收入', requestKey: 'formation-offline-001' }, 201);
+  check(offlineEntry.accounts.captainOffline.declaredFen, 500,
+    'captain-reported offline amount remains on its separate ledger');
+  check(offlineEntry.accounts.platform.verifiableTotalFen, 4500,
+    'offline entry does not alter platform-verifiable total');
+  check(offlineEntry.accounts.captainOffline.supportsCaptainConfirmation, true,
+    'offline amount can support only the captain confirmation path');
+  const replayedOfflineEntry = await expect('POST',
+    '/captain/departures/' + formationDepartureId + '/offline-ledger', captain.token,
+    { amountDeltaFen: 500, note: '验收模拟线下收入', requestKey: 'formation-offline-001' });
+  check(replayedOfflineEntry.idempotentReplay, true, 'offline ledger request key is idempotent');
+  check((await scalar('SELECT count(*)::integer AS count FROM departure_offline_ledger_entries WHERE departure_id=$1',
+    [formationDepartureId])).count, 1, 'idempotent replay does not duplicate an offline entry');
+  await expect('POST', '/captain/departures/' + formationDepartureId + '/offline-ledger', captain.token,
+    { amountDeltaFen: -501, note: '超额冲减', requestKey: 'formation-offline-002' }, 409);
+  await expect('POST', '/captain/departures/' + formationDepartureId + '/offline-ledger', captain.token,
+    { amountDeltaFen: 600, note: '重用请求编号', requestKey: 'formation-offline-001' }, 409);
+
   const departure = await makeConfirmedDeparture(captain.id, boatId);
   const orderId = await makePaidOrder(angler.id, departure.id, departure.seat);
   const emptyDepartureId = await makeEmptyConfirmedDeparture(captain.id, boatId);

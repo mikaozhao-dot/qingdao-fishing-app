@@ -1229,6 +1229,22 @@ class _CaptainTripsPage extends StatelessWidget {
     }
   }
 
+  Future<void> _manageOfflineSeats(
+    BuildContext context,
+    Map<String, dynamic> item,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: FishingTokens.surface,
+      builder: (_) => _OfflineSeatManagementSheet(
+        departureId: '${item['id']}',
+        token: token,
+      ),
+    );
+    onChanged();
+  }
+
   @override
   Widget build(BuildContext context) => RefreshIndicator(
     onRefresh: onRefresh,
@@ -1257,11 +1273,255 @@ class _CaptainTripsPage extends StatelessWidget {
               token: token,
               onWithdraw: () => _withdraw(context, item),
               onRepublish: () => _republish(context, item),
+              onManageOfflineSeats: () => _manageOfflineSeats(context, item),
               onOpen: () => onOpenDetail(item),
             ),
           ),
         ),
       ],
+    ),
+  );
+}
+
+class _OfflineSeatManagementSheet extends StatefulWidget {
+  const _OfflineSeatManagementSheet({
+    required this.departureId,
+    required this.token,
+  });
+  final String departureId;
+  final String token;
+
+  @override
+  State<_OfflineSeatManagementSheet> createState() =>
+      _OfflineSeatManagementSheetState();
+}
+
+class _OfflineSeatManagementSheetState
+    extends State<_OfflineSeatManagementSheet> {
+  List<Map<String, dynamic>> _seats = [];
+  String _factBoundary = '';
+  String _releaseStatement = '';
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final data = await Step1Api.get(
+        '/captain/departures/${widget.departureId}/offline-seats',
+        token: widget.token,
+      );
+      if (!mounted) return;
+      setState(() {
+        _seats = _mapList(data['seats']);
+        _factBoundary = '${data['factBoundary'] ?? ''}';
+        _releaseStatement = '${data['releaseStatement'] ?? ''}';
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(
+          () => _error = error.toString().replaceFirst('Exception: ', ''),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  String _stateLabel(String state) => switch (state) {
+    'open' => '线下在售',
+    'locked' => '线下已锁',
+    'sold' => '线下已售',
+    _ => state,
+  };
+
+  Future<void> _setSeatState(int seatNumber, String state) async {
+    try {
+      await Step1Api.post(
+        '/captain/departures/${widget.departureId}/offline-seat-status',
+        {'seatNumber': seatNumber, 'state': state},
+        token: widget.token,
+      );
+      await _load();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.toString().replaceFirst('Exception: ', '')),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _transferToPlatform(int seatNumber) async {
+    var accepted = false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, updateDialog) => AlertDialog(
+          title: Text('释放 $seatNumber 号线下席位'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _releaseStatement,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 10),
+              const Text('确认后，系统会将该席位开放给平台钓友。平台无法核验外部线下销售记录。'),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: accepted,
+                onChanged: (value) =>
+                    updateDialog(() => accepted = value ?? false),
+                title: const Text('我已停止线下销售并确认该席位未售、未锁'),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: accepted ? () => Navigator.pop(context, true) : null,
+              child: const Text('确认释放并开放平台'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await Step1Api.post(
+        '/captain/departures/${widget.departureId}/quota-transfers',
+        {
+          'seatNumber': seatNumber,
+          'sourceChannel': 'offline',
+          'targetChannel': 'platform',
+          'releaseConfirmed': true,
+          'requestKey':
+              'offline-release-$seatNumber-${DateTime.now().microsecondsSinceEpoch}',
+        },
+        token: widget.token,
+      );
+      await _load();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.toString().replaceFirst('Exception: ', '')),
+          ),
+        );
+      }
+    }
+  }
+
+  Widget _stateMenu(Map<String, dynamic> seat) {
+    final state = '${seat['state']}';
+    final options = switch (state) {
+      'open' => const {'locked': '标记已锁', 'sold': '标记已售'},
+      'locked' => const {'open': '取消锁定', 'sold': '标记已售'},
+      _ => const <String, String>{},
+    };
+    return PopupMenuButton<String>(
+      enabled: options.isNotEmpty,
+      tooltip: '登记线下状态',
+      onSelected: (value) => _setSeatState(seat['seatNumber'] as int, value),
+      itemBuilder: (context) => options.entries
+          .map(
+            (entry) =>
+                PopupMenuItem(value: entry.key, child: Text(entry.value)),
+          )
+          .toList(),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Text(
+          options.isEmpty ? '状态已锁定' : '登记状态',
+          style: TextStyle(
+            color: options.isEmpty ? FishingTokens.muted : FishingTokens.brand,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    child: SizedBox(
+      height: MediaQuery.sizeOf(context).height * .82,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 12, 8),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '线下席位登记',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Text(_factBoundary, style: _smallBody),
+          ),
+          if (_loading) const LinearProgressIndicator(minHeight: 2),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: _InlineError(message: _error!, onRetry: _load),
+            ),
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+              itemCount: _seats.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final seat = _seats[index];
+                final seatNumber = seat['seatNumber'] as int;
+                final state = '${seat['state']}';
+                return ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                  title: Text('$seatNumber 号席位'),
+                  subtitle: Text(_stateLabel(state)),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _stateMenu(seat),
+                      if (state == 'open')
+                        TextButton(
+                          onPressed: () => _transferToPlatform(seatNumber),
+                          child: const Text('调入平台'),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -1939,12 +2199,14 @@ class _TripManagementCard extends StatelessWidget {
     required this.item,
     required this.onWithdraw,
     required this.onRepublish,
+    required this.onManageOfflineSeats,
     required this.onOpen,
     required this.token,
   });
   final Map<String, dynamic> item;
   final VoidCallback onWithdraw;
   final VoidCallback onRepublish;
+  final VoidCallback onManageOfflineSeats;
   final VoidCallback onOpen;
   final String token;
   @override
@@ -1958,6 +2220,18 @@ class _TripManagementCard extends StatelessWidget {
     child: Column(
       children: [
         _ActivityCard(item: item, token: token, onTap: onOpen, captain: true),
+        if (item['status'] == 'published' &&
+            (item['offlineQuotaSeats'] as num? ?? 0) > 0) ...[
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: onManageOfflineSeats,
+              icon: const Icon(Icons.fact_check_outlined),
+              label: const Text('登记线下席位状态'),
+            ),
+          ),
+        ],
         const SizedBox(height: 10),
         Row(
           children: [

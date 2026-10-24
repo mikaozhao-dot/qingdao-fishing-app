@@ -20,6 +20,10 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 const sendError = (reply, statusCode, message) => reply.code(statusCode).send({ error: message });
+const sendQuotaError = (reply, statusCode, code, message) =>
+  reply.code(statusCode).send({ code, error: message });
+const OFFLINE_RELEASE_STATEMENT_VERSION = 'offline-release-v1';
+const OFFLINE_RELEASE_STATEMENT = '该席位线下未售、未锁，且已停止线下销售';
 
 function shanghaiParts(value) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -202,12 +206,23 @@ function validTransferRequest(body) {
   const sourceChannel = String(body?.sourceChannel ?? '');
   const targetChannel = String(body?.targetChannel ?? '');
   const requestKey = String(body?.requestKey ?? '').trim();
+  const releaseConfirmed = body?.releaseConfirmed ?? false;
   if (seatNumber === null) return { error: '席位编号无效' };
   if (!['platform', 'offline'].includes(sourceChannel)
       || !['platform', 'offline'].includes(targetChannel)
       || sourceChannel === targetChannel) return { error: '配额转移方向无效' };
   if (!/^[A-Za-z0-9_.:-]{1,80}$/.test(requestKey)) return { error: '转移请求编号无效' };
-  return { value: { seatNumber, sourceChannel, targetChannel, requestKey } };
+  if (typeof releaseConfirmed !== 'boolean') return { error: '线下释放确认状态无效' };
+  if (sourceChannel === 'platform' && releaseConfirmed) return { error: '平台席位不需要线下释放确认' };
+  return { value: { seatNumber, sourceChannel, targetChannel, requestKey, releaseConfirmed } };
+}
+
+function validOfflineSeatState(body) {
+  const seatNumber = validInteger(body?.seatNumber, { min: 1, max: 30 });
+  const state = String(body?.state ?? '');
+  if (seatNumber === null) return { error: '席位编号无效' };
+  if (!['open', 'locked', 'sold'].includes(state)) return { error: '线下席位状态无效' };
+  return { value: { seatNumber, state } };
 }
 
 function validateSeatLayout(layout, seatCount) {
@@ -585,11 +600,105 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
     };
   });
 
+  app.get('/captain/departures/:id/offline-seats', { preHandler: requireUser }, async (request, reply) => {
+    if (!await captainApproved(pool, request.user.id)) return sendError(reply, 403, '船长资质尚未审核通过');
+    const departure = await pool.query(
+      `SELECT id FROM departures WHERE id=$1 AND captain_user_id=$2`,
+      [request.params.id, request.user.id],
+    );
+    if (!departure.rowCount) return sendError(reply, 404, '班次不存在');
+    const seats = await pool.query(
+      `SELECT seat_number,offline_state FROM departure_seat_quotas
+       WHERE departure_id=$1 AND sale_channel='offline' ORDER BY seat_number`,
+      [request.params.id],
+    );
+    return {
+      seats: seats.rows.map((row) => ({
+        seatNumber: Number(row.seat_number),
+        state: row.offline_state,
+      })),
+      releaseStatement: OFFLINE_RELEASE_STATEMENT,
+      factBoundary: '平台只能证明船长已在系统内登记状态并作出释放确认，不能技术性核验或阻止线下事实本身。',
+    };
+  });
+
+  app.post('/captain/departures/:id/offline-seat-status', { preHandler: requireUser }, async (request, reply) => {
+    if (!await captainApproved(pool, request.user.id)) return sendError(reply, 403, '船长资质尚未审核通过');
+    const validated = validOfflineSeatState(request.body);
+    if (validated.error) return sendError(reply, 400, validated.error);
+    const { seatNumber, state } = validated.value;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const departure = await client.query(
+        `SELECT id,status,departure_at,booking_deadline FROM departures
+         WHERE id=$1 AND captain_user_id=$2 FOR UPDATE`,
+        [request.params.id, request.user.id],
+      );
+      if (!departure.rowCount) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 404, '班次不存在');
+      }
+      const row = departure.rows[0];
+      if (row.status !== 'open' || new Date(row.departure_at) <= new Date()
+          || new Date(row.booking_deadline) <= new Date()) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '只有报名中的未出航班次可以登记线下席位');
+      }
+      const quota = await client.query(
+        `SELECT sale_channel,offline_state FROM departure_seat_quotas
+         WHERE departure_id=$1 AND seat_number=$2 FOR UPDATE`,
+        [row.id, seatNumber],
+      );
+      if (!quota.rowCount) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 404, '席位不在当前船只模板内');
+      }
+      if (quota.rows[0].sale_channel !== 'offline') {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '只有当前线下配额席位可以登记线下状态');
+      }
+      const previousState = quota.rows[0].offline_state;
+      if (previousState === 'sold') {
+        await client.query('ROLLBACK');
+        return sendQuotaError(reply, 409, 'offline_seat_sold_terminal', '已登记线下售出的席位不能再改为其他状态');
+      }
+      const allowed = (previousState === 'open' && ['locked', 'sold'].includes(state))
+        || (previousState === 'locked' && ['open', 'sold'].includes(state))
+        || previousState === state;
+      if (!allowed) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '线下席位状态变化不允许');
+      }
+      if (previousState !== state) {
+        await client.query(
+          `UPDATE departure_seat_quotas SET offline_state=$3,updated_at=now()
+           WHERE departure_id=$1 AND seat_number=$2`,
+          [row.id, seatNumber, state],
+        );
+        await client.query(
+          `INSERT INTO departure_offline_seat_state_events
+             (departure_id,seat_number,actor_user_id,previous_state,next_state,event_kind)
+           VALUES ($1,$2,$3,$4,$5,'captain_status')`,
+          [row.id, seatNumber, request.user.id, previousState, state],
+        );
+      }
+      await client.query('COMMIT');
+      return { departureId: row.id, seatNumber, state, changed: previousState !== state };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      request.log.error({ err: error }, 'Offline seat status update failed');
+      return sendError(reply, 500, '线下席位登记失败，请稍后重试');
+    } finally {
+      client.release();
+    }
+  });
+
   app.post('/captain/departures/:id/quota-transfers', { preHandler: requireUser }, async (request, reply) => {
     if (!await captainApproved(pool, request.user.id)) return sendError(reply, 403, '船长资质尚未审核通过');
     const validated = validTransferRequest(request.body);
     if (validated.error) return sendError(reply, 400, validated.error);
-    const { seatNumber, sourceChannel, targetChannel, requestKey } = validated.value;
+    const { seatNumber, sourceChannel, targetChannel, requestKey, releaseConfirmed } = validated.value;
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -605,25 +714,17 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
         await client.query('ROLLBACK');
         return sendError(reply, 404, '班次不存在');
       }
-      if (departure.status !== 'open' || new Date(departure.departure_at) <= new Date()
-          || new Date(departure.booking_deadline) <= new Date()) {
-        await client.query('ROLLBACK');
-        return sendError(reply, 409, '只有未出航且仍在报名的班次可以调额');
-      }
-      if (seatNumber > Number(departure.seat_template_count)) {
-        await client.query('ROLLBACK');
-        return sendError(reply, 404, '席位不在当前船只模板内');
-      }
-
       const previous = await client.query(
-        `SELECT seat_number,source_channel,target_channel,platform_quota_after,offline_quota_after
+        `SELECT seat_number,source_channel,target_channel,platform_quota_after,offline_quota_after,
+                offline_release_confirmed
          FROM departure_quota_transfers WHERE departure_id=$1 AND request_key=$2`,
         [departure.id, requestKey],
       );
       if (previous.rowCount) {
         const item = previous.rows[0];
         if (Number(item.seat_number) !== seatNumber || item.source_channel !== sourceChannel
-            || item.target_channel !== targetChannel) {
+            || item.target_channel !== targetChannel
+            || Boolean(item.offline_release_confirmed) !== releaseConfirmed) {
           await client.query('ROLLBACK');
           return sendError(reply, 409, '转移请求编号已用于其他操作');
         }
@@ -638,12 +739,23 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
           offlineQuotaSeats: Number(item.offline_quota_after),
           manualSupply: platformQuotaSeats === 0,
           instantConfirmationAvailable: platformQuotaSeats > 0,
+          releaseConfirmed: Boolean(item.offline_release_confirmed),
           replayed: true,
         };
       }
 
+      if (departure.status !== 'open' || new Date(departure.departure_at) <= new Date()
+          || new Date(departure.booking_deadline) <= new Date()) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '只有未出航且仍在报名的班次可以调额');
+      }
+      if (seatNumber > Number(departure.seat_template_count)) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 404, '席位不在当前船只模板内');
+      }
+
       const slotResult = await client.query(
-        `SELECT sale_channel FROM departure_seat_quotas
+        `SELECT sale_channel,offline_state FROM departure_seat_quotas
          WHERE departure_id=$1 AND seat_number=$2 FOR UPDATE`,
         [departure.id, seatNumber],
       );
@@ -654,6 +766,25 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
       if (slotResult.rows[0].sale_channel !== sourceChannel) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '席位当前不属于请求的来源配额');
+      }
+      const previousOfflineState = slotResult.rows[0].offline_state;
+      if (sourceChannel === 'offline') {
+        if (previousOfflineState === 'sold') {
+          await client.query('ROLLBACK');
+          return sendQuotaError(reply, 409, 'offline_seat_sold', '线下已售席位不能调入平台');
+        }
+        if (previousOfflineState === 'locked') {
+          await client.query('ROLLBACK');
+          return sendQuotaError(reply, 409, 'offline_seat_locked', '线下已锁定席位不能调入平台');
+        }
+        if (previousOfflineState !== 'open') {
+          await client.query('ROLLBACK');
+          return sendQuotaError(reply, 409, 'offline_seat_state_missing', '线下席位来源状态未登记，不能调入平台');
+        }
+        if (!releaseConfirmed) {
+          await client.query('ROLLBACK');
+          return sendQuotaError(reply, 409, 'offline_release_confirmation_required', '调入平台前需要船长确认已停止线下销售');
+        }
       }
 
       const inventoryResult = await client.query(
@@ -729,9 +860,10 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
         return sendError(reply, 409, '当前配额数量与席位分配记录不一致');
       }
       await client.query(
-        `UPDATE departure_seat_quotas SET sale_channel=$3,updated_at=now()
+        `UPDATE departure_seat_quotas SET sale_channel=$3,offline_state=$4,updated_at=now()
          WHERE departure_id=$1 AND seat_number=$2`,
-        [departure.id, seatNumber, targetChannel],
+        [departure.id, seatNumber, targetChannel,
+          sourceChannel === 'offline' ? 'released' : 'open'],
       );
       await client.query(
         `UPDATE departures SET platform_quota_seats=$2,offline_quota_seats=$3,
@@ -741,11 +873,33 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
       await client.query(
         `INSERT INTO departure_quota_transfers
            (departure_id,actor_user_id,seat_number,source_channel,target_channel,request_key,
-            platform_quota_after,offline_quota_after)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            platform_quota_after,offline_quota_after,offline_release_confirmed)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [departure.id, request.user.id, seatNumber, sourceChannel, targetChannel, requestKey,
-          platformQuotaSeats, offlineQuotaSeats],
+          platformQuotaSeats, offlineQuotaSeats, releaseConfirmed],
       );
+      if (sourceChannel === 'offline') {
+        await client.query(
+          `INSERT INTO departure_offline_release_confirmations
+             (departure_id,seat_number,request_key,actor_user_id,statement_version,statement_text)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [departure.id, seatNumber, requestKey, request.user.id,
+            OFFLINE_RELEASE_STATEMENT_VERSION, OFFLINE_RELEASE_STATEMENT],
+        );
+        await client.query(
+          `INSERT INTO departure_offline_seat_state_events
+             (departure_id,seat_number,actor_user_id,previous_state,next_state,event_kind,transfer_request_key)
+           VALUES ($1,$2,$3,$4,'released','quota_transfer',$5)`,
+          [departure.id, seatNumber, request.user.id, previousOfflineState, requestKey],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO departure_offline_seat_state_events
+             (departure_id,seat_number,actor_user_id,previous_state,next_state,event_kind,transfer_request_key)
+           VALUES ($1,$2,$3,$4,'open','quota_return',$5)`,
+          [departure.id, seatNumber, request.user.id, previousOfflineState, requestKey],
+        );
+      }
       await client.query('COMMIT');
       return {
         departureId: departure.id,
@@ -756,6 +910,7 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
         offlineQuotaSeats,
         manualSupply: platformQuotaSeats === 0,
         instantConfirmationAvailable: platformQuotaSeats > 0,
+        releaseConfirmed,
         replayed: false,
       };
     } catch (error) {

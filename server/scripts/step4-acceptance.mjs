@@ -248,10 +248,16 @@ async function main() {
   check(offlineSeatFive.sale_channel, 'offline', 'the fifth template seat belongs to the offline quota');
   check(offlineSeatFive.inventory_count, 0, 'offline seats do not receive platform inventory rows');
 
+  const offlineSeats = await expect('GET', `/captain/departures/${quotaDeparture.id}/offline-seats`, captain.token);
+  check(offlineSeats.seats.slice(0, 6).map((seat) => seat.state), Array(6).fill('open'),
+    'offline seats start open for manual captain status registration');
+  check(offlineSeats.factBoundary.includes('不能技术性核验'), true,
+    'offline seat UI states the platform cannot verify external sales');
+  await expect('GET', `/captain/departures/${quotaDeparture.id}/offline-seats`, angler.token, undefined, 403);
+  await expect('GET', `/captain/departures/${quotaDeparture.id}/offline-seats`, otherCaptain.token, undefined, 404);
+
   const seatsBeforeTransfer = await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token);
   check(seatsBeforeTransfer.seats.length, 4, 'seat API exposes only the four platform quota seats');
-  await expect('POST', '/departures/' + quotaDeparture.id + '/seat-holds', angler.token,
-    { seatIds: ['00000000-0000-4000-8000-000000000011'] }, 404);
   const lockedHold = await expect('POST', '/departures/' + quotaDeparture.id + '/seat-holds', angler.token,
     { seatIds: [seatsBeforeTransfer.seats[0].id] }, 201);
   await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
@@ -259,17 +265,53 @@ async function main() {
   await pool.query("UPDATE seat_holds SET expires_at=now()-interval '1 second' WHERE id=$1", [lockedHold.holdId]);
   await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token);
 
+  await expect('POST', `/captain/departures/${quotaDeparture.id}/offline-seat-status`, captain.token,
+    { seatNumber: 6, state: 'locked' });
+  const lockedOffline = await request('POST', `/captain/departures/${quotaDeparture.id}/quota-transfers`, captain.token,
+    { seatNumber: 6, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-locked-offline', releaseConfirmed: true });
+  check(lockedOffline.status, 409, 'a locked offline seat cannot be transferred');
+  check(lockedOffline.body.code, 'offline_seat_locked', 'locked offline seat returns a stable decline code');
+  await expect('POST', `/captain/departures/${quotaDeparture.id}/offline-seat-status`, captain.token,
+    { seatNumber: 6, state: 'open' });
+  await expect('POST', `/captain/departures/${quotaDeparture.id}/offline-seat-status`, captain.token,
+    { seatNumber: 7, state: 'sold' });
+  const soldOffline = await request('POST', `/captain/departures/${quotaDeparture.id}/quota-transfers`, captain.token,
+    { seatNumber: 7, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-sold-offline', releaseConfirmed: true });
+  check(soldOffline.body.code, 'offline_seat_sold', 'sold offline seat returns a stable decline code');
+  const unconfirmedOffline = await request('POST', `/captain/departures/${quotaDeparture.id}/quota-transfers`, captain.token,
+    { seatNumber: 8, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-no-release' });
+  check(unconfirmedOffline.body.code, 'offline_release_confirmation_required',
+    'open offline seat without release confirmation cannot enter platform inventory');
+
   const openedOffline = await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
-    { seatNumber: 5, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-open-seat-5' });
+    { seatNumber: 5, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-open-seat-5', releaseConfirmed: true });
   check(openedOffline.platformQuotaSeats, 5, 'transferring one offline seat expands platform quota');
   check(openedOffline.offlineQuotaSeats, 5, 'transferring one offline seat reduces offline quota');
+  const releaseEvidence = await scalar(
+    `SELECT c.actor_user_id::text AS actor_id,c.request_key,c.statement_version,c.statement_text,
+            q.offline_state,a.next_state
+     FROM departure_offline_release_confirmations c
+     JOIN departure_seat_quotas q USING (departure_id,seat_number)
+     JOIN departure_offline_seat_state_events a ON a.departure_id=c.departure_id
+       AND a.seat_number=c.seat_number AND a.transfer_request_key=c.request_key
+     WHERE c.departure_id=$1 AND c.request_key='quota-open-seat-5'`,
+    [quotaDeparture.id],
+  );
+  check(releaseEvidence.actor_id, captain.id, 'release evidence records the authenticated captain');
+  check(releaseEvidence.statement_version, 'offline-release-v1', 'release evidence stores the statement version');
+  check(releaseEvidence.statement_text, '该席位线下未售、未锁，且已停止线下销售', 'release evidence stores the exact attestation');
+  check(releaseEvidence.offline_state, 'released', 'released seat state and transfer persist together');
+  check(releaseEvidence.next_state, 'released', 'state history links release to the quota transfer');
   const replayedOpen = await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
-    { seatNumber: 5, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-open-seat-5' });
+    { seatNumber: 5, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-open-seat-5', releaseConfirmed: true });
   check(replayedOpen.replayed, true, 'repeating a transfer request is idempotent');
   check((await scalar('SELECT count(*)::integer AS count FROM seat_inventory WHERE departure_id=$1 AND seat_number=5',
     [quotaDeparture.id])).count, 1, 'an idempotent transfer does not create duplicate inventory');
-  await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
-    { seatNumber: 6, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-open-seat-5' }, 409);
+  await expect('POST', '/departures/' + quotaDeparture.id + '/seat-holds', angler.token,
+    { seatIds: [(await scalar('SELECT id FROM seat_inventory WHERE departure_id=$1 AND seat_number=5', [quotaDeparture.id])).id] }, 201);
+  const holdFive = await scalar('SELECT hold_id FROM seat_inventory WHERE departure_id=$1 AND seat_number=5', [quotaDeparture.id]);
+  await pool.query("UPDATE seat_holds SET expires_at=now()-interval '1 second' WHERE id=$1", [holdFive.hold_id]);
+  await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token);
   const returnedPlatformSeat = await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
     { seatNumber: 5, sourceChannel: 'platform', targetChannel: 'offline', requestKey: 'quota-return-seat-5' });
   check(returnedPlatformSeat.platformQuotaSeats, 4, 'a free platform seat can return to the offline quota');
@@ -278,15 +320,75 @@ async function main() {
     'a transferred offline seat disappears from online seat selection');
   check((await scalar("SELECT status || ':' || sale_channel AS state FROM seat_inventory WHERE departure_id=$1 AND seat_number=5",
     [quotaDeparture.id])).state, 'blocked:offline', 'transferred inventory is frozen before it leaves the platform channel');
+  const realOfflineInventory = await scalar(
+    'SELECT id FROM seat_inventory WHERE departure_id=$1 AND seat_number=5', [quotaDeparture.id],
+  );
+  await expect('POST', '/departures/' + quotaDeparture.id + '/seat-holds', angler.token,
+    { seatIds: [realOfflineInventory.id] }, 404);
+  check((await scalar('SELECT offline_state FROM departure_seat_quotas WHERE departure_id=$1 AND seat_number=5',
+    [quotaDeparture.id])).offline_state, 'open', 'a returned offline seat can be listed again as open');
+
+  const platformSeatTwo = await scalar(
+    'SELECT id,seat_number,price_fen FROM seat_inventory WHERE departure_id=$1 AND seat_number=2',
+    [quotaDeparture.id],
+  );
+  await makePaidOrder(angler.id, quotaDeparture.id, platformSeatTwo);
+  const soldPlatform = await request('POST', `/captain/departures/${quotaDeparture.id}/quota-transfers`, captain.token,
+    { seatNumber: 2, sourceChannel: 'platform', targetChannel: 'offline', requestKey: 'quota-sold-platform' });
+  check(soldPlatform.status, 409, 'a sold platform seat cannot be moved to offline quota');
+
+  const stateTransferRace = await Promise.all([
+    request('POST', `/captain/departures/${quotaDeparture.id}/offline-seat-status`, captain.token,
+      { seatNumber: 10, state: 'locked' }),
+    request('POST', `/captain/departures/${quotaDeparture.id}/quota-transfers`, captain.token,
+      { seatNumber: 10, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-state-race', releaseConfirmed: true }),
+  ]);
+  check(stateTransferRace.map((result) => result.status).sort(), [200, 409],
+    'offline state registration and quota transfer serialize on the departure row');
+  const seatTen = await scalar('SELECT sale_channel,offline_state FROM departure_seat_quotas WHERE departure_id=$1 AND seat_number=10',
+    [quotaDeparture.id]);
+  check(seatTen.offline_state, seatTen.sale_channel === 'offline' ? 'locked' : 'released',
+    'a state/transfer race never opens a locked offline seat');
 
   const competingTransfers = await Promise.all([
     request('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
-      { seatNumber: 6, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-race-a' }),
+      { seatNumber: 9, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-race-a', releaseConfirmed: true }),
     request('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
-      { seatNumber: 6, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-race-b' }),
+      { seatNumber: 9, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-race-b', releaseConfirmed: true }),
   ]);
   check(competingTransfers.map((result) => result.status).sort(), [200, 409],
     'concurrent transfers of one seat can only succeed once');
+  const winnerIndex = competingTransfers.findIndex((result) => result.status === 200);
+  const winningKey = winnerIndex === 0 ? 'quota-race-a' : 'quota-race-b';
+
+  const seatFourRace = await Promise.all([
+    request('POST', '/departures/' + quotaDeparture.id + '/seat-holds', angler.token,
+      { seatIds: [seatsBeforeTransfer.seats[3].id] }),
+    request('POST', `/captain/departures/${quotaDeparture.id}/quota-transfers`, captain.token,
+      { seatNumber: 4, sourceChannel: 'platform', targetChannel: 'offline', requestKey: 'quota-lock-transfer-race' }),
+  ]);
+  check(seatFourRace.filter((result) => result.status === 200 || result.status === 201).length, 1,
+    'seat lock and platform quota transfer race has exactly one winner');
+  check(seatFourRace.every((result) => [200, 201, 404, 409].includes(result.status)), true,
+    'seat lock and quota transfer race returns only expected success or decline statuses');
+  const seatFour = await scalar(
+    'SELECT q.sale_channel,s.status,s.hold_id FROM departure_seat_quotas q LEFT JOIN seat_inventory s USING(departure_id,seat_number) WHERE q.departure_id=$1 AND q.seat_number=4',
+    [quotaDeparture.id],
+  );
+  check(seatFour.status, seatFour.sale_channel === 'offline' ? 'blocked' : 'held',
+    'seat lock/transfer race preserves either a held platform seat or blocked offline seat');
+  if (seatFour.hold_id) {
+    await pool.query("UPDATE seat_holds SET expires_at=now()-interval '1 second' WHERE id=$1", [seatFour.hold_id]);
+    await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token);
+  }
+
+  await pool.query("UPDATE departures SET booking_deadline=now()-interval '1 second' WHERE id=$1", [quotaDeparture.id]);
+  const postDeadlineReplay = await expect('POST', `/captain/departures/${quotaDeparture.id}/quota-transfers`, captain.token,
+    { seatNumber: 9, sourceChannel: 'offline', targetChannel: 'platform', requestKey: winningKey, releaseConfirmed: true });
+  check(postDeadlineReplay.replayed, true, 'idempotent quota replay is returned after the booking deadline');
+  check((await scalar('SELECT count(*)::integer AS count FROM departure_offline_release_confirmations WHERE departure_id=$1',
+    [quotaDeparture.id])).count, 2 + (stateTransferRace[1].status === 200 ? 1 : 0),
+    'only successful incoming transfers produce release confirmations');
 
   const legacyPublish = await request('POST', '/captain/departures', captain.token, {
     boatId: quotaBoatId,

@@ -2077,7 +2077,7 @@ class _SeatTile extends StatelessWidget {
           '钓位 ${seat['number']}，$statusLabel${premium ? '，船尾加价位${seat['priceFen'] == null ? '' : '，每位${_money(_number(seat['priceFen']))}'}' : ''}',
       child: Material(
         color: Colors.transparent,
-        elevation: selected ? 9 : 6,
+        elevation: selected ? 6 : 3,
         shadowColor: const Color(0xD9001518),
         borderRadius: BorderRadius.circular(10),
         child: Stack(
@@ -2087,93 +2087,97 @@ class _SeatTile extends StatelessWidget {
               child: InkWell(
                 onTap: available ? onTap : null,
                 borderRadius: BorderRadius.circular(10),
-                child: Ink(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: selected
-                          ? const [
-                              Color(0xFFE7F8AD),
-                              Color(0xFFB9E54D),
-                              Color(0xFF8DB52F),
-                            ]
-                          : [
-                              Color.lerp(color, Colors.white, .20)!,
-                              color,
-                              Color.lerp(color, Colors.black, .24)!,
-                            ],
-                    ),
-                    border: Border.all(
-                      color: outline,
-                      width: selected ? 1.8 : 1.15,
-                    ),
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(
-                          0xFFE6EEE5,
-                        ).withValues(alpha: selected ? .22 : .12),
-                        offset: const Offset(-1, -1),
-                        blurRadius: 2,
+                child: Center(
+                  child: Ink(
+                    width: 42,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: selected
+                            ? const [
+                                Color(0xFFE7F8AD),
+                                Color(0xFFB9E54D),
+                                Color(0xFF8DB52F),
+                              ]
+                            : [
+                                Color.lerp(color, Colors.white, .20)!,
+                                color,
+                                Color.lerp(color, Colors.black, .24)!,
+                              ],
                       ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        '${seat['number']}',
-                        style: TextStyle(
-                          fontSize: 18,
-                          height: 1,
-                          fontWeight: FontWeight.w900,
-                          color: selected
-                              ? const Color(0xFF172316)
-                              : status == 'available' && !premium
-                              ? const Color(0xFF182322)
-                              : FishingTokens.ink,
+                      border: Border.all(
+                        color: outline,
+                        width: selected ? 1.8 : 1.15,
+                      ),
+                      borderRadius: BorderRadius.circular(10),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(
+                            0xFFE6EEE5,
+                          ).withValues(alpha: selected ? .22 : .12),
+                          offset: const Offset(-1, -1),
+                          blurRadius: 2,
                         ),
-                      ),
-                      const SizedBox(height: 3),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _seatStatusIcon(status, selected),
-                            size: 10,
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          '${seat['number']}',
+                          style: TextStyle(
+                            fontSize: 16,
+                            height: 1,
+                            fontWeight: FontWeight.w900,
                             color: selected
-                                ? const Color(0xFF26331F)
+                                ? const Color(0xFF172316)
                                 : status == 'available' && !premium
-                                ? const Color(0xFF354340)
-                                : const Color(0xFFDCE5E1),
+                                ? const Color(0xFF182322)
+                                : FishingTokens.ink,
                           ),
-                          const SizedBox(width: 2),
-                          Text(
-                            statusLabel,
-                            style: TextStyle(
-                              fontSize: 8,
-                              height: 1,
-                              fontWeight: FontWeight.w800,
+                        ),
+                        const SizedBox(height: 2),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _seatStatusIcon(status, selected),
+                              size: 9,
                               color: selected
                                   ? const Color(0xFF26331F)
                                   : status == 'available' && !premium
                                   ? const Color(0xFF354340)
-                                  : const Color(0xFFE0EAE1),
+                                  : const Color(0xFFDCE5E1),
                             ),
-                          ),
-                        ],
-                      ),
-                    ],
+                            const SizedBox(width: 2),
+                            Text(
+                              statusLabel,
+                              style: TextStyle(
+                                fontSize: 7,
+                                height: 1,
+                                fontWeight: FontWeight.w800,
+                                color: selected
+                                    ? const Color(0xFF26331F)
+                                    : status == 'available' && !premium
+                                    ? const Color(0xFF354340)
+                                    : const Color(0xFFE0EAE1),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
             if (premium)
               Positioned(
-                right: -4,
-                top: -5,
+                right: 0,
+                top: 0,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(

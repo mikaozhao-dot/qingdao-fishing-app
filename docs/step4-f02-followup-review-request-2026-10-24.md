@@ -1,6 +1,6 @@
 # 第 4 步 F02 过期成行边界补充复核请求
 
-状态：Codex 已提交首轮修正、按 Dot 后续静态意见补充的时钟复核与本地沙盒证据，等待 Muse/dot 再次独立复核；没有记录为已验收。范围仅限 dot 在 `docs/dot-formation-checkpoint-review-2026-10-24.md` 与 `docs/dot-quota-formation-fix-verification-2026-10-24.md` 指出的 F02，不代表第 4 步全量验收。
+状态：Dot 在 `docs/dot-f02-targeted-fix-review-2026-10-24.md` 确认固定 `asOf` 静态缺口已关闭，代码与针对性用例复核通过；Muse 的区间评审 `docs/ui-design-review-83d28771.md` 对已交付配额/B1/F02 切片有条件通过，但未独立跑数据库。146 项目前仍是 Codex 本地隔离数据库证据，没有记为独立验收或第 4 步全量验收。新增 GitHub Actions 隔离数据库工作流，首次运行结果待记。范围仅限配额来源释放和 F02，不改变 v2 全量验收边界。
 
 ## 修正范围
 
@@ -18,12 +18,10 @@
 - `npm run check`、`dart analyze .`、Dart 格式检查和 `git diff --check` 均通过。
 - 双端 GitHub CI [run 40089573657](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40089573657) 已完成：Flutter analyze、Android debug APK 与 iOS simulator build 全部成功。
 - 该 CI 对应首轮修正 `884d1e8`，覆盖其 Flutter 改动。后续 `0b0bd70` 只改服务端；当前双端构建工作流仅监听 `app/**`，所以没有新的双端构建。本请求的服务端补丁以本地语法检查和隔离数据库回归留证，并等待独立复跑。
+- 新增隔离数据库工作流 `.github/workflows/step4-database-acceptance.yml`；[run 40094860581](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40094860581) 正在 GitHub Actions 新建的 PostgreSQL/Redis 服务中应用迁移并运行完整验收脚本。
 
-## 请独立复核
+## 尚待隔离数据库工作流结果与独立验收裁定
 
-1. 在新的隔离空库应用迁移并复跑验收脚本，核对过期任务首次运行与重跑都不会产生新成行确认。
-2. 复跑“持有航次行锁跨过出航时刻”用例，确认任务在锁释放后使用实际时钟，而不是批次开始时固定的 `asOf`。
-3. 核对船长过期确认的 409 边界及无决定记录，并检查新的状态约束和双端显示。
-4. 判断该修正是否满足 F02；如果需要调整，请列明可复现用例和允许修改范围。
-
+1. 在 GitHub Actions 新建的隔离 PostgreSQL/Redis 服务中应用迁移 001–011，运行 `server/scripts/step4-acceptance.mjs`，核对 Q01–Q03 与 F02 的拒绝、幂等、并发及锁跨出航时刻用例。
+2. 将工作流结果和断言数量写回仓库；不得将 Codex 本地运行记录改称独立复跑。通过后等待 Muse 对独立运行证据作验收裁定。
 F01 候补补位与普通售票截止之间的授权口径仍待 Muse 澄清，本次没有开放截止后的普通售票，也没有实现候补例外。配额来源释放 Q01–Q03 仍等待其各自的独立数据库复核，本请求不关闭该验收项。

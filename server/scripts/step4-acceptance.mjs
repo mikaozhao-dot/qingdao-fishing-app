@@ -721,8 +721,11 @@ async function main() {
     'voyage-level block prevents every passenger from boarding');
   check(missingTripCoverage.manualBypassAllowed, false,
     'captain cannot manually bypass the insurance gate');
-  await expect('POST', `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
+  const effectiveTripCoverage = await expect('POST',
+    `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
     { status: 'effective' });
+  check(effectiveTripCoverage.requiredCoverage.status, 'effective',
+    'sandbox vessel coverage returns the saved successful status');
   const readyTripCoverage = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);
   check(readyTripCoverage.canDepartureProceed, true, 'verified voyage-level coverage permits the remaining trip gate');
   check(readyTripCoverage.passengers.map((passenger) => passenger.canBoard), [true, true],
@@ -748,6 +751,28 @@ async function main() {
     'missing vessel-level required coverage blocks the whole departure');
   check(missingRequiredCoverage.passengers.every((passenger) => !passenger.canBoard), true,
     'whole-departure insurance block supersedes individual passenger readiness');
+
+  const shiftedWindowDeparture = await makeConfirmedDeparture(captain.id, boatId);
+  const shiftedWindowOrder = await makePaidOrder(angler.id, shiftedWindowDeparture.id, shiftedWindowDeparture.seat);
+  const issuedPolicy = await expect('POST', `/orders/${shiftedWindowOrder}/insurance/sandbox`, angler.token,
+    { status: 'issued' });
+  check(issuedPolicy.insurance.status, 'issued',
+    'order-level sandbox verification saves and returns the issued policy');
+  await expect('POST',
+    `/captain/departures/${shiftedWindowDeparture.id}/required-insurance/sandbox`, captain.token,
+    { status: 'effective' });
+  await pool.query(
+    "UPDATE departures SET departure_at=departure_at+interval '1 hour',return_at=return_at+interval '1 hour' WHERE id=$1",
+    [shiftedWindowDeparture.id],
+  );
+  const shiftedWindowGate = await expect('GET',
+    `/captain/departures/${shiftedWindowDeparture.id}/insurance-gate`, captain.token);
+  check((await scalar('SELECT status FROM insurance_policies WHERE order_id=$1', [shiftedWindowOrder])).status,
+    'issued', 'the legacy order-level policy remains issued after the sailing window changes');
+  check(shiftedWindowGate.passengers[0].status, 'not_insured',
+    'an old issued policy does not create effective coverage for a changed sailing window');
+  check(shiftedWindowGate.passengers[0].canBoard, false,
+    'a passenger without coverage for the current sailing window cannot board');
 
   await expect('POST', '/captain/departures/' + departure.id + '/checkin', captain.token, { event: 'departed' });
   check((await scalar('SELECT status FROM departures WHERE id=$1', [departure.id])).status, 'in_progress',

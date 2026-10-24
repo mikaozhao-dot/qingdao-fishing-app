@@ -914,7 +914,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     await pool.query(
       `UPDATE passenger_insurance_coverages SET status=$2,failure_reason=NULL,
          provider_code='sandbox',provider_policy_reference=$3,
-         verified_at=CASE WHEN $2='effective' THEN now() ELSE NULL END,updated_at=now()
+         verified_at=CASE WHEN $2::varchar(24)='effective' THEN now() ELSE NULL END,updated_at=now()
        WHERE order_id=$1`,
       [request.params.id, issued ? 'effective' : 'not_insured',
         issued ? result.rows[0].provider_policy_reference : null],
@@ -943,9 +943,9 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       const result = await pool.query(
         `UPDATE passenger_insurance_coverages c
          SET status=$3,failure_reason=$4,provider_code='sandbox',
-             provider_policy_reference=CASE WHEN $3='effective' THEN COALESCE(c.provider_policy_reference,
+             provider_policy_reference=CASE WHEN $3::varchar(24)='effective' THEN COALESCE(c.provider_policy_reference,
                'sandbox_passenger_' || c.passenger_id::text) ELSE c.provider_policy_reference END,
-             verified_at=CASE WHEN $3='effective' THEN now() ELSE NULL END,updated_at=now()
+             verified_at=CASE WHEN $3::varchar(24)='effective' THEN now() ELSE NULL END,updated_at=now()
          FROM booking_orders o
          WHERE c.order_id=o.id AND o.id=$1 AND o.buyer_user_id=$2
            AND o.status='paid' AND c.passenger_id=$5

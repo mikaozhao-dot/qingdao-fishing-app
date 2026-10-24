@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'fishing_tokens.dart';
 import 'step1_flow.dart';
+import 'step2_flow.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,31 +16,6 @@ void main() {
     ),
   );
   runApp(const QingdaoFishingApp());
-}
-
-abstract final class FishingTokens {
-  // UI v2 冻结稿 A「深海霓虹」；与 docs/ui-v2-design-system.md 同源。
-  static const background = Color(0xFF081410);
-  static const deepSurface = Color(0xFF0B1913);
-  static const surface = Color(0xFF13241B);
-  static const surfaceTint = Color(0xFF192B21);
-  static const line = Color(0xFF20352A);
-  static const ink = Color(0xFFF0F5EE);
-  static const secondary = Color(0xFF9AAC9E);
-  static const muted = Color(0xFF728679);
-  static const brand = Color(0xFFCDF463);
-  static const success = Color(0xFFB6E77B);
-
-  static const space4 = 4.0;
-  static const space8 = 8.0;
-  static const space12 = 12.0;
-  static const space16 = 16.0;
-  static const space24 = 24.0;
-  static const space32 = 32.0;
-  static const radius8 = 8.0;
-  static const radius12 = 12.0;
-  static const radius22 = 22.0;
-  static const radiusPill = 999.0;
 }
 
 class QingdaoFishingApp extends StatelessWidget {
@@ -205,13 +182,24 @@ class _AppShellState extends State<AppShell> {
       ),
       body: SafeArea(
         top: false,
-        child: Step1Workspace(
-          roleLabel: _roleLabel,
-          tabLabel: tab.label,
-          token: _sessionToken,
-          onTokenChanged: (token) => setState(() => _sessionToken = token),
-          onOpenProfile: () => setState(() => _selectedIndex = 3),
-        ),
+        child: tab.label == '我的' || tab.label == '订单'
+            ? Step1Workspace(
+                roleLabel: _roleLabel,
+                tabLabel: tab.label,
+                token: _sessionToken,
+                onTokenChanged: (token) =>
+                    setState(() => _sessionToken = token),
+                onOpenProfile: () => setState(() => _selectedIndex = 3),
+              )
+            : Step2Workspace(
+                roleLabel: _roleLabel,
+                tabLabel: tab.label,
+                token: _sessionToken,
+                onTokenChanged: (token) =>
+                    setState(() => _sessionToken = token),
+                onOpenProfile: () => setState(() => _selectedIndex = 3),
+                onSelectTab: (index) => setState(() => _selectedIndex = index),
+              ),
       ),
       bottomNavigationBar: SafeArea(
         minimum: const EdgeInsets.fromLTRB(16, 0, 16, 8),

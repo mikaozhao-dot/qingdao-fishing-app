@@ -70,14 +70,18 @@
 
 快速查看原生图（704×1024 JPEG，均小于 1 MB）：
 
-- `design/step3-review-photos/15-v04-quota-4-plus-8-before-review.jpg`：4+8，调额前，线下位不可选。
-- `design/step3-review-photos/16-v04-quota-4-plus-8-after-seat-5-review.jpg`：4+8，开放 5 号后，旧航次 5 号保持原基础价格。
+- `design/step3-review-photos/15-v04-quota-4-plus-8-before-review.jpg`：独立模拟 API 情景 A，4+8、5–12 线下。
+- `design/step3-review-photos/16-v04-quota-4-plus-8-after-seat-5-review.jpg`：独立模拟 API 情景 B，旧 premium 口径下 5 号已开放并以基础价选中；不是与 15 同一航次的调额前后连拍。
 - `design/step3-review-photos/17-v04-quota-8-plus-4-current-review.jpg`：新航次 8+4，完整 12 位布局，只有 8 个线上库存。
 
-对应无损原 PNG 为同名前缀文件（1398×2034；约 1.4 MB）。三份原生 Simulator 截图与本机验证记录见 follow-up 文档。本请求不是 dot/Muse 结论，状态应保持“待独立复核”。
+对应无损原 PNG 为同名前缀文件（1398×2034；约 1.4 MB）。三份原生 Simulator 截图与本机验证记录见 follow-up 文档。本请求不是 dot/Muse 结论，状态应保持“待独立复核”。15/16 为不同模拟 API 情景；实际调额与价格兼容另由服务端接受测试核验，测试的迁移回填步骤及其历史演练限制已在 follow-up 明示。
 
 main 的创始人裁定回注 `docs/muse-draft-withdrawal-and-confirmation-2026-10-24.md`（`92bb66f`）已确认 Luna 设计，并要求船尾三台发动机图形。本轮已按该较新指示更新实现和截图。请 Muse / dot 在技术独立复核之外，单独核对本次截图与该视觉基准是否一致；不要把技术测试结果等同于创始人最终视觉验收。
 
 ### 座位牌留白增量（2026-10-25）
 
 创始人指出 bff9942 交付图中的座位数字/牌面间距太近。已将视觉牌面调至 42×40 logical px，同时保留 50×48 logical px 点按区域；更新后的 4+8、开放5号及8+4图仍沿用上列 15–17 文件名，实际 PNG/JPEG 已重拍。请在当前画面检查牌面间空白是否合适、编号和状态是否仍易读。Codex 本机截图与测试不表示创始人已确认，状态继续待评审。
+
+### 技术复核状态更新（2026-10-25）
+
+Muse `docs/ui-design-review-a1bd7e5f.md`（main `0d18393`）对 R-V04-1/2/3 有条件通过；dot 在 `docs/dot-page-design-review-2026-10-24.md`（main `73ac731`）记录三项技术阻断已关闭。dot 要求的 15/16 图注与迁移测试边界已在 `docs/v04-targeted-repair-followup-2026-10-25.md` 更正。本节之后的牌面缩小及新截图不包含在 `a1bd7e5` 这两份复核结论内；当前请创始人确认新视觉，必要时再请 Muse / dot 复看增量。

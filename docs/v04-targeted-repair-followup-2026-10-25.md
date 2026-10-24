@@ -10,7 +10,7 @@
 
 - `server/migrations/014_departure_seat_layout_snapshot.sql` 给每个航次保存不可变的 `seat_layout_snapshot`。新航次在发布时从当时的船型模板写入完整布局；班次中的线下席位后来调入平台，依据这个航次快照生成 inventory，不读取已变化的全局模板。
 - 对 013 四位船尾加价模板更新前创建的航次，迁移结合 `013` 的实际应用时间回填。原有 inventory 行字段作为事实保留；原本在线下、没有 inventory 行的 5/8 仍按旧 `premium=false` 保存。新航次使用新的 5–8 同额加价模板。
-- 服务端接受脚本从空库安装迁移，并验证一个 013 前已有订单的 4+8 航次调入 5/8 后仍是基础价格，既有库存价格不变；新建 8+4 航次时 5–8 仍按航次加价计价。
+- 服务端接受脚本验证 013 前已有订单的 4+8 航次调入 5/8 后仍是基础价格，既有库存价格不变；新建 8+4 航次时 5–8 仍按航次加价计价。测试通过清空库并应用 001–014 后，创建合成班次/订单，再回拨班次创建时间至 013 应用前、清空快照并重跑 014 来覆盖回填分支；这不是从 001–012 插入旧数据后依次运行 013、014 的完整历史升级演练。
 
 ### R-V04-2：不因线上库存只有 8 席就退化为两列列表
 
@@ -29,8 +29,8 @@
 - 数据库/API：`server/migrations/014_departure_seat_layout_snapshot.sql`、`server/src/step2-routes.js`、`server/src/step3-routes.js`、`server/scripts/step4-acceptance.mjs`。
 - App：`app/lib/step3_flow.dart`、`app/lib/api_client.dart`；屏幕/库存映射测试 `app/test/v04_seat_layout_test.dart`；iOS 原生截图与布局断言 `app/integration_test/v04_seat_map_screenshots_test.dart`，采集驱动 `app/test_driver/integration_test.dart`。
 - CI 增加 Flutter 测试步骤：`.github/workflows/step0-build.yml`。
-- 4+8 调额前：[快速预览](../design/step3-review-photos/15-v04-quota-4-plus-8-before-review.jpg)；[原图 PNG](../design/step3-review-photos/15-v04-quota-4-plus-8-before.png)。
-- 4+8 开放 5 号后：[快速预览](../design/step3-review-photos/16-v04-quota-4-plus-8-after-seat-5-review.jpg)；[原图 PNG](../design/step3-review-photos/16-v04-quota-4-plus-8-after-seat-5.png)。
+- 模拟 API 情景 A：4+8、5–12 标为线下：[快速预览](../design/step3-review-photos/15-v04-quota-4-plus-8-before-review.jpg)；[原图 PNG](../design/step3-review-photos/15-v04-quota-4-plus-8-before.png)。
+- 模拟 API 情景 B：独立的 4+8 旧航次口径、5 号已开放并以基础价选中：[快速预览](../design/step3-review-photos/16-v04-quota-4-plus-8-after-seat-5-review.jpg)；[原图 PNG](../design/step3-review-photos/16-v04-quota-4-plus-8-after-seat-5.png)。这不是情景 A 的同一航次调额后截图。
 - 新 8+4 航次：[快速预览](../design/step3-review-photos/17-v04-quota-8-plus-4-current-review.jpg)；[原图 PNG](../design/step3-review-photos/17-v04-quota-8-plus-4-current.png)。
 
 三张 PNG 均由 Flutter integration binding 从 iOS Simulator 实际 App 页面采集，分辨率 1398×2034；JPEG 是对应缩小审阅图（704×1024），文件均小于 1 MB。测试班次、账号、库存 UUID 与金额均为本地合成数据，不是真实订单或乘客资料。
@@ -56,4 +56,10 @@ main 新增的 `docs/muse-draft-withdrawal-and-confirmation-2026-10-24.md`（提
 
 创始人针对 bff9942 交付图反馈数字/牌面距离太近、画面局促，要求缩小牌面留出空间。本轮将每个牌面从 50×48 缩至 42×40 logical px，字号从 18 调至 16；外层点按区域保留 50×48 logical px，并继续验证相邻点按区域没有重叠，因此视觉留白增加而触控面积不缩小。四至八号星标移至对应座位牌内侧上角。
 
-按更新后的实现重拍并覆盖 15–17 号当前评审图片；原生 iOS Simulator PNG 保留，704×1024 JPEG 快速预览均小于 1 MB。`flutter analyze --no-pub`、`flutter test --no-pub`（2 项）和原生 `flutter drive ...v04_seat_map_screenshots_test.dart` 均通过。此为针对创始人反馈的当前候选样式，等待创始人视觉确认；不改变前述 Muse / dot 技术复核状态。
+按更新后的实现重拍并覆盖 15–17 号当前评审图片；原生 iOS Simulator PNG 保留，704×1024 JPEG 快速预览均小于 1 MB。15、16 是彼此独立的模拟 API 情景，并非同一航次的调额前后连拍；真实旧航次调额/价格路径由服务端接受测试覆盖。`flutter analyze --no-pub`、`flutter test --no-pub`（2 项）和原生 `flutter drive ...v04_seat_map_screenshots_test.dart` 均通过。此为针对创始人反馈的当前候选样式，等待创始人视觉确认；不改变前述 Muse / dot 技术复核状态。
+
+## 2026-10-25：独立技术复核与证据口径更新
+
+- Muse 的巡检意见 `docs/ui-design-review-a1bd7e5f.md`（main 提交 `0d18393`）对 R-V04-1/2/3 给出有条件通过；dot 的独立技术复核记在 `docs/dot-page-design-review-2026-10-24.md`（main 提交 `73ac731`），认定三项技术阻断关闭。两者均不等于创始人最终视觉验收，也不覆盖本节随后提出的牌面留白改动。
+- 按 dot 意见更正图注：15、16 是独立模拟 API 情景，不能叫作同一航次的调额前后图。接受脚本通过回拨时间、清空快照并重跑014模拟013前回填路径；不把它描述成真实旧库从001–012带历史数据再顺序升级013/014的完整演练。具体边界已在 R-V04-1 和本地验证结果处列出。
+- 当前 42×40 视觉牌面、50×48 点按区域以及更新后的 15–17 截图是在两份技术复核之后完成，尚未由 Muse / dot 对本次增量复看；创始人视觉确认也仍待回复。前述复核结论仅适用于其记录的 `a1bd7e5` 交付范围。

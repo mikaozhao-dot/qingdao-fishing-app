@@ -16,6 +16,8 @@ export const config = Object.freeze({
   demoSmsCode: process.env.DEMO_SMS_CODE ?? '246810',
   piiEncryptionKeyHex: process.env.PII_ENCRYPTION_KEY_HEX ?? '',
   phoneHashKeyHex: process.env.PHONE_HASH_KEY_HEX ?? '',
+  paymentSandboxSecretHex: process.env.PAYMENT_SANDBOX_SECRET_HEX ?? '',
+  insuranceSandboxSecretHex: process.env.INSURANCE_SANDBOX_SECRET_HEX ?? '',
   adminPassword: process.env.ADMIN_PASSWORD ?? '',
   uploadDir: process.env.UPLOAD_DIR ?? fileURLToPath(new URL('../.local-uploads/', import.meta.url)),
   databaseUrl: process.env.DATABASE_URL,

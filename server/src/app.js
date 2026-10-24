@@ -4,6 +4,7 @@ import { createClient } from 'redis';
 import { config } from './config.js';
 import { registerStep1Routes } from './step1-routes.js';
 import { registerStep2Routes } from './step2-routes.js';
+import { registerStep3Routes } from './step3-routes.js';
 
 const { Pool } = pg;
 
@@ -34,7 +35,7 @@ export function buildApp(runtimeConfig = config) {
     if (request.headers.origin) {
       reply.header('access-control-allow-origin', '*');
       reply.header('access-control-allow-methods', 'GET,POST,OPTIONS');
-      reply.header('access-control-allow-headers', 'content-type,authorization,x-admin-password');
+      reply.header('access-control-allow-headers', 'content-type,authorization,x-admin-password,x-sandbox-signature');
       reply.header('access-control-max-age', '600');
     }
   });
@@ -83,6 +84,7 @@ export function buildApp(runtimeConfig = config) {
 
   const { requireUser } = registerStep1Routes(app, { pool, config: runtimeConfig });
   registerStep2Routes(app, { pool, config: runtimeConfig, requireUser });
+  registerStep3Routes(app, { pool, redis, config: runtimeConfig, requireUser });
 
   app.addHook('onClose', async () => {
     await pool?.end();

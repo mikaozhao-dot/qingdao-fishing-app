@@ -169,6 +169,10 @@ async function scalar(sql, values = []) {
   return (await pool.query(sql, values)).rows[0];
 }
 
+async function wait(milliseconds) {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function shanghaiDateAfter(days) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -495,6 +499,54 @@ async function main() {
   check(overdueRerun.overdue, 0, 'rerunning the worker does not reopen the overdue exception');
   check((await scalar('SELECT count(*)::integer AS count FROM departure_formation_snapshots WHERE departure_id=$1',
     [overdueDepartureId])).count, 0, 'worker rerun still creates no overdue confirmation');
+
+  const lockCrossing = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',now()+interval '4 seconds',now()-interval '26 minutes',
+        now()+interval '7 hours','qd_coast','xiaogang',5000,5000,
+        now()-interval '2 hours','open',8,8,0,false) RETURNING id,departure_at`,
+    [boatId, captain.id],
+  )).rows[0];
+  const lockClient = await pool.connect();
+  let blockedCheckpoint;
+  let workerBlockedOnRow = false;
+  try {
+    await lockClient.query('BEGIN');
+    await lockClient.query('SELECT id FROM departures WHERE id=$1 FOR UPDATE', [lockCrossing.id]);
+    const batchAsOf = new Date();
+    blockedCheckpoint = processFormationChecks(pool, batchAsOf);
+    const waitDeadline = Date.now() + 3000;
+    while (Date.now() < waitDeadline) {
+      const waitingQuery = await scalar(
+        `SELECT count(*)::integer AS count FROM pg_stat_activity
+         WHERE wait_event_type='Lock' AND state='active'
+           AND query LIKE 'SELECT d.id,d.status,d.departure_at,%'`,
+      );
+      if (waitingQuery.count > 0) {
+        workerBlockedOnRow = true;
+        break;
+      }
+      await wait(25);
+    }
+    const remainingMs = new Date(lockCrossing.departure_at).getTime() - Date.now() + 100;
+    if (remainingMs > 0) await wait(remainingMs);
+    await lockClient.query('COMMIT');
+  } finally {
+    await lockClient.query('ROLLBACK').catch(() => {});
+    lockClient.release();
+  }
+  check(workerBlockedOnRow, true, 'formation worker waits on the departure row lock');
+  const crossedDepartureCheckpoint = await blockedCheckpoint;
+  check(crossedDepartureCheckpoint.overdue, 1,
+    'worker rechecks the real clock after its row lock passes departure time');
+  check(crossedDepartureCheckpoint.checked, 0, 'lock-delayed departure receives no formation decision');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [lockCrossing.id])).status,
+    'formation_overdue', 'lock-delayed departure is left for manual handling');
+  check((await scalar('SELECT count(*)::integer AS count FROM departure_formation_snapshots WHERE departure_id=$1',
+    [lockCrossing.id])).count, 0, 'lock-delayed departure receives no formation snapshot');
 
   const expiredCaptainDepartureId = (await pool.query(
     `INSERT INTO departures

@@ -97,6 +97,21 @@ async function loadFormationAccounts(client, departureId) {
   };
 }
 
+async function departureHasPassed(client, departureId) {
+  const result = await client.query(
+    'SELECT departure_at <= clock_timestamp() AS is_overdue FROM departures WHERE id=$1',
+    [departureId],
+  );
+  return result.rows[0]?.is_overdue === true;
+}
+
+async function markFormationOverdue(client, departureId) {
+  await client.query(
+    "UPDATE departures SET status='formation_overdue',updated_at=now() WHERE id=$1",
+    [departureId],
+  );
+}
+
 /** Capture the approved T-1 18:00 Asia/Shanghai checkpoint once per departure. */
 export async function processFormationChecks(pool, asOf = new Date(), onError = () => {}) {
   if (!pool) return { checked: 0, deferred: 0, overdue: 0 };
@@ -115,7 +130,6 @@ export async function processFormationChecks(pool, asOf = new Date(), onError = 
       const outcome = await withTransaction(pool, async (client) => {
         const departure = await client.query(
           `SELECT d.id,d.status,d.departure_at,
-                  (d.departure_at <= $2::timestamptz) AS is_overdue,
                   ${confirmationAtSql('d')} AS confirmation_at
            FROM departures d WHERE d.id=$1 AND d.status IN ('open','forming')
              AND ${confirmationAtSql('d')} <= $2
@@ -124,11 +138,8 @@ export async function processFormationChecks(pool, asOf = new Date(), onError = 
           [candidate.id, asOf],
         );
         if (!departure.rowCount) return 'already_checked';
-        if (departure.rows[0].is_overdue) {
-          await client.query(
-            "UPDATE departures SET status='formation_overdue',updated_at=now() WHERE id=$1",
-            [candidate.id],
-          );
+        if (await departureHasPassed(client, candidate.id)) {
+          await markFormationOverdue(client, candidate.id);
           return 'overdue';
         }
         const pending = await client.query(
@@ -138,6 +149,12 @@ export async function processFormationChecks(pool, asOf = new Date(), onError = 
         );
         if (pending.rows[0].has_pending_payment) return 'deferred';
         const accounts = await loadFormationAccounts(client, candidate.id);
+        // The batch's asOf only selects due checkpoints. Recheck the real clock
+        // after any row-lock wait and account reads, immediately before writing.
+        if (await departureHasPassed(client, candidate.id)) {
+          await markFormationOverdue(client, candidate.id);
+          return 'overdue';
+        }
         const result = accounts.platform.meetsThreshold ? 'automatic_confirmed' : 'shortfall';
         await client.query(
           `INSERT INTO departure_formation_snapshots

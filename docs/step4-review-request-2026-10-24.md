@@ -36,6 +36,16 @@
 - flutter analyze：当前 Flutter 3.47.8 CLI 的 analysis server 因 LSP 消息截断退出；没有把该命令记为通过。
 - iOS 模拟器截图：`design/step4-review-photos/step4-01-captain-itinerary.png`、`design/step4-review-photos/step4-02-angler-itinerary.png`，均小于 1 MB；不作为实机截图或 v2 全量截图的替代。
 
-上述数据仅为 Codex 本地沙盒与 iOS 模拟器证据；Muse 的独立实跑仍待完成。v2 验收所需的选位/补差/成行状态/保险门禁截图以及 CI、双端构建，另按 `docs/codex-dev-step4-brief-v2.md` 留证。
+上述数据仅为 Codex 本地沙盒与 iOS 模拟器证据；Muse 的独立实跑仍待完成。v2 选位、成行状态与保险门禁截图见下文追加记录；补差界面当前尚无可走查页面，CI 与双端构建仍按 `docs/codex-dev-step4-brief-v2.md` 留证。
 
 请在评审中将“已实现／已静态检查／已沙盒实测／已原生实测／已生产小额验收”分级写清，并列出缺陷和仍待裁定项。不要将非金额履约子集评为第 4 步全量通过。
+
+## v2 原生界面证据追加（2026-10-24；等待独立评审）
+
+Codex 已在 iOS 模拟器完成一条本地沙盒原生 UI 走查，并补入 v2 §7 截图：
+
+- `design/step4-review-photos/step4-03-seat-selection.png`（304,400 字节）：钓友选位页。
+- `design/step4-review-photos/step4-04-captain-formation-status.png`（305,910 字节）：船长行程的“平台已成行”状态。
+- `design/step4-review-photos/step4-05-insurance-gate.png`（345,640 字节）：航次必需保障有效；一位乘客可登船，一位因资料有误暂不能登船。
+
+三个页面均由 iPhone Duo（iOS 27.1 模拟器）上的 Flutter 原生应用产生，每张小于 1 MB。走查使用本地临时数据库和合成演示数据，不含真实乘客资料，也未连接保险、支付或退款服务。补差界面当前尚无可走查页面，因此没有补差截图；完整 D 的其余保险例、该批截图的 Muse/Dot 独立评审及第 4 步 v2 全量验收仍待完成。本追加记录不是 Muse 或 Dot 的验收结论。

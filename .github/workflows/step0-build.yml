@@ -11,6 +11,30 @@ permissions:
   contents: read
 
 jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.8'
+          channel: stable
+      - run: flutter pub get
+      - name: Analyze Flutter app
+        run: |
+          set -o pipefail
+          flutter analyze --no-pub 2>&1 | tee "$RUNNER_TEMP/flutter-analyze.log"
+      - name: Upload full analysis log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-analyze-${{ github.run_id }}
+          path: ${{ runner.temp }}/flutter-analyze.log
+          if-no-files-found: warn
+
   android:
     runs-on: ubuntu-latest
     defaults:

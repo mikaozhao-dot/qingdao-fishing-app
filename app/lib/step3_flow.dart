@@ -317,7 +317,7 @@ class _SeatSelectionPageState extends State<SeatSelectionPage> {
                         builder: (context, constraints) {
                           const legendHeight = 54.0;
                           final mapHeight = max(
-                            340.0,
+                            400.0,
                             constraints.maxHeight - legendHeight,
                           );
                           return SingleChildScrollView(
@@ -1245,6 +1245,11 @@ class _SeatPosition {
 
 List<_SeatPosition> _deriveSeatPositions(List<Map<String, dynamic>> seats) {
   final positions = <_SeatPosition>[];
+  const sectionSlots = <String, List<double>>{
+    'bow': [.15, .29],
+    'mid': [.43, .56],
+    'stern': [.71, .84],
+  };
   for (final side in ['port', 'starboard']) {
     final group = seats.where((seat) => seat['side'] == side).toList()
       ..sort((left, right) {
@@ -1253,12 +1258,18 @@ List<_SeatPosition> _deriveSeatPositions(List<Map<String, dynamic>> seats) {
         ).compareTo(_number(right['number']));
         return side == 'port' ? ascending : -ascending;
       });
-    for (var index = 0; index < group.length; index++) {
+    final sectionIndexes = <String, int>{};
+    for (final seat in group) {
+      final section = '${seat['section']}';
+      final slots = sectionSlots[section];
+      if (slots == null) continue;
+      final sectionIndex = sectionIndexes[section] ?? 0;
+      sectionIndexes[section] = sectionIndex + 1;
       positions.add(
         _SeatPosition(
-          seat: group[index],
+          seat: seat,
           x: side == 'port' ? .27 : .73,
-          y: group.length == 1 ? .48 : .12 + index * (.72 / (group.length - 1)),
+          y: slots[min(sectionIndex, slots.length - 1)],
         ),
       );
     }
@@ -1278,107 +1289,126 @@ class _FounderBoatMap extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Center(
-    child: AspectRatio(
-      aspectRatio: .65,
-      child: LayoutBuilder(
-        builder: (context, mapConstraints) {
-          final width = mapConstraints.maxWidth;
-          final height = mapConstraints.maxHeight;
-          final positions = _deriveSeatPositions(seats);
-          const markerWidth = 50.0;
-          const markerHeight = 48.0;
-          return Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Positioned.fill(child: CustomPaint(painter: _BoatHullPainter())),
-              Positioned(
-                left: width * .405,
-                top: height * .015,
-                width: width * .19,
-                height: 34,
-                child: const Column(
-                  children: [
-                    Text(
-                      '船头',
-                      style: TextStyle(
-                        color: Color(0xFFE4F1EE),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        height: 1,
-                      ),
-                    ),
-                    Icon(
-                      Icons.arrow_drop_up_rounded,
-                      color: Color(0xFFE4F1EE),
-                      size: 22,
-                    ),
-                  ],
+    child: FractionallySizedBox(
+      widthFactor: .88,
+      child: AspectRatio(
+        aspectRatio: .68,
+        child: LayoutBuilder(
+          builder: (context, mapConstraints) {
+            final width = mapConstraints.maxWidth;
+            final height = mapConstraints.maxHeight;
+            final positions = _deriveSeatPositions(seats);
+            const markerWidth = 50.0;
+            const markerHeight = 48.0;
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(
+                  child: CustomPaint(painter: _BoatHullPainter()),
                 ),
-              ),
-              Positioned(
-                left: width * .005,
-                top: height * .435,
-                width: width * .15,
-                height: 22,
-                child: const _SideLabel('左舷', left: true),
-              ),
-              Positioned(
-                right: width * .005,
-                top: height * .435,
-                width: width * .15,
-                height: 22,
-                child: const _SideLabel('右舷'),
-              ),
-              Positioned(
-                left: width * .32,
-                top: height * .335,
-                width: width * .07,
-                height: height * .275,
-                child: const _AisleSchematic(),
-              ),
-              Positioned(
-                right: width * .32,
-                top: height * .335,
-                width: width * .07,
-                height: height * .275,
-                child: const _AisleSchematic(),
-              ),
-              Positioned(
-                left: width * .39,
-                top: height * .31,
-                width: width * .22,
-                height: height * .30,
-                child: const _CabinSchematic(),
-              ),
-              Positioned(
-                left: width * .41,
-                top: height * .875,
-                width: width * .18,
-                height: 24,
-                child: const _SideLabel('船尾', showArrow: false),
-              ),
-              Positioned(
-                left: width * .39,
-                top: height * .92,
-                width: width * .22,
-                height: height * .075,
-                child: const _EngineSchematic(),
-              ),
-              for (final position in positions)
                 Positioned(
-                  left: width * position.x - markerWidth / 2,
-                  top: height * position.y - markerHeight / 2,
-                  width: markerWidth,
-                  height: markerHeight,
-                  child: _SeatTile(
-                    seat: position.seat,
-                    selected: selectedIds.contains('${position.seat['id']}'),
-                    onTap: () => onTap(position.seat),
+                  left: width * .405,
+                  top: height * .015,
+                  width: width * .19,
+                  height: 34,
+                  child: const Column(
+                    children: [
+                      Text(
+                        '船头',
+                        style: TextStyle(
+                          color: Color(0xFFE4F1EE),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          height: 1,
+                        ),
+                      ),
+                      Icon(
+                        Icons.arrow_drop_up_rounded,
+                        color: Color(0xFFE4F1EE),
+                        size: 22,
+                      ),
+                    ],
                   ),
                 ),
-            ],
-          );
-        },
+                Positioned(
+                  left: width * .35,
+                  top: height * .275,
+                  width: width * .30,
+                  height: 14,
+                  child: const _DeckZoneLabel('船头区'),
+                ),
+                Positioned(
+                  left: width * .005,
+                  top: height * .435,
+                  width: width * .15,
+                  height: 22,
+                  child: const _SideLabel('左舷', left: true),
+                ),
+                Positioned(
+                  right: width * .005,
+                  top: height * .435,
+                  width: width * .15,
+                  height: 22,
+                  child: const _SideLabel('右舷'),
+                ),
+                Positioned(
+                  left: width * .32,
+                  top: height * .335,
+                  width: width * .07,
+                  height: height * .275,
+                  child: const _AisleSchematic(),
+                ),
+                Positioned(
+                  right: width * .32,
+                  top: height * .335,
+                  width: width * .07,
+                  height: height * .275,
+                  child: const _AisleSchematic(),
+                ),
+                Positioned(
+                  left: width * .39,
+                  top: height * .31,
+                  width: width * .22,
+                  height: height * .30,
+                  child: const _CabinSchematic(),
+                ),
+                Positioned(
+                  left: width * .41,
+                  top: height * .875,
+                  width: width * .18,
+                  height: 24,
+                  child: const _SideLabel('船尾', showArrow: false),
+                ),
+                Positioned(
+                  left: width * .34,
+                  top: height * .635,
+                  width: width * .32,
+                  height: 14,
+                  child: const _DeckZoneLabel('船尾区'),
+                ),
+                Positioned(
+                  left: width * .39,
+                  top: height * .92,
+                  width: width * .22,
+                  height: height * .075,
+                  child: const _EngineSchematic(),
+                ),
+                for (final position in positions)
+                  Positioned(
+                    left: width * position.x - markerWidth / 2,
+                    top: height * position.y - markerHeight / 2,
+                    width: markerWidth,
+                    height: markerHeight,
+                    child: _SeatTile(
+                      seat: position.seat,
+                      selected: selectedIds.contains('${position.seat['id']}'),
+                      onTap: () => onTap(position.seat),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
       ),
     ),
   );
@@ -1511,14 +1541,14 @@ class _BoatHullPainter extends CustomPainter {
     final height = size.height;
     final bounds = Offset.zero & size;
     final hull = Path()
-      ..moveTo(width * .5, height * .045)
+      ..moveTo(width * .5, height * .002)
       ..cubicTo(
-        width * .67,
-        height * .052,
-        width * .81,
-        height * .105,
+        width * .61,
+        height * .012,
+        width * .79,
+        height * .085,
         width * .855,
-        height * .185,
+        height * .205,
       )
       ..lineTo(width * .86, height * .815)
       ..quadraticBezierTo(
@@ -1534,26 +1564,26 @@ class _BoatHullPainter extends CustomPainter {
         width * .14,
         height * .815,
       )
-      ..lineTo(width * .145, height * .185)
+      ..lineTo(width * .145, height * .205)
       ..cubicTo(
         width * .19,
-        height * .105,
-        width * .33,
-        height * .052,
+        height * .085,
+        width * .39,
+        height * .012,
         width * .5,
-        height * .045,
+        height * .002,
       )
       ..close();
 
     final deck = Path()
-      ..moveTo(width * .5, height * .071)
+      ..moveTo(width * .5, height * .028)
       ..cubicTo(
-        width * .66,
-        height * .078,
+        width * .62,
+        height * .043,
         width * .78,
-        height * .125,
+        height * .12,
         width * .82,
-        height * .195,
+        height * .215,
       )
       ..lineTo(width * .825, height * .81)
       ..quadraticBezierTo(
@@ -1569,14 +1599,14 @@ class _BoatHullPainter extends CustomPainter {
         width * .175,
         height * .81,
       )
-      ..lineTo(width * .18, height * .195)
+      ..lineTo(width * .18, height * .215)
       ..cubicTo(
         width * .22,
-        height * .125,
-        width * .34,
-        height * .078,
+        height * .12,
+        width * .38,
+        height * .043,
         width * .5,
-        height * .071,
+        height * .028,
       )
       ..close();
 
@@ -1640,14 +1670,14 @@ class _BoatHullPainter extends CustomPainter {
     );
 
     final leftRail = Path()
-      ..moveTo(width * .5, height * .06)
+      ..moveTo(width * .5, height * .012)
       ..cubicTo(
-        width * .30,
-        height * .075,
+        width * .31,
+        height * .042,
         width * .20,
-        height * .13,
+        height * .125,
         width * .185,
-        height * .205,
+        height * .225,
       )
       ..lineTo(width * .19, height * .805)
       ..quadraticBezierTo(
@@ -1657,14 +1687,14 @@ class _BoatHullPainter extends CustomPainter {
         height * .88,
       );
     final rightRail = Path()
-      ..moveTo(width * .5, height * .06)
+      ..moveTo(width * .5, height * .012)
       ..cubicTo(
-        width * .70,
-        height * .075,
+        width * .69,
+        height * .042,
         width * .80,
-        height * .13,
+        height * .125,
         width * .815,
-        height * .205,
+        height * .225,
       )
       ..lineTo(width * .81, height * .805)
       ..quadraticBezierTo(
@@ -1723,14 +1753,14 @@ class _BoatHullPainter extends CustomPainter {
         Offset(width * .205, height * y),
         Offset(width * .795, height * y),
         Paint()
-          ..color = const Color(0xFF263A39).withValues(alpha: .62)
-          ..strokeWidth = 2.1,
+          ..color = const Color(0xFF263A39).withValues(alpha: .72)
+          ..strokeWidth = 2.5,
       );
       canvas.drawLine(
         Offset(width * .205, height * (y + .006)),
         Offset(width * .795, height * (y + .006)),
         Paint()
-          ..color = const Color(0xFFD1D6CB).withValues(alpha: .28)
+          ..color = const Color(0xFFD1D6CB).withValues(alpha: .42)
           ..strokeWidth = .8,
       );
     }
@@ -1929,6 +1959,29 @@ class _SideLabel extends StatelessWidget {
             size: 12,
           ),
       ],
+    ),
+  );
+}
+
+class _DeckZoneLabel extends StatelessWidget {
+  const _DeckZoneLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Color(0xFFE4E9DF),
+          fontSize: 8,
+          fontWeight: FontWeight.w800,
+          letterSpacing: .5,
+          shadows: [Shadow(color: Color(0xBB102323), blurRadius: 3)],
+        ),
+      ),
     ),
   );
 }
@@ -2178,29 +2231,31 @@ class _SeatTile extends StatelessWidget {
               Positioned(
                 right: 0,
                 top: 0,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFFFFD77A), Color(0xFFD99A31)],
-                    ),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: const Color(0xFFFFE6AA)),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0xA8001113),
-                        blurRadius: 3,
-                        offset: Offset(1, 2),
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFFFD77A), Color(0xFFD99A31)],
                       ),
-                    ],
-                  ),
-                  child: const Padding(
-                    padding: EdgeInsets.all(2),
-                    child: Icon(
-                      Icons.star_rounded,
-                      color: Color(0xFF342712),
-                      size: 11,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFFFFE6AA)),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0xA8001113),
+                          blurRadius: 3,
+                          offset: Offset(1, 2),
+                        ),
+                      ],
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.all(2),
+                      child: Icon(
+                        Icons.star_rounded,
+                        color: Color(0xFF342712),
+                        size: 11,
+                      ),
                     ),
                   ),
                 ),

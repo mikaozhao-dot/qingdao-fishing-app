@@ -130,37 +130,54 @@ void main() {
 
       final offlineFive = find.byKey(const ValueKey('seat-5'));
       await tester.ensureVisible(offlineFive);
-      await tester.tap(offlineFive);
+      final offlineFiveRect = tester.getRect(offlineFive);
+      await tester.tapAt(
+        Offset(offlineFiveRect.right - 7.5, offlineFiveRect.top + 7.5),
+      );
       await tester.pump();
       expect(find.text('请选择座位'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
 
-  testWidgets(
-    '8+4 keeps the founder map and a tap holds the matching inventory id',
-    (tester) async {
-      platformSeatNumbers = [1, 2, 3, 4, 5, 6, 7, 8];
-      installMockApi();
-      await openSeatPage(tester, size: const Size(390, 844));
+  testWidgets('premium badge and transparent marker edges stay tappable', (
+    tester,
+  ) async {
+    platformSeatNumbers = [1, 2, 3, 4, 5, 6, 7, 8];
+    installMockApi();
+    await openSeatPage(tester, size: const Size(390, 844));
 
-      expect(find.textContaining('共 12 席'), findsOneWidget);
-      expect(find.textContaining('8 席线上库存'), findsOneWidget);
-      expectNoSeatOverlap(tester);
-      final seatFive = find.byKey(const ValueKey('seat-5'));
-      await tester.tap(seatFive);
-      await tester.pump();
-      expect(find.text('5号位（左舷 · 船尾）'), findsOneWidget);
-      expect(find.text('¥600.00/位'), findsOneWidget);
+    expect(find.textContaining('共 12 席'), findsOneWidget);
+    expect(find.textContaining('8 席线上库存'), findsOneWidget);
+    expectNoSeatOverlap(tester);
+    final seatFive = find.byKey(const ValueKey('seat-5'));
+    await tester.ensureVisible(seatFive);
+    final seatFiveRect = tester.getRect(seatFive);
+    await tester.tapAt(
+      Offset(seatFiveRect.right - 7.5, seatFiveRect.top + 7.5),
+    );
+    await tester.pump();
+    expect(find.text('5号位（左舷 · 船尾）'), findsOneWidget);
+    expect(find.text('¥600.00/位'), findsOneWidget);
 
-      await tester.tap(find.text('确认选择'));
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.runAsync(
-        () async => Future<void>.delayed(const Duration(milliseconds: 100)),
-      );
-      await tester.pump();
-      expect(heldSeatIds, ['inventory-5']);
-      expect(tester.takeException(), isNull);
-    },
-  );
+    final transparentEdge = Offset(
+      seatFiveRect.left + 3,
+      seatFiveRect.center.dy,
+    );
+    await tester.tapAt(transparentEdge);
+    await tester.pump();
+    expect(find.text('请选择座位'), findsOneWidget);
+    await tester.tapAt(transparentEdge);
+    await tester.pump();
+    expect(find.text('5号位（左舷 · 船尾）'), findsOneWidget);
+
+    await tester.tap(find.text('确认选择'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.runAsync(
+      () async => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump();
+    expect(heldSeatIds, ['inventory-5']);
+    expect(tester.takeException(), isNull);
+  });
 }

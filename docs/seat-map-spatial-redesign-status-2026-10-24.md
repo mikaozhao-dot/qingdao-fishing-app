@@ -28,3 +28,13 @@
 - 已更新 `app/lib/step3_flow.dart` 展示层，按 `side`、`section`、`number` 推导钓位位置，加入五态非颜色标记、中央船舱/通道示意和固定底部选择小结/锁位按钮。
 - 原生 iOS 模拟器改前/改后截图、映射表、自检、构建记录与 dot 复核请求见 `docs/step3-build-notes.md` 和 `docs/step3-review-request-2026-10-24.md`。
 - **当前状态：交付材料已齐，待 dot 独立复核；没有 Muse 验收结论。**
+
+## 2026-10-25：按创始人最新图片返工，当前交付状态
+
+创始人最新明确的图面标准见 design/step3-review-photos/11-founder-approved-seat-map-v04.png，并已追加到 codex-seat-map-v04-rework-order-2026-10-24.md。本节覆盖上一节的旧 V04 当前状态描述；历史首稿截图与评审记录保留。
+
+- app/lib/step3_flow.dart 已按最新图面重做：深青海面、银色船壳、灰木甲板、俯视驾驶舱、两侧过道、驾驶舱船尾侧后门、单台中央发动机；图例放船图下方，底栏呈现已选座位和“确认选择”。
+- 座位仍以服务端库存的 number、side、section、isPremium、priceFen 和状态渲染；选位视觉坐标只用于示意，不回写服务端。5–8 号尾段加价来自追加迁移 013_four_stern_premium_seats.sql，不会追改既有库存。
+- 最新 iOS 模拟器截图：12-ios-v04-founder-approved-default.png、13-ios-v04-founder-approved-seat-5.png；缩小版 14-v04-seat-5-review-preview.png 为 704×1024、327448 字节。完整截图为 1398×2034 原始 PNG。
+- iPhone Duo（iOS 27.1）Flutter integration walkthrough 通过：整船/五态/四个加价星标可见；选择 5 号后显示左舷船尾和合成 ¥600/位；座位、发动机及固定底部确认按钮同屏。Flutter analyzer 和 iOS Simulator build 的本次结果见 docs/step3-build-notes.md。
+- 当前：等待 Muse / dot 独立复核代码与截图。创始人已确认参考图方向，但没有把这次实现标为最终视觉验收。

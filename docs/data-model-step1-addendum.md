@@ -13,7 +13,7 @@
 - `sms_verification_codes`：手机号 HMAC 摘要、验证码 HMAC 摘要、过期时间、错误次数与消费时间。
 - `user_sessions`：会话 token 的 HMAC 摘要、用户与过期时间；数据库不保存原始 token。
 - `uploaded_objects`：随机对象键、归属用户、照片类别与 MIME 类型。
-- `seat_templates`：冻结的模板 code、版本、座位数和 JSONB 布局；登记 12 位 v1 模板，6/7 为尾角加价位。
+- `seat_templates`：冻结的模板 code、版本、座位数和 JSONB 布局；`002` 初始模板将 6/7 标为可加价位；追加迁移 `013_four_stern_premium_seats.sql` 后，新建班次采用 5/6/7/8 四个船尾位可加价的模板快照。已生成库存不追溯更新。
 - `captain_applications`：船长与船档案合并审核状态、驳回理由和时间。
 - `review_events`：审核决定、管理员标识、理由与时间；驳回必须有理由。
 

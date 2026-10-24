@@ -961,7 +961,7 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: _NumberField(
-                        label: '尾角位加价',
+                        label: '船尾位加价',
                         controller: _surcharge,
                         suffix: '元',
                         min: 0,
@@ -969,6 +969,13 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
                       ),
                     ),
                   ],
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Text(
+                    '本 12 位船型模板的 5、6、7、8 号位同额加价；金额可为 0，首单后冻结。',
+                    style: _smallNote,
+                  ),
                 ),
                 _NumberField(
                   label: '最低成行总价',
@@ -2298,7 +2305,7 @@ class _PricePanel extends StatelessWidget {
                   color: FishingTokens.brand,
                 ),
               ),
-              Text('尾角位 $premium / 位', style: _smallBody),
+              Text('船尾加价位 $premium / 位', style: _smallBody),
             ],
           ),
         ),
@@ -2337,6 +2344,12 @@ class _SeatDiagram extends StatelessWidget {
         body: manualSupply ? '本班次按人工确认供给，不提供在线选位。' : '本班次没有可展示的座位模板。',
       );
     }
+    final premiumNumbers =
+        seats
+            .where((seat) => seat['premium'] == true)
+            .map((seat) => '${seat['number']}')
+            .toList()
+          ..sort((left, right) => int.parse(left).compareTo(int.parse(right)));
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -2374,7 +2387,7 @@ class _SeatDiagram extends StatelessWidget {
                           style: const TextStyle(fontWeight: FontWeight.w800),
                         ),
                         Text(
-                          seat['premium'] == true ? '尾角' : '空位',
+                          seat['premium'] == true ? '加价位' : '空位',
                           style: TextStyle(
                             fontSize: 9,
                             color: seat['premium'] == true
@@ -2389,9 +2402,11 @@ class _SeatDiagram extends StatelessWidget {
                 .toList(),
           ),
           const SizedBox(height: 8),
-          const Text(
-            '船尾 · STERN   ·   尾角位价格可能不同',
-            style: TextStyle(color: FishingTokens.muted, fontSize: 10),
+          Text(
+            premiumNumbers.isEmpty
+                ? '船尾 · 本班次没有加价位'
+                : '船尾 · ${premiumNumbers.join(' / ')} 号位可加价',
+            style: const TextStyle(color: FishingTokens.muted, fontSize: 10),
           ),
         ],
       ),

@@ -14,7 +14,7 @@
 | 字段 | 类型 | 用途 |
 | --- | --- | --- |
 | `meeting_at` | `timestamptz`, nullable | 集合时间；数据库约束保证不晚于出航时间。 |
-| `stern_surcharge_fen` | `integer`, 默认 `0`，非负 | 尾角位每位加价，整数分。 |
+| `stern_surcharge_fen` | `integer`, 默认 `0`，非负 | 模板 premium 船尾位每位同额加价，整数分；可为 0，首单后冻结。 |
 | `remarks` | `varchar(500)`, 默认空串 | 船长出航提醒。 |
 
 新增部分索引 `departures_published_date_idx`，只覆盖 `status='open'` 的班次，服务公开活动按出航时间与码头、类型查询。
@@ -25,9 +25,9 @@
 | --- | --- | --- |
 | `seat_side` | `varchar(12)`, nullable | 座位位于左舷 `port` 或右舷 `starboard`。 |
 | `seat_section` | `varchar(16)`, nullable | 座位区域：船头 `bow`、中段 `mid`、船尾 `stern`。 |
-| `is_premium` | `boolean`, 默认 `false` | 标记模板中的尾角位。 |
+| `is_premium` | `boolean`, 默认 `false` | 发班时复制模板可加价位标记。 |
 
-发布事务将座位模板快照写入库存实例，按普通位价格与 `stern_surcharge_fen` 计算每位价格。当前已审核的 12 位模板将 6、7 号标为尾角位；实例创建时全部为 `available`。本步骤不写入任何订单，也不把库存状态改成 `held` 或 `booked`。
+发布事务将座位模板快照写入库存实例，按基础位价格与 `stern_surcharge_fen` 计算每位价格。迁移 `013_four_stern_premium_seats.sql` 前，12 位模板中的 6、7 为 `premium`；迁移后新班次的 5、6、7、8 位为 `premium`。迁移只改 `seat_templates.layout`，不更新已有 `seat_inventory` 行或订单价格；每次发班仍将当时模板与价格写入库存快照。实例创建时全部为 `available`。本步骤不写入任何订单，也不把库存状态改成 `held` 或 `booked`。
 
 ## 金额与时间
 

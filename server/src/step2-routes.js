@@ -156,7 +156,7 @@ function validateDepartureBody(body) {
     return { error: '目标鱼种必须来自平台鱼种库' };
   }
   if (pricePerSeatFen === null) return { error: '每位价格需为正整数分' };
-  if (sternSurchargeFen === null || pricePerSeatFen + sternSurchargeFen > 2_000_000_000) return { error: '尾角加价金额无效' };
+  if (sternSurchargeFen === null || pricePerSeatFen + sternSurchargeFen > 2_000_000_000) return { error: '船尾位加价金额无效' };
   if (minimumTotalFen === null) return { error: '最低成行总价需为正整数分' };
   if (remarks.length > 500) return { error: '备注最多 500 个字符' };
   const rigError = validateRig(body.rigConfig);

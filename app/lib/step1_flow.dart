@@ -1013,7 +1013,7 @@ class SeatTemplateView extends StatelessWidget {
           }),
           const SizedBox(height: 4),
           const Text(
-            '船尾 · 6 / 7 为尾角加价位',
+            '船尾 · 5 / 6 / 7 / 8 为加价位',
             style: TextStyle(color: FishingTokens.secondary, fontSize: 10),
           ),
         ],

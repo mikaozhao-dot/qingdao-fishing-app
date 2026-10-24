@@ -466,7 +466,7 @@ export function registerStep1Routes(app, { pool, config }) {
           seatCount: row.seat_count,
           seatLayout: row.layout,
           comfortLevel: row.comfort_level,
-          estimatedSpacingCm: row.comfort_spacing_cm,
+          estimatedSpacingCm: row.comfort_spacing_cm === null ? null : Number(row.comfort_spacing_cm),
           photos: row.photos,
           certificateUri: row.certificate_uri,
         },

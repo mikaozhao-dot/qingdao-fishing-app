@@ -128,6 +128,7 @@ class SeatSelectionPage extends StatefulWidget {
 
 class _SeatSelectionPageState extends State<SeatSelectionPage> {
   List<Map<String, dynamic>> _seats = [];
+  List<Map<String, dynamic>> _seatLayout = [];
   final Set<String> _selected = {};
   bool _loading = true;
   bool _submitting = false;
@@ -153,17 +154,31 @@ class _SeatSelectionPageState extends State<SeatSelectionPage> {
       );
       if (!mounted) return;
       final seats = _maps(result['seats']);
-      final missingPosition = seats.where((seat) {
+      final seatLayout = _maps(result['seatLayout']);
+      final seatCount = _number(result['seatCount']);
+      final seenNumbers = <int>{};
+      final missingPosition = seatLayout.where((seat) {
         final side = seat['side'];
         final section = seat['section'];
-        return (side != 'port' && side != 'starboard') ||
-            !_seatSections.contains('$section');
+        final number = _number(seat['number']);
+        final duplicate = !seenNumbers.add(number);
+        return number < 1 ||
+            (side != 'port' && side != 'starboard') ||
+            !_seatSections.contains('$section') ||
+            duplicate;
       }).toList();
+      final layoutError =
+          seatLayout.isEmpty ||
+              seatCount != seatLayout.length ||
+              missingPosition.isNotEmpty
+          ? seatLayout.isEmpty || seatCount != seatLayout.length
+                ? '班次缺少完整的发布钓位布局，暂不能安全展示和锁位。'
+                : '钓位 ${missingPosition.first['number'] ?? '未知'} 缺少舷侧或分区资料，暂不能安全展示和锁位。'
+          : null;
       setState(() {
         _seats = seats;
-        _layoutError = missingPosition.isEmpty
-            ? null
-            : '钓位 ${missingPosition.first['number'] ?? '未知'} 缺少舷侧或分区资料，暂不能安全展示和锁位。';
+        _seatLayout = seatLayout;
+        _layoutError = layoutError;
         final availableIds = seats
             .where((seat) => seat['status'] == 'available')
             .map((seat) => '${seat['id']}')
@@ -185,6 +200,27 @@ class _SeatSelectionPageState extends State<SeatSelectionPage> {
   int get _totalFen => _seats
       .where((seat) => _selected.contains('${seat['id']}'))
       .fold(0, (total, seat) => total + _number(seat['priceFen']));
+
+  List<Map<String, dynamic>> get _displaySeats {
+    final inventoryByNumber = {
+      for (final seat in _seats) _number(seat['number']): seat,
+    };
+    return _seatLayout.map((position) {
+      final number = _number(position['number']);
+      final inventory = inventoryByNumber[number];
+      final saleChannel = '${position['saleChannel'] ?? 'unassigned'}';
+      return {
+        ...position,
+        ...?inventory,
+        'number': number,
+        'isPremium': inventory?['isPremium'] ?? position['isPremium'] == true,
+        'status':
+            inventory?['status'] ??
+            (saleChannel == 'offline' ? 'offline' : 'unassigned'),
+        'saleChannel': saleChannel,
+      };
+    }).toList();
+  }
 
   Future<void> _holdSeats() async {
     if (_selected.isEmpty || _submitting) return;
@@ -264,7 +300,7 @@ class _SeatSelectionPageState extends State<SeatSelectionPage> {
                           ),
                         ),
                         Text(
-                          '${_seats.length} 个钓位',
+                          '共 ${_seatLayout.length} 席 · ${_seats.length} 席线上库存',
                           style: const TextStyle(
                             color: FishingTokens.secondary,
                             fontSize: 11,
@@ -277,40 +313,55 @@ class _SeatSelectionPageState extends State<SeatSelectionPage> {
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
-                      child: Column(
-                        children: [
-                          Expanded(
-                            child: _SeatMap(
-                              seats: _seats,
-                              selectedIds: _selected,
-                              layoutError: _layoutError,
-                              onTap: (seat) {
-                                final id = '${seat['id']}';
-                                if (_layoutError != null ||
-                                    (seat['status'] != 'available' &&
-                                        !_selected.contains(id))) {
-                                  return;
-                                }
-                                setState(() {
-                                  if (!_selected.add(id)) {
-                                    _selected.remove(id);
-                                  } else if (_selected.length > 6) {
-                                    _selected.remove(id);
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('同一订单最多选择 6 个座位'),
-                                      ),
-                                    );
-                                  }
-                                });
-                              },
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          const legendHeight = 54.0;
+                          final mapHeight = max(
+                            340.0,
+                            constraints.maxHeight - legendHeight,
+                          );
+                          return SingleChildScrollView(
+                            child: Column(
+                              children: [
+                                SizedBox(
+                                  height: mapHeight,
+                                  child: _SeatMap(
+                                    seats: _displaySeats,
+                                    selectedIds: _selected,
+                                    layoutError: _layoutError,
+                                    onTap: (seat) {
+                                      final id = '${seat['id'] ?? ''}';
+                                      if (id.isEmpty ||
+                                          _layoutError != null ||
+                                          (seat['status'] != 'available' &&
+                                              !_selected.contains(id))) {
+                                        return;
+                                      }
+                                      setState(() {
+                                        if (!_selected.add(id)) {
+                                          _selected.remove(id);
+                                        } else if (_selected.length > 6) {
+                                          _selected.remove(id);
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            const SnackBar(
+                                              content: Text('同一订单最多选择 6 个座位'),
+                                            ),
+                                          );
+                                        }
+                                      });
+                                    },
+                                  ),
+                                ),
+                                const Padding(
+                                  padding: EdgeInsets.fromLTRB(8, 2, 8, 2),
+                                  child: _SeatLegend(),
+                                ),
+                              ],
                             ),
-                          ),
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(8, 2, 8, 2),
-                            child: _SeatLegend(),
-                          ),
-                        ],
+                          );
+                        },
                       ),
                     ),
                   ),
@@ -1193,25 +1244,9 @@ class _SeatPosition {
 }
 
 List<_SeatPosition> _deriveSeatPositions(List<Map<String, dynamic>> seats) {
-  const sectionBands = <String, (double, double)>{
-    'bow': (.115, .325),
-    'mid': (.345, .605),
-    'stern': (.635, .855),
-  };
-  final groups = <String, List<Map<String, dynamic>>>{};
-  for (final seat in seats) {
-    final side = '${seat['side']}';
-    final section = '${seat['section']}';
-    groups.putIfAbsent('$side:$section', () => []).add(seat);
-  }
-
   final positions = <_SeatPosition>[];
-  for (final entry in groups.entries) {
-    final parts = entry.key.split(':');
-    final side = parts[0];
-    final section = parts[1];
-    final band = sectionBands[section]!;
-    final group = entry.value
+  for (final side in ['port', 'starboard']) {
+    final group = seats.where((seat) => seat['side'] == side).toList()
       ..sort((left, right) {
         final ascending = _number(
           left['number'],
@@ -1222,8 +1257,8 @@ List<_SeatPosition> _deriveSeatPositions(List<Map<String, dynamic>> seats) {
       positions.add(
         _SeatPosition(
           seat: group[index],
-          x: side == 'port' ? .235 : .765,
-          y: band.$1 + (index + .5) * (band.$2 - band.$1) / group.length,
+          x: side == 'port' ? .27 : .73,
+          y: group.length == 1 ? .48 : .12 + index * (.72 / (group.length - 1)),
         ),
       );
     }
@@ -1244,14 +1279,14 @@ class _FounderBoatMap extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Center(
     child: AspectRatio(
-      aspectRatio: .67,
+      aspectRatio: .65,
       child: LayoutBuilder(
         builder: (context, mapConstraints) {
           final width = mapConstraints.maxWidth;
           final height = mapConstraints.maxHeight;
           final positions = _deriveSeatPositions(seats);
-          const markerWidth = 52.0;
-          const markerHeight = 50.0;
+          const markerWidth = 50.0;
+          const markerHeight = 48.0;
           return Stack(
             clipBehavior: Clip.none,
             children: [
@@ -1323,9 +1358,9 @@ class _FounderBoatMap extends StatelessWidget {
                 child: const _SideLabel('船尾', showArrow: false),
               ),
               Positioned(
-                left: width * .415,
+                left: width * .39,
                 top: height * .92,
-                width: width * .17,
+                width: width * .22,
                 height: height * .075,
                 child: const _EngineSchematic(),
               ),
@@ -1876,7 +1911,7 @@ class _SideLabel extends StatelessWidget {
           const Icon(
             Icons.arrow_right_rounded,
             color: Color(0xFFE1EEEA),
-            size: 14,
+            size: 12,
           ),
         Text(
           label,
@@ -1891,7 +1926,7 @@ class _SideLabel extends StatelessWidget {
           const Icon(
             Icons.arrow_left_rounded,
             color: Color(0xFFE1EEEA),
-            size: 14,
+            size: 12,
           ),
       ],
     ),
@@ -1903,16 +1938,16 @@ class _AisleSchematic extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const Center(
-    child: RotatedBox(
-      quarterTurns: 3,
+    child: FittedBox(
+      fit: BoxFit.scaleDown,
       child: Text(
-        '过道',
+        '通道',
         maxLines: 1,
         style: TextStyle(
           color: Color(0xFFC0DEC8),
           fontSize: 8,
           fontWeight: FontWeight.w800,
-          letterSpacing: 1,
+          letterSpacing: .3,
         ),
       ),
     ),
@@ -1969,20 +2004,24 @@ class _EngineSchematic extends StatelessWidget {
           color: const Color(0xFFC2DBCA).withValues(alpha: .76),
         ),
       ),
-      child: const Row(
+      child: const Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.settings_input_component_rounded,
-            size: 11,
-            color: Color(0xFFCFE2D3),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.settings_rounded, size: 8, color: Color(0xFFCFE2D3)),
+              SizedBox(width: 1),
+              Icon(Icons.settings_rounded, size: 8, color: Color(0xFFCFE2D3)),
+              SizedBox(width: 1),
+              Icon(Icons.settings_rounded, size: 8, color: Color(0xFFCFE2D3)),
+            ],
           ),
-          SizedBox(width: 3),
           Text(
             '发动机',
             style: TextStyle(
               color: Color(0xFFE2EFE5),
-              fontSize: 8,
+              fontSize: 7,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -2005,7 +2044,10 @@ class _SeatTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = '${seat['status']}';
-    final available = status == 'available';
+    final available =
+        status == 'available' &&
+        seat['id'] is String &&
+        '${seat['id']}'.isNotEmpty;
     final premium = seat['isPremium'] == true;
     final statusLabel = selected ? '已选' : _seatStatus(status);
     final color = selected
@@ -2016,6 +2058,10 @@ class _SeatTile extends StatelessWidget {
         ? const Color(0xFF5A5D58)
         : status == 'blocked'
         ? const Color(0xFF514B48)
+        : status == 'offline'
+        ? const Color(0xFF737A70)
+        : status == 'unassigned'
+        ? const Color(0xFF59635E)
         : premium
         ? const Color(0xFF262B2B)
         : const Color(0xFFC4C8BF);
@@ -2028,7 +2074,7 @@ class _SeatTile extends StatelessWidget {
       key: ValueKey('seat-${seat['number']}'),
       button: available,
       label:
-          '钓位 ${seat['number']}，$statusLabel${premium ? '，船尾加价位，每位${_money(_number(seat['priceFen']))}' : ''}',
+          '钓位 ${seat['number']}，$statusLabel${premium ? '，船尾加价位${seat['priceFen'] == null ? '' : '，每位${_money(_number(seat['priceFen']))}'}' : ''}',
       child: Material(
         color: Colors.transparent,
         elevation: selected ? 9 : 6,
@@ -2170,6 +2216,10 @@ IconData _seatStatusIcon(String status, bool selected) => selected
     ? Icons.lock_outline_rounded
     : status == 'blocked'
     ? Icons.block_outlined
+    : status == 'offline'
+    ? Icons.storefront_outlined
+    : status == 'unassigned'
+    ? Icons.do_not_disturb_on_outlined
     : Icons.radio_button_unchecked_rounded;
 
 class _SelectedSeatBadge extends StatelessWidget {
@@ -2271,15 +2321,38 @@ class _SeatLegend extends StatelessWidget {
       border: Border.all(color: const Color(0xFF8EB8B0).withValues(alpha: .36)),
     ),
     child: const Padding(
-      padding: EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      padding: EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          _LegendItem(icon: Icons.radio_button_unchecked_rounded, label: '可选'),
-          _LegendItem(icon: Icons.person_off_outlined, label: '已售'),
-          _LegendItem(icon: Icons.lock_outline_rounded, label: '已锁'),
-          _LegendItem(icon: Icons.check_circle_outline_rounded, label: '已选'),
-          _LegendItem(icon: Icons.star_rounded, label: '加价'),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _LegendItem(
+                icon: Icons.radio_button_unchecked_rounded,
+                label: '可选',
+              ),
+              _LegendItem(icon: Icons.person_off_outlined, label: '已售'),
+              _LegendItem(icon: Icons.lock_outline_rounded, label: '已锁'),
+              _LegendItem(
+                icon: Icons.check_circle_outline_rounded,
+                label: '已选',
+              ),
+              _LegendItem(icon: Icons.star_rounded, label: '加价'),
+            ],
+          ),
+          SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '线下 / 未开放席位只作位置示意，不能在线选择',
+              style: TextStyle(
+                color: Color(0xFFAFC6C1),
+                fontSize: 9,
+                height: 1,
+              ),
+            ),
+          ),
         ],
       ),
     ),
@@ -2573,6 +2646,8 @@ String _seatStatus(String status) => switch (status) {
   'held-by-me' => '我已锁定',
   'sold' => '已售',
   'blocked' => '不可用',
+  'offline' => '线下',
+  'unassigned' => '未开放',
   _ => '可选',
 };
 

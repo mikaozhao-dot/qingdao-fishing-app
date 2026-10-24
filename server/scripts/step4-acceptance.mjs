@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import pg from 'pg';
 import { buildApp } from '../src/app.js';
 import { config } from '../src/config.js';
@@ -236,7 +237,7 @@ async function main() {
     remarks: '',
     manualSupply: false,
     platformQuotaSeats: 4,
-    offlineQuotaSeats: 6,
+    offlineQuotaSeats: 8,
     rigConfig: {
       baitTypes: ['live_shrimp'], baitGramsPerPerson: 200, baitSupply: 'captain_provided',
       mainLinePe: 1.5, leaderLineNumber: 5, sinkerShape: 'water_drop', sinkerMinGrams: 40, sinkerMaxGrams: 80,
@@ -245,14 +246,14 @@ async function main() {
   check(quotaPublish.status, 201, 'captain can publish an isolated platform/offline quota');
   const quotaDeparture = quotaPublish.body.departure;
   check(quotaDeparture.platformQuotaSeats, 4, 'published platform quota is four seats');
-  check(quotaDeparture.offlineQuotaSeats, 6, 'published offline quota is six seats');
+  check(quotaDeparture.offlineQuotaSeats, 8, 'published offline quota is eight seats');
   check(quotaDeparture.instantConfirmationAvailable, true, 'segregated platform seats allow instant seat selection');
   check(quotaDeparture.seats.map((seat) => seat.number), [1, 2, 3, 4], 'only platform seats enter online inventory');
-  const unassignedEleventh = await scalar(
-    "SELECT count(*)::integer AS count FROM seat_inventory WHERE departure_id=$1 AND seat_number=11",
+  const quotaTotal = await scalar(
+    'SELECT count(*)::integer AS count FROM departure_seat_quotas WHERE departure_id=$1',
     [quotaDeparture.id],
   );
-  check(unassignedEleventh.count, 0, 'the eleventh template seat is not sold when only ten seats are allocated');
+  check(quotaTotal.count, 12, 'all twelve positions belong to either the platform or offline quota');
   const offlineSeatFive = await scalar(
     "SELECT q.sale_channel, count(s.id)::integer AS inventory_count FROM departure_seat_quotas q " +
       "LEFT JOIN seat_inventory s ON s.departure_id=q.departure_id AND s.seat_number=q.seat_number " +
@@ -272,6 +273,40 @@ async function main() {
 
   const seatsBeforeTransfer = await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token);
   check(seatsBeforeTransfer.seats.length, 4, 'seat API exposes only the four platform quota seats');
+  check(seatsBeforeTransfer.seatLayout.length, 12, 'seat API returns the full departure layout for a 4+8 quota');
+  check(seatsBeforeTransfer.seatLayout.filter((seat) => seat.saleChannel === 'platform').length, 4,
+    'the 4+8 layout marks only four real positions as platform inventory');
+  check(seatsBeforeTransfer.seatLayout.find((seat) => seat.number === 5).saleChannel, 'offline',
+    'an offline position remains visible without entering the online inventory list');
+  check('id' in seatsBeforeTransfer.seatLayout.find((seat) => seat.number === 5), false,
+    'a visual offline position has no synthetic inventory identifier');
+
+  const legacyOrderSeat = await scalar(
+    'SELECT id,seat_number,price_fen FROM seat_inventory WHERE departure_id=$1 AND seat_number=3',
+    [quotaDeparture.id],
+  );
+  await makePaidOrder(angler.id, quotaDeparture.id, legacyOrderSeat);
+  await pool.query(
+    `UPDATE departures SET seat_layout_snapshot=NULL,
+       created_at=(SELECT applied_at-interval '1 minute' FROM schema_migrations
+                    WHERE version='013_four_stern_premium_seats.sql')
+     WHERE id=$1`,
+    [quotaDeparture.id],
+  );
+  await pool.query(await readFile(new URL('../migrations/014_departure_seat_layout_snapshot.sql', import.meta.url), 'utf8'));
+  const migratedLayout = await scalar(
+    'SELECT seat_layout_snapshot FROM departures WHERE id=$1',
+    [quotaDeparture.id],
+  );
+  const migratedSeat = (number) => migratedLayout.seat_layout_snapshot.find((seat) => Number(seat.number) === number);
+  check(migratedSeat(5).premium, false, 'migration 014 backfills pre-013 offline seat 5 with its frozen premium value');
+  check(migratedSeat(8).premium, false, 'migration 014 backfills pre-013 offline seat 8 with its frozen premium value');
+  check(migratedSeat(6).premium, true, 'migration 014 preserves the pre-existing premium flag for seat 6');
+  check((await scalar(
+    'SELECT price_fen FROM seat_inventory WHERE departure_id=$1 AND seat_number=3',
+    [quotaDeparture.id],
+  )).price_fen, 50000, 'an order-bearing legacy departure keeps its existing platform price');
+
   const lockedHold = await expect('POST', '/departures/' + quotaDeparture.id + '/seat-holds', angler.token,
     { seatIds: [seatsBeforeTransfer.seats[0].id] }, 201);
   await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
@@ -300,7 +335,18 @@ async function main() {
   const openedOffline = await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
     { seatNumber: 5, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-open-seat-5', releaseConfirmed: true });
   check(openedOffline.platformQuotaSeats, 5, 'transferring one offline seat expands platform quota');
-  check(openedOffline.offlineQuotaSeats, 5, 'transferring one offline seat reduces offline quota');
+  check(openedOffline.offlineQuotaSeats, 7, 'transferring one offline seat reduces offline quota');
+  const openedLegacyFive = await scalar(
+    'SELECT is_premium,price_fen FROM seat_inventory WHERE departure_id=$1 AND seat_number=5',
+    [quotaDeparture.id],
+  );
+  check(openedLegacyFive.is_premium, false, 'old seat 5 does not acquire the new template premium flag when opened');
+  check(openedLegacyFive.price_fen, 50000, 'old seat 5 keeps the base price after the template migration');
+  const layoutAfterOpeningFive = await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token);
+  check(layoutAfterOpeningFive.seatLayout.find((seat) => seat.number === 5).saleChannel, 'platform',
+    'opening old seat 5 changes only its live quota channel in the full map');
+  check(layoutAfterOpeningFive.seats.find((seat) => seat.number === 5).priceFen, 50000,
+    'opened old seat 5 is returned with its frozen legacy price');
   const releaseEvidence = await scalar(
     `SELECT c.actor_user_id::text AS actor_id,c.request_key,c.statement_version,c.statement_text,
             q.offline_state,a.next_state
@@ -329,7 +375,7 @@ async function main() {
   const returnedPlatformSeat = await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
     { seatNumber: 5, sourceChannel: 'platform', targetChannel: 'offline', requestKey: 'quota-return-seat-5' });
   check(returnedPlatformSeat.platformQuotaSeats, 4, 'a free platform seat can return to the offline quota');
-  check(returnedPlatformSeat.offlineQuotaSeats, 6, 'returning a free seat restores the offline quota');
+  check(returnedPlatformSeat.offlineQuotaSeats, 8, 'returning a free seat restores the offline quota');
   check((await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token)).seats.length, 4,
     'a transferred offline seat disappears from online seat selection');
   check((await scalar("SELECT status || ':' || sale_channel AS state FROM seat_inventory WHERE departure_id=$1 AND seat_number=5",
@@ -341,6 +387,46 @@ async function main() {
     { seatIds: [realOfflineInventory.id] }, 404);
   check((await scalar('SELECT offline_state FROM departure_seat_quotas WHERE departure_id=$1 AND seat_number=5',
     [quotaDeparture.id])).offline_state, 'open', 'a returned offline seat can be listed again as open');
+  await expect('POST', '/captain/departures/' + quotaDeparture.id + '/quota-transfers', captain.token,
+    { seatNumber: 8, sourceChannel: 'offline', targetChannel: 'platform', requestKey: 'quota-open-seat-8', releaseConfirmed: true });
+  const openedLegacyEight = await scalar(
+    'SELECT is_premium,price_fen FROM seat_inventory WHERE departure_id=$1 AND seat_number=8',
+    [quotaDeparture.id],
+  );
+  check(openedLegacyEight.is_premium, false, 'old seat 8 does not acquire the new template premium flag when opened');
+  check(openedLegacyEight.price_fen, 50000, 'old seat 8 keeps the base price after the template migration');
+  const layoutAfterOpeningEight = await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token);
+  check(layoutAfterOpeningEight.seatLayout.find((seat) => seat.number === 8).saleChannel, 'platform',
+    'opening old seat 8 changes only its live quota channel in the full map');
+  check(layoutAfterOpeningEight.seats.find((seat) => seat.number === 8).priceFen, 50000,
+    'opened old seat 8 is returned with its frozen legacy price');
+
+  const eightPlusFourPublish = await request('POST', '/captain/departures', captain.token, {
+    boatId: quotaBoatId,
+    tripType: 'pro_fishing',
+    departureDate: shanghaiDateAfter(6),
+    meetingTime: '04:30', departureTime: '05:00', returnTime: '12:00', bookingDeadlineTime: '04:00',
+    targetAreaCode: 'qingdao_nearshore', marinaCode: 'xiaogang', fishCodes: ['sea_bass'],
+    pricePerSeatFen: 50000, sternSurchargeFen: 10000, minimumTotalFen: 100000, remarks: '',
+    manualSupply: false, platformQuotaSeats: 8, offlineQuotaSeats: 4,
+    rigConfig: {
+      baitTypes: ['live_shrimp'], baitGramsPerPerson: 200, baitSupply: 'captain_provided',
+      mainLinePe: 1.5, leaderLineNumber: 5, sinkerShape: 'water_drop', sinkerMinGrams: 40, sinkerMaxGrams: 80,
+    },
+  });
+  check(eightPlusFourPublish.status, 201, 'captain can publish the complementary 8+4 quota split');
+  const seatsEightPlusFour = await expect('GET', '/departures/' + eightPlusFourPublish.body.departure.id + '/seats', angler.token);
+  check(seatsEightPlusFour.seatLayout.length, 12, '8+4 selection receives the same complete 12-position map');
+  check(seatsEightPlusFour.seats.length, 8, '8+4 selection exposes only eight platform inventory rows');
+  check(seatsEightPlusFour.seatLayout.filter((seat) => seat.saleChannel === 'platform').length, 8,
+    '8+4 map marks eight real platform positions');
+  check(seatsEightPlusFour.seatLayout.filter((seat) => seat.saleChannel === 'offline').length, 4,
+    '8+4 map marks four offline positions without selling them online');
+  const currentSternSeats = seatsEightPlusFour.seats.filter((seat) => [5, 6, 7, 8].includes(seat.number));
+  check(currentSternSeats.map((seat) => seat.isPremium), [true, true, true, true],
+    'new 8+4 departures preserve the approved 5–8 premium positions');
+  check(currentSternSeats.map((seat) => seat.priceFen), [60000, 60000, 60000, 60000],
+    'all four premium seats use the same current departure price');
 
   const platformSeatTwo = await scalar(
     'SELECT id,seat_number,price_fen FROM seat_inventory WHERE departure_id=$1 AND seat_number=2',
@@ -401,7 +487,7 @@ async function main() {
     { seatNumber: 9, sourceChannel: 'offline', targetChannel: 'platform', requestKey: winningKey, releaseConfirmed: true });
   check(postDeadlineReplay.replayed, true, 'idempotent quota replay is returned after the booking deadline');
   check((await scalar('SELECT count(*)::integer AS count FROM departure_offline_release_confirmations WHERE departure_id=$1',
-    [quotaDeparture.id])).count, 2 + (stateTransferRace[1].status === 200 ? 1 : 0),
+    [quotaDeparture.id])).count, 3 + (stateTransferRace[1].status === 200 ? 1 : 0),
     'only successful incoming transfers produce release confirmations');
 
   const legacyPublish = await request('POST', '/captain/departures', captain.token, {

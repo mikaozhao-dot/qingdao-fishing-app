@@ -441,7 +441,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     try {
       await expireHolds(pool, redis, request.params.id);
       const departure = await pool.query(
-        `SELECT id FROM departures WHERE id=$1 AND status='open' AND departure_at>now()
+        `SELECT id,seat_template_count,seat_layout_snapshot FROM departures WHERE id=$1 AND status='open' AND departure_at>now()
            AND booking_deadline>now() AND ${formationCutoffOpenSql}`,
         [request.params.id],
       );
@@ -454,8 +454,27 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
          ORDER BY s.seat_number`,
         [request.params.id],
       );
+      const quotaResult = await pool.query(
+        `SELECT seat_number,sale_channel FROM departure_seat_quotas
+         WHERE departure_id=$1 ORDER BY seat_number`,
+        [request.params.id],
+      );
+      const channelByNumber = new Map(
+        quotaResult.rows.map((row) => [Number(row.seat_number), row.sale_channel]),
+      );
+      const seatLayout = Array.isArray(departure.rows[0].seat_layout_snapshot)
+        ? departure.rows[0].seat_layout_snapshot.map((seat) => ({
+          number: Number(seat.number),
+          side: seat.side,
+          section: seat.section,
+          isPremium: Boolean(seat.premium),
+          saleChannel: channelByNumber.get(Number(seat.number)) ?? 'unassigned',
+        }))
+        : [];
       return {
         expiresInSeconds: 600,
+        seatCount: Number(departure.rows[0].seat_template_count),
+        seatLayout,
         seats: result.rows.map((row) => serializeSeat(row, request.user.id)),
       };
     } catch (error) {

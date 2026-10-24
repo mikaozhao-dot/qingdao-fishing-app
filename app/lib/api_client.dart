@@ -5,6 +5,12 @@ import 'package:http/http.dart' as http;
 
 class Step1Api {
   static const _configured = String.fromEnvironment('API_BASE_URL');
+  static final http.Client _defaultClient = http.Client();
+
+  @visibleForTesting
+  static http.Client? clientOverride;
+
+  static http.Client get _client => clientOverride ?? _defaultClient;
 
   static String get baseUrl {
     if (_configured.isNotEmpty) return _configured;
@@ -15,7 +21,7 @@ class Step1Api {
   }
 
   static Future<Map<String, dynamic>> get(String path, {String? token}) async {
-    final response = await http
+    final response = await _client
         .get(
           Uri.parse('$baseUrl$path'),
           headers: token == null
@@ -31,7 +37,7 @@ class Step1Api {
     Map<String, dynamic> body, {
     String? token,
   }) async {
-    final response = await http
+    final response = await _client
         .post(
           Uri.parse('$baseUrl$path'),
           headers: {
@@ -45,7 +51,7 @@ class Step1Api {
   }
 
   static Future<String> getText(String path, {String? token}) async {
-    final response = await http
+    final response = await _client
         .get(
           Uri.parse('$baseUrl$path'),
           headers: token == null

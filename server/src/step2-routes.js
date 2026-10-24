@@ -393,14 +393,16 @@ async function insertDeparture(client, boat, userId, value) {
        (boat_id, captain_user_id, trip_type, departure_at, meeting_at, return_at,
         target_area_code, marina_code, minimum_sailing_total_fen, price_per_seat_fen,
         whole_boat_price_fen, booking_deadline, status, stern_surcharge_fen, remarks,
-        seat_template_count, platform_quota_seats, offline_quota_seats, manual_supply)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,'open',$12,$13,$14,$15,$16,$17)
+        seat_template_count, platform_quota_seats, offline_quota_seats, manual_supply,
+        seat_layout_snapshot)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,'open',$12,$13,$14,$15,$16,$17,$18)
      RETURNING id`,
     [boat.id, userId, value.tripType, value.departureAt, value.meetingAt, value.returnAt,
       value.targetAreaCode, value.marinaCode, value.minimumTotalFen, value.pricePerSeatFen,
       value.bookingDeadline, value.sternSurchargeFen, value.remarks,
       Number(boat.seat_count ?? boat.seatCount ?? boat.layout.length),
-      value.platformQuotaSeats, value.offlineQuotaSeats, value.manualSupply],
+      value.platformQuotaSeats, value.offlineQuotaSeats, value.manualSupply,
+      JSON.stringify(boat.layout)],
   );
   const departureId = inserted.rows[0].id;
   await client.query(
@@ -704,7 +706,8 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
       await client.query('BEGIN');
       const departureResult = await client.query(
         `SELECT id,boat_id,status,departure_at,booking_deadline,seat_template_count,
-                platform_quota_seats,offline_quota_seats,price_per_seat_fen,stern_surcharge_fen
+                platform_quota_seats,offline_quota_seats,price_per_seat_fen,stern_surcharge_fen,
+                seat_layout_snapshot
          FROM departures
          WHERE id=$1 AND captain_user_id=$2 FOR UPDATE`,
         [request.params.id, request.user.id],
@@ -836,18 +839,17 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
       } else {
         const opened = await client.query(
           `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,is_premium)
-           SELECT $1,seat.number,$4 + CASE WHEN seat.premium THEN $5 ELSE 0 END,
+           SELECT $1,seat.number,$3 + CASE WHEN seat.premium THEN $4 ELSE 0 END,
                   seat.side,seat.section,seat.premium
-           FROM boats b JOIN seat_templates st ON st.code=b.seat_template_code
-           CROSS JOIN LATERAL jsonb_to_recordset(st.layout)
+           FROM jsonb_to_recordset(COALESCE($2::jsonb, '[]'::jsonb))
              AS seat(number smallint,side varchar,section varchar,premium boolean)
-           WHERE b.id=$2 AND seat.number=$3 RETURNING id`,
-          [departure.id, departure.boat_id, seatNumber,
-            Number(departure.price_per_seat_fen), Number(departure.stern_surcharge_fen ?? 0)],
+           WHERE seat.number=$5 RETURNING id`,
+          [departure.id, JSON.stringify(departure.seat_layout_snapshot ?? []),
+            Number(departure.price_per_seat_fen), Number(departure.stern_surcharge_fen ?? 0), seatNumber],
         );
         if (!opened.rowCount) {
           await client.query('ROLLBACK');
-          return sendError(reply, 409, '船只模板缺少该席位，无法开放平台库存');
+          return sendError(reply, 409, '班次缺少该席位的发布快照，无法开放平台库存');
         }
       }
 

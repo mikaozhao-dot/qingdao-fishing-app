@@ -48,9 +48,17 @@ analysis server exited with code 255
 
 在临时 Flutter Web scaffolding 中以 393×852 移动视口运行 Flutter 界面，通过 `API_BASE_URL` 连接本机 API；完成手机号登录、实名表单、已验证账号、船长档案表单、设施与照片类别展示，以及已审核船档案和模板查看。`design/step1-review-photos/` 中的 6 张截图均小于 1 MB，供查看布局。
 
-这些截图是 Chrome 中的移动尺寸 Web 预览，不是 iOS/Android 模拟器或真机截图，不能替代任务书要求的设备冒烟。当前环境没有 Android SDK、连接设备或可用模拟器；本机 Xcode 工具提示尚未接受 Xcode 许可，因此没有代替设备所有者接受许可。设备联调条件仍待有完整工具链的环境完成。
+这些截图是 Chrome 中的移动尺寸 Web 预览，不是 iOS/Android 模拟器或真机截图，不能替代任务书要求的设备冒烟。当前环境缺 Android SDK，Xcode 安装不完整，CocoaPods 未安装；设备联调条件仍待有完整工具链的环境完成。
+
+## Muse 独立评审与跟进
+
+- Muse 于 2026-10-24 在 `docs/step1-review-84828e0f87c2.md` 给出**有条件通过**：后端主链路及库级核查的 31 项断言通过；`flutter analyze` 全量通过输出与设备冒烟仍未关闭。此结论不替代未完成的验收项。
+- Muse 指出的 `estimatedSpacingCm` 类型不一致已在 `f835a6b` 修复：提交接口和档案读取接口现在均把 PostgreSQL numeric 序列化为 JSON 数字，并在数据库值为空时保留 `null`。本地 `node --check server/src/step1-routes.js` 通过。
+- GitHub Actions 双端构建已由 Codex 独立核对通过：[运行 #40043599384](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40043599384)，iOS 模拟器构建与 Android debug APK 均成功；Muse 评审环境当时无法读取 Actions，因此未把此项计入其独立核验。
+- 本机 `flutter doctor`（2026-10-24）显示 Flutter 3.47.8 可用、Android SDK 缺失、Xcode 安装不完整、CocoaPods 未安装。输出没有直接写明 license 未同意；它提示完整安装 Xcode 并运行 `xcodebuild -runFirstLaunch`。本轮没有运行该初始化命令，也没有接受任何许可。
 
 ## 未关闭事项
 
-- 第 1 步代码与本地后端主链路已实现并实跑；`flutter analyze` 的 Flutter 分析服务问题、模拟器/真机联调和 Muse 独立复核仍待关闭。本记录不把 Web 预览或本地自测表述为设备验收或 Muse 评审结论。
+- Muse 独立评审已完成，结论为有条件通过；仍待关闭的是任务书验收第 4 项的全量 `flutter analyze` 通过输出，以及至少 3 张、每张小于 1 MB 的模拟器/真机主要页面截图。现有 Web 预览不能代替设备验收。
+- 当前环境缺 Android SDK、完整 Xcode 和 CocoaPods；待工具链准备好后再完成 Flutter 分析与设备冒烟。此前 `flutter analyze --no-pub` 的 LSP 服务崩溃不能记作通过，`dart analyze` 通过也不能替代该条件。
 - 照片当前保存在本地对象存储桩；生产部署需接入正式对象存储与真实供应商前重新审查密钥配置、权限和数据保留策略。

@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 node_modules/
+server/.local-uploads/
 app/.dart_tool/
 app/.flutter-plugins
 app/.flutter-plugins-dependencies

@@ -2,21 +2,23 @@ import Fastify from 'fastify';
 import pg from 'pg';
 import { createClient } from 'redis';
 import { config } from './config.js';
+import { registerStep1Routes } from './step1-routes.js';
 
 const { Pool } = pg;
 
-export function buildApp() {
+export function buildApp(runtimeConfig = config) {
   const app = Fastify({
-    logger: { level: config.logLevel },
+    logger: { level: runtimeConfig.logLevel },
     trustProxy: true,
+    bodyLimit: 8 * 1024 * 1024,
   });
 
-  const pool = config.databaseUrl
-    ? new Pool({ connectionString: config.databaseUrl, max: 10 })
+  const pool = runtimeConfig.databaseUrl
+    ? new Pool({ connectionString: runtimeConfig.databaseUrl, max: 10 })
     : null;
-  const redis = config.redisUrl
+  const redis = runtimeConfig.redisUrl
     ? createClient({
-        url: config.redisUrl,
+        url: runtimeConfig.redisUrl,
         socket: {
           connectTimeout: 1500,
           reconnectStrategy: (retries) =>
@@ -27,9 +29,19 @@ export function buildApp() {
 
   redis?.on('error', (error) => app.log.warn({ err: error }, 'Redis connection error'));
 
+  app.addHook('onRequest', async (request, reply) => {
+    if (request.headers.origin) {
+      reply.header('access-control-allow-origin', '*');
+      reply.header('access-control-allow-methods', 'GET,POST,OPTIONS');
+      reply.header('access-control-allow-headers', 'content-type,authorization,x-admin-password');
+      reply.header('access-control-max-age', '600');
+    }
+  });
+  app.options('/*', async (_request, reply) => reply.code(204).send());
+
   app.get('/health', async () => ({
     status: 'ok',
-    version: config.appVersion,
+    version: runtimeConfig.appVersion,
     time: new Date().toISOString(),
   }));
 
@@ -62,11 +74,13 @@ export function buildApp() {
     reply.code(ready ? 200 : 503);
     return {
       status: ready ? 'ready' : 'not_ready',
-      version: config.appVersion,
+      version: runtimeConfig.appVersion,
       time: new Date().toISOString(),
       dependencies,
     };
   });
+
+  registerStep1Routes(app, { pool, config: runtimeConfig });
 
   app.addHook('onClose', async () => {
     await pool?.end();

@@ -36,6 +36,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379
+      UPLOAD_DIR: /app/data/uploads
       PORT: 3000
     depends_on:
       postgres:
@@ -44,6 +45,8 @@ services:
         condition: service_healthy
     ports:
       - "3000:3000"
+    volumes:
+      - fishing-uploads:/app/data/uploads
     command: ["sh", "-c", "node src/migrate.js && node src/server.js"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
@@ -54,3 +57,4 @@ services:
 volumes:
   fishing-postgres:
   fishing-redis:
+  fishing-uploads:

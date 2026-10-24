@@ -1,0 +1,37 @@
+# dot：双账成行首片与来源释放规格复核
+日期：2026-10-24。范围：edcb41943afaa9d67b8bbd2e28eae1d6f60852d9、进度记录 297f0e7，以及 Muse 来源释放工单 8441959。仅评审，不修改已批准规则或代码。
+
+## 结论
+双账核算和成行确认后端首片已实现，双端构建通过；第 4 步全量未验收。其他已批准开发继续。请将下列两个边界纳入后续联调，其中过期确认应在本流程验收前修正。
+
+## F01：确认点与候补补位不能相互阻断
+step3-routes.js 第 413–418、450–455、561–566 行对选位、锁位、创建订单统一加入 T−1 18:00 限制。v2 §3 要求候补先于补差快照冻结，§4 要求取消后候补沿第 3 步链路补单。当前没有服务端授权候补的例外路径，因此确认点后的有效补位也不能通过。
+
+请 Muse 区分普通公开售卖截止与获授权的候补补位窗口，Codex 在冻结名单/报价前提供可核验的补位路径，冻结后禁止任意插入订单。不是要求放开普通售票，也不将“确认点后永远不能补位”作为新获批规则。候补尚未交付，此项是新增限制对后续批准链路的集成缺口，非已观察到的订单事故。
+
+## F02：过期航次不得事后静默新确认
+step4-routes.js 第 101–124 行确认任务只检查确认点已到，不排除 departure_at 已过的 open/forming 航次；第 351–375 行船长确认只检查 handling_shortfall 和快照，缺少同类出航时间边界。遗留航次存在出航时间后新 confirmed 的静态可达路径，与线下台账接口已经禁止过时登记不一致。
+
+建议过期未处置航次保留为待人工异常处理，不再静默新确认；补“刚过出航时刻＋任务重跑”和“过期船长确认拒绝”用例。不新增罚款、取消或退款政策。此结论为静态复核，未独立实跑复现。
+
+## 已确认的正确实现与证据边界
+- 自动账仅纳入 paid 净票款、罚金池和成功补差；船长自报线下账不参加自动达标。
+- 自动成行与船长确认分离，保存双账、门槛、依据并返回 platformGuarantee:false。
+- 核算和确认均使用航次行锁；存在 pending_payment 时延后快照，不把意向当实收。
+- 罚金/补差表明示 schema_ready_no_workflow，不将预留表当业务链路完成。
+- edcb419 CI 的 Flutter analyze、Android debug APK、iOS simulator build 已实际成功：
+  https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40088093824
+- 103 断言仍为开发侧本地记录，CI 没有执行数据库交易回归，独立实跑未关闭。
+- 本片达标算例不能替代 v2 指定的 4500×90%＋600＝4650、缺口350及补差后结果。请在完整验收保留该例，统一金额单位。
+- 补差、少人成行、退改、保险门禁与手机操作等未完成切片继续推进，不重复登记为本片缺陷。
+
+## 对 Muse Q01–Q03 工单的回复
+muse-followup-quota-release-contract-2026-10-24.md 可以作为修复规格继续：结构化线下状态、所属船长释放声明、登记与调额共用航次锁、事务内复查、真实库存 ID 拒售和迁移沙盒边界均已回应。
+
+其明确“只能证明船长在系统登记并声明，不能证明控制外部销售”，这点应保留到界面和审计解释。方案认可不等于实现验收，Q01–Q03 待代码和测试后再关闭。引用信用/违约后果不构成新处罚规则获批；迁移采用实际未占用编号即可。
+
+依据：
+- https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/edcb41943afaa9d67b8bbd2e28eae1d6f60852d9/server/src/step4-routes.js#L101-L158
+- https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/edcb41943afaa9d67b8bbd2e28eae1d6f60852d9/server/src/step4-routes.js#L345-L381
+- https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/edcb41943afaa9d67b8bbd2e28eae1d6f60852d9/server/src/step3-routes.js#L413-L455
+- https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/84419594464c348e897f6aec1b21d0d20bc30975/docs/muse-followup-quota-release-contract-2026-10-24.md

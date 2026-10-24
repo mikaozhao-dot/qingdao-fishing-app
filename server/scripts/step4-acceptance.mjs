@@ -159,7 +159,7 @@ async function makePaidOrder(userId, departureId, seat) {
       `INSERT INTO passenger_insurance_coverages
          (departure_id,order_id,passenger_id,coverage_start_at,coverage_end_at,status,
           provider_code,provider_policy_reference,verified_at)
-       SELECT d.id,$1,op.id,d.departure_at,d.return_at,'effective','sandbox','sandbox_policy_' || $1::text,now()
+       SELECT d.id,$1,op.id,d.departure_at,d.return_at,'effective','sandbox','sandbox_policy_' || ($1::uuid)::text,now()
        FROM order_passengers op JOIN departures d ON d.id=$2
        WHERE op.id=$3`,
       [orderId, departureId, passengerResult.rows[0].id],

@@ -52,7 +52,7 @@ flutter run
 - `docs/data-model-v1.md`：核心实体、关系和金额/时间口径。
 - `docs/p0-flow-v1.md`、`docs/fish-library-v1.md`：页面流程与鱼种库。
 - `design/review-photos-v2/`：十屏独立 PNG 评审图。
-- `design/step1-review-photos/`：第 1 步 Flutter Web 移动视口截图（非模拟器/真机验收图）。
+- `design/step1-review-photos/`：第 1 步截图；`01`–`06` 是 Flutter Web 移动视口预览，`07`–`11` 是 iOS 模拟器设备冒烟证据。
 
 ## 协作规矩
 

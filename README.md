@@ -55,6 +55,7 @@ flutter run
 - `docs/codex-dev-step1-brief-v1.md`、`docs/step1-build-notes.md`、`docs/step1-review-84828e0f87c2.md`、`docs/step1-review-request-2026-10-24.md`：第 1 步任务、实施记录与 Muse 独立评审。
 - `docs/data-model-step1-addendum.md`：只记录第 1 步新增字段与实体，不改数据模型 v1 正本。
 - `docs/data-model-step2-addendum.md`：只记录第 2 步新增字段与座位库存快照口径。
+- `docs/seat-map-spatial-redesign-status-2026-10-24.md`：选位页空间改稿的模板坐标核查与当前阻塞状态。
 - `docs/data-model-v1.md`：核心实体、关系和金额/时间口径。
 - `docs/p0-flow-v1.md`、`docs/fish-library-v1.md`：页面流程与鱼种库。
 - `design/review-photos-v2/`：十屏独立 PNG 评审图。

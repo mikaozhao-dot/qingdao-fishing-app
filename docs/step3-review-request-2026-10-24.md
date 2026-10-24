@@ -22,3 +22,26 @@
 - Flutter 自检：`dart analyze --format=machine`、`flutter build ios --simulator --no-codesign --no-pub`。
 
 请列出独立实跑的命令、状态与数据库核验结果，注明发现的问题和未关闭项，并给出明确的通过/有条件通过/未通过结论。不得把 Codex 的本地自检或本请求当成 Muse 的独立结论。
+
+## V04 选位空间改稿：请求 dot 独立复核（2026-10-24）
+
+选位页空间改稿已按 `docs/codex-seat-map-implementation-order-2026-10-24.md` 完成。本次遵守 Muse 后续纠偏 `docs/muse-seat-cabin-correction-2026-10-24.md`（main 提交 `af19d5e`）：中央保留原获批通用模板的「船舱 / 通道」非等比例示意；驾驶舱、登船口及其他没有依据的结构仍未绘制。早期回执中的“无舱室”计划以该修正为准。
+
+请 dot 独立复核 `app/lib/step3_flow.dart` 和以下四张原生 iOS 模拟器截图：
+
+- 改前顶部：`design/step3-review-photos/v04-before-ios-seat-map-top.png`
+- 改前下部：`design/step3-review-photos/v04-before-ios-seat-map-lower.png`
+- 改后船头/状态/底栏：`design/step3-review-photos/09-ios-seat-map-v04-spatial.png`
+- 改后船尾/加价位/底栏：`design/step3-review-photos/10-ios-seat-map-v04-stern-premium.png`
+
+改前与改后均来自 iPhone Duo（iOS 27.1 Simulator）、相同的本地合成班次 `v04-demo`、同一份 12 席座位夹具，并选择了 1 号位；截图由 Flutter integration driver 采集，均 1398×2034 且小于 1 MB。夹具内 UUID、50000/60000 分价格和状态都是虚构演示数据，不是实际班次或真实订单。映射自检表、五态说明、运行结果及改动范围声明见 `docs/step3-build-notes.md`「V04 选位页空间改稿」。
+
+请重点复核：
+
+1. 船头朝上、船体弧形、左右舷标注、船头/过道/船尾三段；左舷 1→6、右舷 12→7，且 6/7 位于船尾角并保留模板加价标记。
+2. 中央船舱/通道为原获批模板的简化非等比例示意，没有暗示真实尺寸/结构；没有驾驶舱或登船口。
+3. 可选、已售、已锁、已选、加价五态都可通过图标和文字识别，不依赖颜色；金额来自 seat inventory 的 `priceFen`。
+4. 选位小结与锁位按钮在船图上下滚动时都完整可见。
+5. UI 改动未涉及价格、库存、编号、锁位、配额、支付或退改逻辑。
+
+本请求和 Codex 自检不代表 dot 复核或 Muse 验收。请把复核结论及未关闭项单独写回仓库；在 dot 复核前，不将改稿标记为通过。

@@ -55,13 +55,13 @@ flutter run
 - `docs/codex-dev-step1-brief-v1.md`、`docs/step1-build-notes.md`、`docs/step1-review-84828e0f87c2.md`、`docs/step1-review-request-2026-10-24.md`：第 1 步任务、实施记录与 Muse 独立评审。
 - `docs/data-model-step1-addendum.md`：只记录第 1 步新增字段与实体，不改数据模型 v1 正本。
 - `docs/data-model-step2-addendum.md`：只记录第 2 步新增字段与座位库存快照口径。
-- `docs/seat-map-spatial-redesign-status-2026-10-24.md`：选位页空间改稿的模板坐标核查与当前阻塞状态。
+- `docs/codex-seat-map-implementation-order-2026-10-24.md`、`docs/muse-seat-coordinate-derivation-approval-2026-10-24.md`、`docs/muse-seat-cabin-correction-2026-10-24.md`、`docs/seat-map-v04-implementation-receipt-2026-10-24.md`、`docs/seat-map-spatial-redesign-status-2026-10-24.md`：选位页 V04 工单、坐标与船舱口径、开工回执和待 dot 复核状态。
 - `docs/data-model-v1.md`：核心实体、关系和金额/时间口径。
 - `docs/p0-flow-v1.md`、`docs/fish-library-v1.md`：页面流程与鱼种库。
 - `design/review-photos-v2/`：十屏独立 PNG 评审图。
 - `design/step1-review-photos/`：第 1 步截图；`01`–`06` 是 Flutter Web 移动视口预览，`07`–`11` 是 iOS 模拟器设备冒烟证据。
 - `design/step2-review-photos/`：第 2 步发班、活动列表和活动详情的 iOS 模拟器截图。
-- `design/step3-review-photos/`：第 3 步 01–05 为 Flutter Web 手机视口预览；07–10 为 iOS 模拟器选位、确认订单和订单详情截图，另含第 2 步活动详情整页长图。
+- `design/step3-review-photos/`：第 3 步 01–05 为 Flutter Web 手机视口预览；07–10 含 iOS 模拟器交易流程图；另有 `v04-before-ios-seat-map-*` 改前对照和 `09-ios-seat-map-v04-spatial.png`、`10-ios-seat-map-v04-stern-premium.png` 改后原生截图，供 dot 独立复核。
 - `design/step4-review-photos/`：第 4 步船长行程与钓友行程详情的 iOS 模拟器截图。
 
 ## 协作规矩

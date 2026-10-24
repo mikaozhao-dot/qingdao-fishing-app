@@ -24,3 +24,7 @@
 - `docs/codex-seat-map-spatial-redesign-order-2026-10-24.md`
 - `docs/muse-seat-coordinate-derivation-approval-2026-10-24.md`
 - `docs/codex-seat-map-implementation-order-2026-10-24.md`
+
+## Muse 口径修正（af19d5e）
+
+Muse 后续回注 `docs/muse-seat-cabin-correction-2026-10-24.md` 优先于本回执中“无舱室”的早期计划：保留原获批通用模板的中央船舱/通道示意，注明非等比例；仍不画驾驶舱、登船口及其他无依据结构。本实现与截图按该修正交付。回执只记录接单，不表示实现通过或验收完成。

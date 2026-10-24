@@ -39,4 +39,4 @@
 
 ## CI 与评审状态
 
-本地自检不代表 Muse 验收。提交推到 `main` 后的 CI 结果待确认；Muse 独立评审请求见 `docs/step3-review-request-2026-10-24.md`。iOS 模拟器截图仍是未关闭项，真实支付与保险出单仍待商户和保险签约后另行验收。
+GitHub Actions [run 8](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40071460766) 对提交 `78214bbb1049d2064d40ec67827fafab0e56f208` 的 analyze、Android debug APK 与 iOS Simulator 构建三项均成功。本机自检和 CI 成功都不代表 Muse 验收。Muse 独立评审请求见 `docs/step3-review-request-2026-10-24.md`。iOS 模拟器界面截图仍是未关闭项，真实支付与保险出单仍待商户和保险签约后另行验收。

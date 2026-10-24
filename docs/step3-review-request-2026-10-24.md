@@ -12,7 +12,7 @@
 4. 保险入口只对已支付订单开放；外链仅为 `.invalid` 沙盒地址；保费没有计入平台订单。
 5. Flutter 活动详情至选位、确认、沙盒支付、订单详情与订单列表流程；船长端不能为自己的班次开钓友选位流程。
 6. 复核 `design/step3-review-photos/` 中 5 张图。前 4 张是 390×844 Flutter Web 手机视口预览，第 5 张是第 2 步活动详情 390×2200 整页预览，均小于 1 MB。它们不是 iOS 模拟器截图；本机没有可用的 `Simulator.app`，任务书要求的 3 张 iOS 模拟器截图仍需独立补验。
-7. 核对推送后 GitHub Actions 的 analyze、Android debug APK 和 iOS Simulator 构建结果；不要把本机 iOS 目标构建视为 CI 或 UI 验收。
+7. 核对 GitHub Actions [run 8](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40071460766) 的 analyze、Android debug APK 和 iOS Simulator 构建结果（三项目前均显示成功）；不要把本机 iOS 目标构建或 CI 绿灯视为 UI 验收。
 
 ## Codex 自检材料
 

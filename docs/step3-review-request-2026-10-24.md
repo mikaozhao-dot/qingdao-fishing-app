@@ -63,3 +63,17 @@
 5. 013 迁移仅影响新模板/新班次，旧库存快照和既有订单不追改。
 
 本机验证记录与模板价格隔离核验见 docs/step3-build-notes.md。请回复实际复核证据、问题和未关闭项，并保留状态“待评审”直至独立结论入仓。
+
+## 2026-10-25 V04 定点修复：请求 Muse / dot 复核
+
+针对 `docs/dot-page-design-review-2026-10-24.md` 中 R-V04-1、R-V04-2、R-V04-3，修复实现和证据清单见 `docs/v04-targeted-repair-followup-2026-10-25.md`。请复核旧航次迁移前后布局/价格快照、4+8 与 8+4 的完整船图及真实库存分离、紧凑屏触控目标互不重叠且点击映射真实库存 ID。仓库已加入迁移/服务端接受用例、Flutter UI 测试和可复现的 iOS Simulator 集成测试。
+
+快速查看原生图（704×1024 JPEG，均小于 1 MB）：
+
+- `design/step3-review-photos/15-v04-quota-4-plus-8-before-review.jpg`：4+8，调额前，线下位不可选。
+- `design/step3-review-photos/16-v04-quota-4-plus-8-after-seat-5-review.jpg`：4+8，开放 5 号后，旧航次 5 号保持原基础价格。
+- `design/step3-review-photos/17-v04-quota-8-plus-4-current-review.jpg`：新航次 8+4，完整 12 位布局，只有 8 个线上库存。
+
+对应无损原 PNG 为同名前缀文件（1398×2034；约 1.4 MB）。三份原生 Simulator 截图与本机验证记录见 follow-up 文档。本请求不是 dot/Muse 结论，状态应保持“待独立复核”。
+
+main 的创始人裁定回注 `docs/muse-draft-withdrawal-and-confirmation-2026-10-24.md`（`92bb66f`）已确认 Luna 设计，并要求船尾三台发动机图形。本轮已按该较新指示更新实现和截图。请 Muse / dot 在技术独立复核之外，单独核对本次截图与该视觉基准是否一致；不要把技术测试结果等同于创始人最终视觉验收。

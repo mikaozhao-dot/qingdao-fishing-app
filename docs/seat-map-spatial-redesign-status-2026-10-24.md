@@ -38,3 +38,9 @@
 - 最新 iOS 模拟器截图：12-ios-v04-founder-approved-default.png、13-ios-v04-founder-approved-seat-5.png；缩小版 14-v04-seat-5-review-preview.png 为 704×1024、327448 字节。完整截图为 1398×2034 原始 PNG。
 - iPhone Duo（iOS 27.1）Flutter integration walkthrough 通过：整船/五态/四个加价星标可见；选择 5 号后显示左舷船尾和合成 ¥600/位；座位、发动机及固定底部确认按钮同屏。Flutter analyzer 和 iOS Simulator build 的本次结果见 docs/step3-build-notes.md。
 - 当前：等待 Muse / dot 独立复核代码与截图。创始人已确认参考图方向，但没有把这次实现标为最终视觉验收。
+
+## 2026-10-25：dot 定点意见修复状态
+
+dot 在 `docs/dot-page-design-review-2026-10-24.md` 追加的 R-V04-1 / R-V04-2 / R-V04-3 已按限定范围实现：班次保存完整布局快照；老航次 013 前后线下 5/8 的 premium 口径不因调入平台而变；满 12 席船图由航次模板布局驱动，线上库存仍只来自平台库存 API；触控位置动态排布并通过两个手机尺寸无重叠检查。对应源码、迁移、自动测试、原生截图与运行证据见 `docs/v04-targeted-repair-followup-2026-10-25.md`。
+
+**当前状态：Codex 定点修复已完成并交 Muse / dot 复核；尚无独立评审结论，不代表创始人视觉验收。** main 的 `docs/muse-draft-withdrawal-and-confirmation-2026-10-24.md`（`92bb66f`）回注创始人已确认 Luna 立体设计及三台发动机图形，本轮已按此更新实际页面和截图。

@@ -146,3 +146,15 @@ GitHub Actions [run 8](https://github.com/mikaozhao-dot/qingdao-fishing-app/acti
 - 本轮原生走查命令为 `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/seat_map_v04_rework_walkthrough_test.dart -d 48A68998-36B2-45B6-B142-9D66A80884BA --no-pub`，通过。临时 integration_test 和 driver 在截图采集后移除，未作为长期测试套件提交。
 - 本轮实现不改真实座位库存 ID、座号、锁位、订单、配额、支付、退改或保险交易流程。013 只更新模板用于新班次，旧库存与已存在订单不追溯改价。
 - 状态：待 Muse / dot 独立复核；创始人已批准参考图方向，不把该参考图等同于新实现通过。
+
+## 2026-10-25：V04 定点复核问题修复
+
+针对 `docs/dot-page-design-review-2026-10-24.md` 中 R-V04-1、R-V04-2 与 R-V04-3 追加了针对性修复和可复现用例；完整变更范围、证据索引与待复核事项见 `docs/v04-targeted-repair-followup-2026-10-25.md`。本记录只说明 Codex 实施和本机验证，不构成 Muse 或 dot 的独立验收。
+
+- 新增 `server/migrations/014_departure_seat_layout_snapshot.sql`，为航次保存不可变座位布局；旧航次迁移回填保留原线下席位的 premium 口径。线下席首次调入平台时依航次快照计算价格，不再读取当前全局模板。
+- 座位 API 返回完整航次布局及模板总席数，同时保留平台库存为独立列表；客户端按完整布局绘制 12 位船图，线下/未开放座显示为不可点占位，不伪造库存 ID。
+- 触控目标改为动态沿两舷分布。小屏短视口可滚动查看船尾；Flutter UI 测试对 320×568 与 390×844 视口逐对验证 12 个触控矩形不重叠，检查线下位不可选和选中座位对应的真实库存 ID。
+- 增加 4+8 调额前、4+8 开放 5 号后及新 8+4 班次三组 iOS Simulator 集成截图。完整原图保留；快速审阅 JPEG 均小于 1 MB。
+- 最终自检：`flutter analyze --no-pub` 通过；`flutter test --no-pub` 通过（2 项）；`flutter build ios --simulator --no-codesign --no-pub` 通过；原生 iOS 集成截图测试通过；`npm run check` 通过；空 PostgreSQL 17 数据库应用 001–014 后，Step 4 接受脚本通过 **201 项断言**。
+- main 新增的 `docs/muse-draft-withdrawal-and-confirmation-2026-10-24.md`（`92bb66f`）回注创始人已确认 Luna 设计，并明确视觉基准采用俯视立体示意和三台发动机图形。本次代码与最新重拍截图据此更新；此前基于单台参考 PNG 的状态文字仅是历史回执。
+- 当前状态：修复证据已提交请求复核；待 Muse / dot 独立复查。不代表创始人视觉验收通过。

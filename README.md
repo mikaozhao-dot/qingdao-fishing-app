@@ -57,6 +57,7 @@ flutter run
 - `docs/data-model-step2-addendum.md`：只记录第 2 步新增字段与座位库存快照口径。
 - `docs/codex-seat-map-v04-rework-order-2026-10-24.md`、`docs/muse-seat-premium-scope-reply-2026-10-24.md`、`docs/codex-seat-map-implementation-order-2026-10-24.md`：V04 草图返工、船尾四位同额加价和当前执行边界；2026-10-25 创始人最新选位参考追加在 V04 返工令末尾。
 - `docs/seat-map-v04-implementation-receipt-2026-10-24.md`、`docs/seat-map-spatial-redesign-status-2026-10-24.md`、`docs/step3-build-notes.md`、`docs/step3-review-request-2026-10-24.md`：选位页历史回执、当前返工进度、构建证据与 dot 复核请求。
+- `docs/v04-targeted-repair-followup-2026-10-25.md`：V04 旧航次座位快照、部分配额船图和触控重叠定点修复，以及待 Muse / dot 复核的证据。
 - `server/migrations/013_four_stern_premium_seats.sql`：将 12 位模板中的船尾 5、6、7、8 位设为可加价，不回写既有库存。
 - `docs/data-model-v1.md`：核心实体、关系和金额/时间口径。
 - `docs/p0-flow-v1.md`、`docs/fish-library-v1.md`：页面流程与鱼种库。

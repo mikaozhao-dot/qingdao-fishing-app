@@ -834,8 +834,11 @@ String _dateTime(dynamic value) {
 }
 
 String _departureStatus(String status) => switch (status) {
-  'open' || 'forming' || 'handling_shortfall' => '待确认',
-  'confirmed' => '已成团',
+  'open' || 'forming' => '待确认',
+  'handling_shortfall' => '待处置 · 未达成行门槛',
+  'confirmed' => '平台已成行',
+  'captain_confirmed' => '船长已确认成行',
+  'weather_cancelled' => '天气取消',
   'in_progress' => '出海中',
   'completed' => '已返航',
   'cancelled' => '已取消',

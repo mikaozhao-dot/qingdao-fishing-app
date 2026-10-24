@@ -8,6 +8,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const NAME_PATTERN = /^[\p{Script=Han}·]{2,32}$/u;
 const PHONE_PATTERN = /^1[3-9]\d{9}$/;
 const ALLOWED_OUTCOMES = new Set(['success', 'failure', 'timeout']);
+const formationCutoffOpenSql =
+  "((((departure_at AT TIME ZONE 'Asia/Shanghai')::date - 1) + time '18:00') AT TIME ZONE 'Asia/Shanghai') > now()";
 
 const sendError = (reply, statusCode, message) => reply.code(statusCode).send({ error: message });
 const holdKey = (seatId) => `${HOLD_KEY_PREFIX}${seatId}`;
@@ -411,7 +413,8 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     try {
       await expireHolds(pool, redis, request.params.id);
       const departure = await pool.query(
-        `SELECT id FROM departures WHERE id=$1 AND status='open' AND departure_at>now() AND booking_deadline>now()`,
+        `SELECT id FROM departures WHERE id=$1 AND status='open' AND departure_at>now()
+           AND booking_deadline>now() AND ${formationCutoffOpenSql}`,
         [request.params.id],
       );
       if (!departure.rowCount) return sendError(reply, 404, '活动不存在或已截止报名');
@@ -447,7 +450,8 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     try {
       await client.query('BEGIN');
       const departure = await client.query(
-        `SELECT id FROM departures WHERE id=$1 AND status='open' AND departure_at>now() AND booking_deadline>now() FOR UPDATE`,
+        `SELECT id FROM departures WHERE id=$1 AND status='open' AND departure_at>now()
+           AND booking_deadline>now() AND ${formationCutoffOpenSql} FOR UPDATE`,
         [request.params.id],
       );
       if (!departure.rowCount) {
@@ -557,6 +561,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       const departure = await client.query(
         `SELECT id FROM departures
          WHERE id=$1 AND status='open' AND departure_at>now() AND booking_deadline>now()
+           AND ${formationCutoffOpenSql}
          FOR UPDATE`,
         [hold.departure_id],
       );

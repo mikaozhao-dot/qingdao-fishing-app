@@ -3,6 +3,8 @@ import { createSecurity } from './security.js';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const sendError = (reply, statusCode, message) => reply.code(statusCode).send({ error: message });
 const validUuid = (value) => typeof value === 'string' && UUID_PATTERN.test(value);
+const confirmationAtSql = (alias = 'd') =>
+  `((((${alias}.departure_at AT TIME ZONE 'Asia/Shanghai')::date - 1) + time '18:00') AT TIME ZONE 'Asia/Shanghai')`;
 
 async function withTransaction(pool, operation) {
   const client = await pool.connect();
@@ -40,11 +42,16 @@ async function requireCaptainOwnership(client, departureId, userId, lock = false
 async function loadFormationAccounts(client, departureId) {
   const result = await client.query(
     `SELECT d.id,d.minimum_sailing_total_fen,d.departure_at,d.status,
+       ${confirmationAtSql('d')} AS confirmation_at,
        COALESCE((
          SELECT SUM(ROUND((o.seat_fee_fen-o.discount_fen)::numeric * 0.9))
          FROM booking_orders o
          WHERE o.departure_id=d.id AND o.status='paid'
        ),0)::bigint AS platform_ticket_net_fen,
+       COALESCE((SELECT SUM(a.amount_fen) FROM departure_formation_adjustments a
+         WHERE a.departure_id=d.id AND a.adjustment_type='penalty_pool'),0)::bigint AS penalty_pool_fen,
+       COALESCE((SELECT SUM(a.amount_fen) FROM departure_formation_adjustments a
+         WHERE a.departure_id=d.id AND a.adjustment_type='successful_supplement'),0)::bigint AS successful_supplement_fen,
        COALESCE((
          SELECT SUM(amount_delta_fen)
          FROM departure_offline_ledger_entries e
@@ -56,18 +63,21 @@ async function loadFormationAccounts(client, departureId) {
   if (!result.rowCount) return null;
   const row = result.rows[0];
   const platformTicketNetFen = Number(row.platform_ticket_net_fen);
+  const penaltyPoolFen = Number(row.penalty_pool_fen);
+  const successfulSupplementFen = Number(row.successful_supplement_fen);
   const offlineDeclaredFen = Number(row.offline_declared_fen);
   const thresholdFen = Number(row.minimum_sailing_total_fen);
-  const platformVerifiableFen = platformTicketNetFen;
+  const platformVerifiableFen = platformTicketNetFen + penaltyPoolFen + successfulSupplementFen;
   return {
     departureId: row.id,
     departureStatus: row.status,
     departureAt: row.departure_at,
+    confirmationAt: row.confirmation_at,
     thresholdFen,
     platform: {
       ticketNetFen: platformTicketNetFen,
-      penaltyPoolFen: 0,
-      successfulSupplementFen: 0,
+      penaltyPoolFen,
+      successfulSupplementFen,
       verifiableTotalFen: platformVerifiableFen,
       remainingFen: Math.max(0, thresholdFen - platformVerifiableFen),
       meetsThreshold: platformVerifiableFen >= thresholdFen,
@@ -81,10 +91,66 @@ async function loadFormationAccounts(client, departureId) {
     },
     sourceCoverage: {
       platformTicketNet: 'live_paid_orders',
-      penaltyPool: 'not_implemented',
-      successfulSupplement: 'not_implemented',
+      penaltyPool: 'schema_ready_no_workflow',
+      successfulSupplement: 'schema_ready_no_workflow',
     },
   };
+}
+
+/** Capture the approved T-1 18:00 Asia/Shanghai checkpoint once per departure. */
+export async function processFormationChecks(pool, asOf = new Date(), onError = () => {}) {
+  if (!pool) return { checked: 0, deferred: 0 };
+  const due = await pool.query(
+    `SELECT d.id FROM departures d
+     WHERE d.status IN ('open','forming') AND ${confirmationAtSql('d')} <= $1
+       AND NOT EXISTS (SELECT 1 FROM departure_formation_snapshots s WHERE s.departure_id=d.id)
+     ORDER BY d.departure_at,d.id LIMIT 100`,
+    [asOf],
+  );
+  let checked = 0;
+  let deferred = 0;
+  for (const candidate of due.rows) {
+    try {
+      const outcome = await withTransaction(pool, async (client) => {
+        const departure = await client.query(
+          `SELECT d.id,d.status,${confirmationAtSql('d')} AS confirmation_at
+           FROM departures d WHERE d.id=$1 AND d.status IN ('open','forming')
+             AND ${confirmationAtSql('d')} <= $2
+             AND NOT EXISTS (SELECT 1 FROM departure_formation_snapshots s WHERE s.departure_id=d.id)
+           FOR UPDATE`,
+          [candidate.id, asOf],
+        );
+        if (!departure.rowCount) return 'already_checked';
+        const pending = await client.query(
+          `SELECT EXISTS (SELECT 1 FROM booking_orders
+             WHERE departure_id=$1 AND status='pending_payment') AS has_pending_payment`,
+          [candidate.id],
+        );
+        if (pending.rows[0].has_pending_payment) return 'deferred';
+        const accounts = await loadFormationAccounts(client, candidate.id);
+        const result = accounts.platform.meetsThreshold ? 'automatic_confirmed' : 'shortfall';
+        await client.query(
+          `INSERT INTO departure_formation_snapshots
+             (departure_id,confirmation_at,checked_at,threshold_fen,platform_ticket_net_fen,
+              penalty_pool_fen,successful_supplement_fen,platform_verifiable_fen,
+              captain_offline_declared_fen,outcome)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [candidate.id, departure.rows[0].confirmation_at, asOf, accounts.thresholdFen,
+            accounts.platform.ticketNetFen, accounts.platform.penaltyPoolFen,
+            accounts.platform.successfulSupplementFen, accounts.platform.verifiableTotalFen,
+            accounts.captainOffline.declaredFen, result],
+        );
+        await client.query('UPDATE departures SET status=$2,updated_at=now() WHERE id=$1',
+          [candidate.id, result === 'automatic_confirmed' ? 'confirmed' : 'handling_shortfall']);
+        return result;
+      });
+      if (outcome === 'deferred') deferred += 1;
+      else if (outcome !== 'already_checked') checked += 1;
+    } catch (error) {
+      onError(error);
+    }
+  }
+  return { checked, deferred };
 }
 
 function checklistFromRow(row) {
@@ -165,7 +231,7 @@ async function buildChecklist(client, departureId) {
 export async function processConfirmedChecklists(pool, onError = () => {}) {
   if (!pool) return { generated: 0 };
   const due = await pool.query(
-    "SELECT id FROM departures d WHERE d.status IN ('confirmed','in_progress','completed') " +
+    "SELECT id FROM departures d WHERE d.status IN ('confirmed','captain_confirmed','in_progress','completed') " +
       'AND NOT EXISTS (SELECT 1 FROM departure_pretrip_checklists c WHERE c.departure_id=d.id) ' +
       'ORDER BY d.departure_at,d.id LIMIT 50',
   );
@@ -174,7 +240,7 @@ export async function processConfirmedChecklists(pool, onError = () => {}) {
     try {
       await withTransaction(pool, async (client) => {
         const departure = await client.query(
-          "SELECT d.id FROM departures d WHERE d.id=$1 AND d.status IN ('confirmed','in_progress','completed') " +
+          "SELECT d.id FROM departures d WHERE d.id=$1 AND d.status IN ('confirmed','captain_confirmed','in_progress','completed') " +
             'AND NOT EXISTS (SELECT 1 FROM departure_pretrip_checklists c WHERE c.departure_id=d.id) FOR UPDATE',
           [row.id],
         );
@@ -276,10 +342,49 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
       return reply.code(result.idempotentReplay ? 200 : 201).send(result);
     });
 
+  app.post('/captain/departures/:id/formation/decision',
+    { preHandler: [requireUser, requireCaptain] }, async (request, reply) => {
+      if (!validUuid(request.params.id)) return sendError(reply, 400, '班次编号无效');
+      if (request.body?.action !== 'captain_confirmed') return sendError(reply, 400, '成行处置选项无效');
+      const basisNote = typeof request.body?.basisNote === 'string' ? request.body.basisNote.trim() : '';
+      if (!basisNote || basisNote.length > 200) return sendError(reply, 400, '请填写 1–200 字的双账确认依据');
+      const result = await withTransaction(pool, async (client) => {
+        const departure = await requireCaptainOwnership(client, request.params.id, request.user.id, true);
+        if (!departure) return { error: [404, '班次不存在'] };
+        if (departure.status !== 'handling_shortfall') return { error: [409, '当前班次不在待处置状态'] };
+        const snapshot = await client.query(
+          'SELECT outcome FROM departure_formation_snapshots WHERE departure_id=$1 FOR UPDATE',
+          [departure.id],
+        );
+        if (!snapshot.rowCount || snapshot.rows[0].outcome !== 'shortfall') {
+          return { error: [409, '缺少服务端成团核算快照'] };
+        }
+        const accounts = await loadFormationAccounts(client, departure.id);
+        if (accounts.platform.verifiableTotalFen + accounts.captainOffline.declaredFen < accounts.thresholdFen) {
+          return { error: [409, '平台账与船长登记线下账合计仍低于成行门槛'] };
+        }
+        await client.query(
+          `INSERT INTO departure_captain_formation_decisions
+             (departure_id,captain_user_id,threshold_fen,platform_verifiable_fen,
+              captain_offline_declared_fen,basis_note)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [departure.id, request.user.id, accounts.thresholdFen, accounts.platform.verifiableTotalFen,
+            accounts.captainOffline.declaredFen, basisNote],
+        );
+        await client.query("UPDATE departures SET status='captain_confirmed',updated_at=now() WHERE id=$1",
+          [departure.id]);
+        return { status: 'captain_confirmed', platformVerifiableFen: accounts.platform.verifiableTotalFen,
+          captainOfflineDeclaredFen: accounts.captainOffline.declaredFen,
+          thresholdFen: accounts.thresholdFen, platformGuarantee: false };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return result;
+    });
+
   app.get('/captain/fulfillment', { preHandler: [requireUser, requireCaptain] }, async (request) => {
     const result = await pool.query(
       "SELECT d.id,d.status,d.trip_type,d.departure_at,d.meeting_at,d.marina_code " +
-      "FROM departures d WHERE d.captain_user_id=$1 AND d.status IN ('confirmed','in_progress','completed') " +
+      "FROM departures d WHERE d.captain_user_id=$1 AND d.status IN ('confirmed','captain_confirmed','in_progress','completed') " +
       'ORDER BY d.departure_at DESC LIMIT 100',
       [request.user.id],
     );
@@ -300,7 +405,7 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
     const result = await withTransaction(pool, async (client) => {
       const departure = await requireCaptainOwnership(client, request.params.id, request.user.id);
       if (!departure) return { error: [404, '班次不存在'] };
-      if (!['confirmed', 'in_progress', 'completed'].includes(departure.status)) {
+      if (!['confirmed', 'captain_confirmed', 'in_progress', 'completed'].includes(departure.status)) {
         return { error: [409, '行前清单仅适用于已确认的班次'] };
       }
       const checklist = await buildChecklist(client, departure.id);
@@ -327,7 +432,7 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
     const result = await withTransaction(pool, async (client) => {
       const departure = await requireCaptainOwnership(client, request.params.id, request.user.id, true);
       if (!departure) return { error: [404, '班次不存在'] };
-      if (event === 'departed' && departure.status !== 'confirmed') {
+      if (event === 'departed' && !['confirmed', 'captain_confirmed'].includes(departure.status)) {
         return { error: [409, '班次确认后才能出航打卡'] };
       }
       if (event === 'returned' && departure.status !== 'in_progress') {
@@ -354,7 +459,7 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
       const exported = await withTransaction(pool, async (client) => {
         const departure = await requireCaptainOwnership(client, request.params.id, request.user.id, true);
         if (!departure) return { error: [404, '班次不存在'] };
-        if (!['confirmed', 'in_progress', 'completed'].includes(departure.status)) {
+        if (!['confirmed', 'captain_confirmed', 'in_progress', 'completed'].includes(departure.status)) {
           return { error: [409, '班次确认后才能导出名单'] };
         }
         const passengers = await client.query(
@@ -430,6 +535,9 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
   const interval = setInterval(() => {
     processConfirmedChecklists(pool, (error) => {
       app.log.error({ err: error }, 'Step 4 checklist pass failed');
+    });
+    processFormationChecks(pool, new Date(), (error) => {
+      app.log.error({ err: error }, 'Step 4 formation check failed');
     });
   }, 60_000);
   interval.unref?.();

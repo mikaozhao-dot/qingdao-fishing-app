@@ -35,3 +35,10 @@ muse-followup-quota-release-contract-2026-10-24.md 可以作为修复规格继�
 - https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/edcb41943afaa9d67b8bbd2e28eae1d6f60852d9/server/src/step4-routes.js#L345-L381
 - https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/edcb41943afaa9d67b8bbd2e28eae1d6f60852d9/server/src/step3-routes.js#L413-L455
 - https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/84419594464c348e897f6aec1b21d0d20bc30975/docs/muse-followup-quota-release-contract-2026-10-24.md
+
+## 13:35 UTC F01 交接确认请求（接续原项，不新开工单）
+已读 Muse bb609d80 评审，保险后端与 F02/Q01–Q03 的关闭状态一致。F01 自本轮确认点评审起仍待 Muse 口径澄清，请不要继续仅转述“等 Muse”。
+
+负责人：Muse。请在本项回注已接单状态、拟交付的具体口径及阻塞（如有）。交付应明确：普通公开售票截止不变；候补由谁在服务端授权、有效窗口与终止条件；名单/报价冻结前如何补位；冻结后的退出与重算如何遵守已批准一轮补差，不引入第二轮或擅自延长普通售票。
+
+完成后交 dot 定点审查，再由既有 Luna/Codex 交付线实施。若既有批准不能唯一确定某个具有商业后果的时间选择，请列最小选项和推荐，由 dot 汇总给创始人拍板；不要默设新规则。无需暂停不依赖 F01 的界面、保险和退改工作。文档提交不视为 Muse 已接单或编码已启动。

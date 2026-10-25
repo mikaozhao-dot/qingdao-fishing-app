@@ -205,6 +205,7 @@ class _Step4CaptainWorkspaceState extends State<Step4CaptainWorkspace> {
             (item) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: _CaptainTripCard(
+                key: ValueKey('captain-trip-${item['id']}'),
                 item: item,
                 onCheckin: (event) => _checkin(item, event),
                 onManifest: (format) => _shareManifest(item, format),
@@ -308,6 +309,7 @@ class _Step4AnglerWorkspaceState extends State<Step4AnglerWorkspace> {
             (item) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: _OrderTile(
+                key: ValueKey('order-${item['id']}'),
                 item: item,
                 onTap: () async {
                   await Navigator.of(context).push(
@@ -559,7 +561,14 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
                           const Expanded(
                             child: Text('出海安排', style: _sectionTitle),
                           ),
-                          _StagePill(label: _departureStatus(status)),
+                          _StagePill(
+                            label: _departureStatus(
+                              status,
+                              preConfirmationMeetsThreshold:
+                                  departure['preConfirmationMeetsThreshold']
+                                      as bool?,
+                            ),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 12),
@@ -585,6 +594,11 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
                     message:
                         '平台可核验金额尚差 ¥${_yuan(formationShortfallFen.round())}，班次待处置。',
                   ),
+                ],
+                if (status == 'captain_confirmed' &&
+                    departure['platformGuarantee'] == false) ...[
+                  const SizedBox(height: 10),
+                  const _NoticeCard(message: '平台未补足差额，也不担保整船收入。'),
                 ],
                 if (_supplementRound.isNotEmpty) ...[
                   const SizedBox(height: 10),
@@ -620,6 +634,7 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
                   ),
                 ] else if ([
                   'confirmed',
+                  'captain_confirmed',
                   'in_progress',
                   'completed',
                 ].contains(status)) ...[
@@ -634,6 +649,7 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
 
 class _CaptainTripCard extends StatelessWidget {
   const _CaptainTripCard({
+    super.key,
     required this.item,
     required this.onCheckin,
     required this.onManifest,
@@ -676,7 +692,12 @@ class _CaptainTripCard extends StatelessWidget {
               _StagePill(label: _departureStatus(status)),
             ],
           ),
-          if (status == 'confirmed') ...[
+          if (['confirmed', 'captain_confirmed'].contains(status)) ...[
+            if (status == 'captain_confirmed' &&
+                item['platformGuarantee'] == false) ...[
+              const SizedBox(height: 10),
+              const _NoticeCard(message: '平台未补足差额，也不担保整船收入。'),
+            ],
             const SizedBox(height: 14),
             Wrap(
               spacing: 8,
@@ -695,7 +716,9 @@ class _CaptainTripCard extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: onInsuranceGate,
                   icon: const Icon(Icons.verified_user_outlined),
-                  label: const Text('登船门禁'),
+                  label: Text(
+                    status == 'captain_confirmed' ? '核对登船门禁' : '登船门禁',
+                  ),
                 ),
               ],
             ),
@@ -708,14 +731,6 @@ class _CaptainTripCard extends StatelessWidget {
               onPressed: () => onCheckin('returned'),
               icon: const Icon(Icons.anchor_outlined),
               label: const Text('返航打卡'),
-            ),
-          ],
-          if (status == 'captain_confirmed') ...[
-            const SizedBox(height: 14),
-            OutlinedButton.icon(
-              onPressed: onInsuranceGate,
-              icon: const Icon(Icons.verified_user_outlined),
-              label: const Text('核对登船门禁'),
             ),
           ],
           if (status == 'completed') ...[
@@ -750,7 +765,7 @@ class _CaptainTripCard extends StatelessWidget {
 }
 
 class _OrderTile extends StatelessWidget {
-  const _OrderTile({required this.item, required this.onTap});
+  const _OrderTile({super.key, required this.item, required this.onTap});
   final Map<String, dynamic> item;
   final VoidCallback onTap;
 
@@ -1360,18 +1375,24 @@ String _dateTime(dynamic value) {
   return '$month月$day日 $hour:$minute';
 }
 
-String _departureStatus(String status) => switch (status) {
-  'open' || 'forming' => '待确认',
-  'handling_shortfall' => '待处置 · 未达成行门槛',
-  'formation_overdue' => '已过出航时间 · 待人工处理',
-  'confirmed' => '平台已成行',
-  'captain_confirmed' => '船长已确认成行',
-  'weather_cancelled' => '天气取消',
-  'in_progress' => '出海中',
-  'completed' => '已返航',
-  'cancelled' => '已取消',
-  _ => '待发布',
-};
+String _departureStatus(String status, {bool? preConfirmationMeetsThreshold}) =>
+    switch (status) {
+      'open' || 'forming' =>
+        preConfirmationMeetsThreshold == true
+            ? '已达最低成行 · 待确认'
+            : preConfirmationMeetsThreshold == false
+            ? '待确认 · 尚未达最低门槛'
+            : '待确认',
+      'handling_shortfall' => '待处置 · 未达成行门槛',
+      'formation_overdue' => '已过出航时间 · 待人工处理',
+      'confirmed' => '平台已成行',
+      'captain_confirmed' => '船长已确认成行',
+      'weather_cancelled' => '天气取消',
+      'in_progress' => '出海中',
+      'completed' => '已返航',
+      'cancelled' => '已取消',
+      _ => '待发布',
+    };
 String _orderStatus(String status) => switch (status) {
   'paid' => '已支付',
   'cancelled' => '已取消',

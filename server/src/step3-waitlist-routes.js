@@ -269,7 +269,7 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
           penaltyFen: Number(order.cancellation_penalty_fen ?? 0),
         };
       }
-      if (order.status !== 'paid' || order.departure_status !== 'open'
+      if (order.status !== 'paid' || !['open', 'confirmed', 'captain_confirmed'].includes(order.departure_status)
           || new Date(order.departure_at) <= new Date()) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '当前订单不能取消');
@@ -337,11 +337,13 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
     } finally {
       client.release();
     }
-    result.waitlistAuthorizations = await dispatchWaitlistCandidates(pool, redis, departureId, new Date(), clockNow)
-      .catch((error) => {
-        request.log.error({ err: error }, 'Waitlist dispatch after cancellation failed');
-        return [];
-      });
+    result.waitlistAuthorizations = result.waitlistEligible
+      ? await dispatchWaitlistCandidates(pool, redis, departureId, new Date(), clockNow)
+        .catch((error) => {
+          request.log.error({ err: error }, 'Waitlist dispatch after cancellation failed');
+          return [];
+        })
+      : [];
     return result;
   });
 }

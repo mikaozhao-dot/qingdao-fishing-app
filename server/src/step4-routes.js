@@ -1125,6 +1125,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       items: result.rows.map((row) => ({
         id: row.id,
         status: row.status,
+        platformGuarantee: row.status === 'captain_confirmed' ? false : null,
         tripType: row.trip_type,
         departureAt: row.departure_at,
         meetingAt: row.meeting_at,
@@ -1146,6 +1147,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
         departure: {
           id: departure.id,
           status: departure.status,
+          platformGuarantee: departure.status === 'captain_confirmed' ? false : null,
           departureAt: departure.departure_at,
           meetingAt: departure.meeting_at,
           marinaCode: departure.marina_code,
@@ -1233,10 +1235,26 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       'SELECT o.id,o.status,d.id AS departure_id,d.status AS departure_status,d.departure_at,d.meeting_at,' +
       'd.marina_code,d.trip_type,c.checklist,' +
       "CASE WHEN d.status='handling_shortfall' AND s.outcome='shortfall' " +
-      'THEN GREATEST(s.threshold_fen-s.platform_verifiable_fen,0) ELSE NULL END AS formation_shortfall_fen ' +
+      'THEN GREATEST(s.threshold_fen-s.platform_verifiable_fen,0) ELSE NULL END AS formation_shortfall_fen,' +
+      `CASE WHEN d.status IN ('open','forming') AND ${confirmationAtSql('d')} > now() THEN
+        COALESCE(formation_tickets.ticket_net_fen,0)
+          + COALESCE(formation_adjustments.penalty_pool_fen,0)
+          + COALESCE(formation_adjustments.successful_supplement_fen,0)
+          >= d.minimum_sailing_total_fen
+        ELSE NULL END AS pre_confirmation_meets_threshold ` +
       'FROM booking_orders o JOIN departures d ON d.id=o.departure_id ' +
       'LEFT JOIN departure_formation_snapshots s ON s.departure_id=d.id ' +
       'LEFT JOIN departure_pretrip_checklists c ON c.departure_id=d.id ' +
+      `LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(ROUND((paid.seat_fee_fen-paid.discount_fen)::numeric * 0.9)),0)::bigint AS ticket_net_fen
+        FROM booking_orders paid WHERE paid.departure_id=d.id AND paid.status='paid'
+      ) formation_tickets ON TRUE ` +
+      `LEFT JOIN LATERAL (
+        SELECT
+          COALESCE(SUM(a.amount_fen) FILTER (WHERE a.adjustment_type='penalty_pool'),0)::bigint AS penalty_pool_fen,
+          COALESCE(SUM(a.amount_fen) FILTER (WHERE a.adjustment_type='successful_supplement'),0)::bigint AS successful_supplement_fen
+        FROM departure_formation_adjustments a WHERE a.departure_id=d.id
+      ) formation_adjustments ON TRUE ` +
       'WHERE o.id=$1 AND o.buyer_user_id=$2',
       [request.params.id, request.user.id],
     );
@@ -1253,6 +1271,8 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
         tripType: row.trip_type,
         formationShortfallFen: row.formation_shortfall_fen === null
           ? null : Number(row.formation_shortfall_fen),
+        preConfirmationMeetsThreshold: row.pre_confirmation_meets_threshold,
+        platformGuarantee: row.departure_status === 'captain_confirmed' ? false : null,
       },
       checklist: row.checklist,
     };

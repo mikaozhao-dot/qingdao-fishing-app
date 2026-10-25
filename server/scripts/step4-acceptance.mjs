@@ -240,6 +240,60 @@ async function makeOpenCancellationFixture(captain, boatId, label, hoursUntilDep
   return { departureId, orderId, seatId: seat.id, user };
 }
 
+async function makeConfirmedCancellationFixture(captain, boatId, label, hoursUntilDeparture, status) {
+  const departureAt = new Date(Date.now() + hoursUntilDeparture * 3_600_000);
+  const thresholdFen = status === 'captain_confirmed' ? 100000 : 90000;
+  const departureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',$3::timestamptz,$3::timestamptz-interval '30 minutes',
+        $3::timestamptz+interval '7 hours','qd_coast','xiaogang',$4,50000,
+        $3::timestamptz-interval '30 minutes',$5,12,2,0,false) RETURNING id`,
+    [boatId, captain.id, departureAt.toISOString(), thresholdFen, status],
+  )).rows[0].id;
+  const seats = (await pool.query(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel)
+     VALUES ($1,1,50000,'port','mid','booked','platform'),
+       ($1,2,50000,'starboard','mid','booked','platform') RETURNING id,seat_number,price_fen`,
+    [departureId],
+    )).rows.sort((left, right) => left.seat_number - right.seat_number);
+  const firstUser = await makeUser(`${label}取消人`);
+  const remainingUser = await makeUser(`${label}保留人`);
+  const orderId = await makePaidOrder(firstUser.id, departureId, seats.find((seat) => seat.seat_number === 1));
+  const remainingOrderId = await makePaidOrder(
+    remainingUser.id, departureId, seats.find((seat) => seat.seat_number === 2),
+  );
+  const confirmationAt = formationConfirmationAt(departureAt);
+  const captainOfflineFen = status === 'captain_confirmed' ? 10000 : 0;
+  await pool.query(
+    `INSERT INTO departure_formation_snapshots
+       (departure_id,confirmation_at,threshold_fen,platform_ticket_net_fen,penalty_pool_fen,
+        successful_supplement_fen,platform_verifiable_fen,captain_offline_declared_fen,outcome)
+     VALUES ($1,$2,$3,90000,0,0,90000,$4,$5)`,
+    [departureId, confirmationAt, thresholdFen, captainOfflineFen,
+      status === 'captain_confirmed' ? 'shortfall' : 'automatic_confirmed'],
+  );
+  if (status === 'captain_confirmed') {
+    await pool.query(
+      `INSERT INTO departure_offline_ledger_entries
+         (departure_id,captain_user_id,amount_delta_fen,note,request_key)
+       VALUES ($1,$2,$3,'验收模拟线下收入',$4)`,
+      [departureId, captain.id, captainOfflineFen, `${label}-offline`],
+    );
+    await pool.query(
+      `INSERT INTO departure_captain_formation_decisions
+         (departure_id,captain_user_id,threshold_fen,platform_verifiable_fen,
+          captain_offline_declared_fen,basis_note)
+       VALUES ($1,$2,$3,90000,$4,'验收模拟线下账依据')`,
+      [departureId, captain.id, thresholdFen, captainOfflineFen],
+    );
+  }
+  return { departureId, orderId, remainingOrderId, seatId: seats[0].id, remainingSeatId: seats[1].id, user: firstUser };
+}
+
 async function makeSupplementFixture(captain, boatId, label) {
   const departureAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
   const bookingDeadline = new Date(departureAt.getTime() - 30 * 60 * 1000);
@@ -411,7 +465,9 @@ async function makeWindowDeparture(captain, boatId, label) {
   };
 }
 
-async function createSupplementScreenshotFixture(captain, boatId, outputPath) {
+async function createSupplementScreenshotFixture(
+  captain, boatId, outputPath, captainConfirmedTrip, captainConfirmedToken,
+) {
   simulatedStep3Time = null;
   const departureAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
   const confirmationAt = formationConfirmationAt(departureAt);
@@ -461,6 +517,10 @@ async function createSupplementScreenshotFixture(captain, boatId, outputPath) {
     orderId: first.orderId,
     departureId,
     roundId: roundResponse.round.id,
+    captainToken: captain.token,
+    captainConfirmedToken,
+    captainConfirmedDepartureId: captainConfirmedTrip.departureId,
+    captainConfirmedOrderId: captainConfirmedTrip.orderId,
   }, null, 2), { mode: 0o600 });
 }
 
@@ -816,9 +876,9 @@ async function main() {
        (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
         minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
         seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
-     VALUES ($1,$2,'pro_fishing',now()+interval '24 hours',now()+interval '24 hours'-interval '30 minutes',
-        now()+interval '24 hours'+'7 hours','qd_coast','xiaogang',5000,5000,
-        now()+interval '20 hours','open',8,8,0,false) RETURNING id`,
+     VALUES ($1,$2,'pro_fishing',now()+interval '48 hours',now()+interval '48 hours'-interval '30 minutes',
+        now()+interval '48 hours'+'7 hours','qd_coast','xiaogang',5000,5000,
+        now()+interval '44 hours','open',8,8,0,false) RETURNING id`,
     [boatId, captain.id],
   )).rows[0].id;
   const formationSeats = (await pool.query(
@@ -834,8 +894,41 @@ async function main() {
   const formationOrderId = formationOrderIds[0];
   const formationBeforeCutoff = await expect('GET', `/orders/${formationOrderId}/fulfillment`, angler.token);
   check(formationBeforeCutoff.departure.status, 'open', 'the paid trip remains awaiting the server checkpoint before local 18:00');
+  check(formationBeforeCutoff.departure.preConfirmationMeetsThreshold, false,
+    'pre-checkpoint fulfillment reports the live platform amount is below threshold');
   check(formationBeforeCutoff.departure.formationShortfallFen, null,
     'no shortfall amount is exposed before the server freezes a shortfall snapshot');
+
+  const thresholdMetDepartureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',now()+interval '72 hours',now()+interval '71 hours 30 minutes',
+        now()+interval '79 hours','qd_coast','xiaogang',90000,50000,now()+interval '71 hours',
+        'open',8,2,0,false) RETURNING id`,
+    [boatId, captain.id],
+  )).rows[0].id;
+  const thresholdMetSeats = (await pool.query(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel)
+     VALUES ($1,1,50000,'port','mid','booked','platform'),
+       ($1,2,50000,'starboard','mid','booked','platform') RETURNING id,seat_number,price_fen`,
+    [thresholdMetDepartureId],
+  )).rows;
+  const thresholdMetOrderId = await makePaidOrder(
+    angler.id, thresholdMetDepartureId, thresholdMetSeats.find((seat) => seat.seat_number === 1),
+  );
+  await makePaidOrder(
+    angler.id, thresholdMetDepartureId, thresholdMetSeats.find((seat) => seat.seat_number === 2),
+  );
+  const thresholdMetBeforeCutoff = await expect(
+    'GET', `/orders/${thresholdMetOrderId}/fulfillment`, angler.token,
+  );
+  check(thresholdMetBeforeCutoff.departure.preConfirmationMeetsThreshold, true,
+    'pre-checkpoint fulfillment distinguishes a live platform amount already meeting threshold');
+  check(thresholdMetBeforeCutoff.departure.status, 'open',
+    'meeting threshold before the scheduled checkpoint remains pending rather than confirmed');
   const initialAccounts = await expect('GET',
     '/captain/departures/' + formationDepartureId + '/formation-accounts', captain.token);
   check(initialAccounts.accounts.platform.ticketNetFen, 3600,
@@ -889,6 +982,8 @@ async function main() {
   const captainConfirmedFlow = await expect('GET', `/orders/${formationOrderId}/fulfillment`, angler.token);
   check(captainConfirmedFlow.departure.status, 'captain_confirmed',
     'the trip page distinguishes a captain-confirmed departure from platform confirmation');
+  check(captainConfirmedFlow.departure.platformGuarantee, false,
+    'captain-confirmed passenger fulfillment explicitly disclaims platform guarantee');
   check(captainConfirmedFlow.departure.formationShortfallFen, null,
     'captain confirmation clears the displayed shortfall without changing the recorded snapshot');
   await expect('POST', '/captain/departures/' + formationDepartureId + '/formation/decision', captain.token,
@@ -1105,6 +1200,9 @@ async function main() {
     [departure.id, emptyDepartureId, formationDepartureId, autoDepartureId].sort(),
     'captain sees only their confirmed trips');
   check('bookedFen' in captainItems.items[0], false, 'trip list does not expose formation amount');
+  const captainConfirmedItem = captainItems.items.find((item) => item.id === formationDepartureId);
+  check(captainConfirmedItem.platformGuarantee, false,
+    'captain-confirmed trip list explicitly disclaims platform guarantee');
   const emptyTrip = await expect('GET', '/captain/departures/' + emptyDepartureId + '/fulfillment', captain.token);
   check(emptyTrip.checklist.insurance.status, 'check_before_departure', 'empty trip does not imply insurance is checked');
   check(emptyTrip.checklist.manifest.status, 'review_required', 'empty trip does not imply passenger manifest is matched');
@@ -1112,6 +1210,11 @@ async function main() {
   const detail = await expect('GET', '/captain/departures/' + departure.id + '/fulfillment', captain.token);
   check(detail.checklist.manifest.status, 'matched', 'passenger and seat counts match');
   check(detail.checklist.insurance.status, 'checked', 'issued insurance is reflected');
+  const captainConfirmedDetail = await expect(
+    'GET', '/captain/departures/' + formationDepartureId + '/fulfillment', captain.token,
+  );
+  check(captainConfirmedDetail.departure.platformGuarantee, false,
+    'captain-confirmed fulfillment detail explicitly disclaims platform guarantee');
   const orderFlow = await expect('GET', '/orders/' + orderId + '/fulfillment', angler.token);
   check(orderFlow.departure.status, 'confirmed', 'angler sees confirmed trip status');
   check(Boolean(orderFlow.checklist), true, 'angler can read the generated checklist');
@@ -1355,6 +1458,60 @@ async function main() {
     `SELECT COALESCE(SUM(amount_fen),0)::bigint AS amount FROM departure_formation_adjustments
      WHERE departure_id=$1 AND adjustment_type='penalty_pool'`, [missedDeparture.departureId],
   )).amount), 0, 'post-departure cancellation creates no penalty-pool entry');
+
+  // A paid participant may still cancel after either confirmation route. Keep the
+  // confirmed roster snapshot as historical evidence and never reopen F01 inventory.
+  for (const postConfirmation of [
+    { status: 'confirmed', hours: 12, penaltyFen: 30000, refundFen: 20000 },
+    { status: 'captain_confirmed', hours: 4, penaltyFen: 50000, refundFen: 0 },
+  ]) {
+    const fixture = await makeConfirmedCancellationFixture(
+      captain, quotaBoatId, `确认后退改-${postConfirmation.status}`, postConfirmation.hours, postConfirmation.status,
+    );
+    const frozenSnapshot = await scalar(
+      'SELECT * FROM departure_formation_snapshots WHERE departure_id=$1', [fixture.departureId],
+    );
+    const cancellation = await expect('POST', `/orders/${fixture.orderId}/cancel`, fixture.user.token, {});
+    check(cancellation.penaltyFen, postConfirmation.penaltyFen,
+      `${postConfirmation.status}: post-confirmation cancellation keeps the approved time-tier penalty`);
+    check(cancellation.refundFen, postConfirmation.refundFen,
+      `${postConfirmation.status}: post-confirmation cancellation keeps the approved time-tier refund`);
+    check(cancellation.waitlistEligible, false,
+      `${postConfirmation.status}: cancellation after the cutoff does not reopen waitlist inventory`);
+    check(cancellation.waitlistAuthorizations, [],
+      `${postConfirmation.status}: cancellation sends no post-cutoff waitlist authorization`);
+    check((await scalar('SELECT status FROM departures WHERE id=$1', [fixture.departureId])).status,
+      postConfirmation.status, `${postConfirmation.status}: one participant leaving does not rewrite departure state`);
+    check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [fixture.remainingOrderId])).status,
+      'paid', `${postConfirmation.status}: the other paid participant remains on the confirmed departure`);
+    check((await scalar('SELECT status,waitlist_released_at FROM seat_inventory WHERE id=$1', [fixture.seatId])).status,
+      'available', `${postConfirmation.status}: cancelled seat is released from the platform quota`);
+    check((await scalar('SELECT waitlist_released_at FROM seat_inventory WHERE id=$1', [fixture.seatId])).waitlist_released_at,
+      null, `${postConfirmation.status}: released seat receives no waitlist window marker`);
+    const liveAccounts = await expect(
+      'GET', `/captain/departures/${fixture.departureId}/formation-accounts`, captain.token,
+    );
+    check(liveAccounts.accounts.platform.ticketNetFen, 45000,
+      `${postConfirmation.status}: current ticket ledger reflects the remaining paid order`);
+    check(liveAccounts.accounts.platform.penaltyPoolFen, postConfirmation.penaltyFen,
+      `${postConfirmation.status}: penalty enters the live ledger once`);
+    check(await scalar('SELECT * FROM departure_formation_snapshots WHERE departure_id=$1', [fixture.departureId]),
+      frozenSnapshot, `${postConfirmation.status}: cancellation preserves the historical confirmation snapshot`);
+    if (postConfirmation.status === 'captain_confirmed') {
+      check((await scalar(
+        'SELECT count(*)::integer AS count FROM departure_captain_formation_decisions WHERE departure_id=$1',
+        [fixture.departureId],
+      )).count, 1, 'captain-confirmed cancellation preserves the original captain decision');
+    }
+    const replay = await expect('POST', `/orders/${fixture.orderId}/cancel`, fixture.user.token, {});
+    check(replay.idempotentReplay, true,
+      `${postConfirmation.status}: post-confirmation cancellation retry remains idempotent`);
+    check((await scalar(
+      `SELECT COALESCE(SUM(amount_fen),0)::bigint AS amount FROM departure_formation_adjustments
+       WHERE departure_id=$1 AND adjustment_type='penalty_pool'`, [fixture.departureId],
+    )).amount, String(postConfirmation.penaltyFen),
+    `${postConfirmation.status}: retry does not duplicate the penalty-pool entry`);
+  }
 
   // Founder-approved amount example, exercised through cancellation, waitlist,
   // order, sandbox payment, formation closeout, and the one supplement round.
@@ -2068,7 +2225,11 @@ async function main() {
 
   if (process.env.STEP4_SCREENSHOT_FIXTURE_PATH) {
     await createSupplementScreenshotFixture(
-      captain, quotaBoatId, process.env.STEP4_SCREENSHOT_FIXTURE_PATH,
+      captain,
+      quotaBoatId,
+      process.env.STEP4_SCREENSHOT_FIXTURE_PATH,
+      { departureId: formationDepartureId, orderId: formationOrderId },
+      angler.token,
     );
   }
   console.log('Step 4 acceptance passed: ' + assertions + ' assertions.');

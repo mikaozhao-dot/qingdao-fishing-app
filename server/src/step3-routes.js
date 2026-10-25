@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { createSecurity, verifyChineseIdentityNumber } from './security.js';
 import { createSandboxInsuranceAdapter, createSandboxPaymentAdapter } from './step3-adapters.js';
+import { settleSupplementPayment } from './step4-routes.js';
+import { registerStep3WaitlistRoutes } from './step3-waitlist-routes.js';
+import {
+  closeoutAtSql,
+  dispatchWaitlistCandidates,
+  effectivePaymentAtOrBeforeDeadline,
+  processWaitlistDispatches,
+} from './step3-waitlist.js';
 
 const HOLD_MS = 10 * 60 * 1000;
 const HOLD_KEY_PREFIX = 'fishing:step3:seat:';
@@ -55,6 +63,11 @@ async function lockOrderTransaction(client, orderId) {
 }
 
 async function releaseHoldInTransaction(client, holdId, terminalStatus) {
+  await client.query(
+    `UPDATE departure_waitlist_entries SET status='expired',updated_at=now()
+     WHERE hold_id=$1 AND status='authorized'`,
+    [holdId],
+  );
   const itemResult = await client.query(
     'SELECT seat_inventory_id FROM seat_hold_items WHERE hold_id=$1',
     [holdId],
@@ -111,7 +124,7 @@ async function expireHolds(pool, redis, departureId = null) {
     );
     for (const row of result.rows) {
       const candidate = await client.query(
-        `SELECT order_id FROM seat_holds
+        `SELECT order_id,departure_id FROM seat_holds
          WHERE id=$1 AND status='active' AND expires_at<=now()`,
         [row.id],
       );
@@ -138,7 +151,11 @@ async function expireHolds(pool, redis, departureId = null) {
         );
         if (!order.rowCount || order.rows[0].status === 'paid') continue;
       }
-      expired.push({ id: row.id, seatIds: await releaseHoldInTransaction(client, row.id, 'expired') });
+      expired.push({
+        id: row.id,
+        departureId: candidate.rows[0].departure_id,
+        seatIds: await releaseHoldInTransaction(client, row.id, 'expired'),
+      });
     }
     await client.query('COMMIT');
   } catch (error) {
@@ -148,6 +165,10 @@ async function expireHolds(pool, redis, departureId = null) {
     client.release();
   }
   for (const hold of expired) await deleteHoldKeys(redis, hold.id, hold.seatIds).catch(() => {});
+  for (const departureId of new Set(expired.map((hold) => hold.departureId))) {
+    await dispatchWaitlistCandidates(pool, redis, departureId).catch(() => {});
+  }
+  await processWaitlistDispatches(pool, redis).catch(() => {});
   return expired.length;
 }
 
@@ -296,6 +317,8 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
   }
   const client = await pool.connect();
   let releasedHold = null;
+  let departureId = null;
+  let responseBody = null;
   try {
     await client.query('BEGIN');
     const duplicate = await client.query(
@@ -307,20 +330,63 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
       return { statusCode: 200, body: { duplicate: true, paymentStatus: duplicate.rows[0].status } };
     }
     const paymentReference = await client.query(
-      'SELECT order_id FROM payment_transactions WHERE provider_reference=$1',
+      `SELECT order_id,purpose,supplement_participant_id FROM payment_transactions
+       WHERE provider_reference=$1`,
       [event.transactionReference],
     );
     if (!paymentReference.rowCount) {
       await client.query('ROLLBACK');
       return { statusCode: 404, body: { error: '支付记录不存在' } };
     }
+    if (paymentReference.rows[0].purpose === 'supplement') {
+      if (paymentReference.rows[0].supplement_participant_id !== event.orderId) {
+        await client.query('ROLLBACK');
+        return { statusCode: 400, body: { error: '补差订单或金额不匹配' } };
+      }
+      const target = await client.query(
+        `SELECT r.departure_id FROM departure_supplement_rounds r
+         JOIN departure_supplement_participants p ON p.round_id=r.id
+         WHERE p.id=$1`, [event.orderId],
+      );
+      if (!target.rowCount) {
+        await client.query('ROLLBACK');
+        return { statusCode: 404, body: { error: '补差记录不存在' } };
+      }
+      await client.query('SELECT id FROM departures WHERE id=$1 FOR UPDATE', [target.rows[0].departure_id]);
+      const paymentResult = await client.query(
+        `SELECT id,order_id,amount_fen,status,late_success,supplement_participant_id
+         FROM payment_transactions WHERE provider_reference=$1 FOR UPDATE`,
+        [event.transactionReference],
+      );
+      if (!paymentResult.rowCount || Number(paymentResult.rows[0].amount_fen) !== event.amountFen) {
+        await client.query('ROLLBACK');
+        return { statusCode: 400, body: { error: '补差订单或金额不匹配' } };
+      }
+      const settled = await settleSupplementPayment(client, paymentResult.rows[0], event);
+      if (settled.error) {
+        await client.query('ROLLBACK');
+        return { statusCode: settled.error[0], body: { error: settled.error[1] } };
+      }
+      await client.query('COMMIT');
+      return { statusCode: 200, body: settled };
+    }
     if (paymentReference.rows[0].order_id !== event.orderId) {
       await client.query('ROLLBACK');
       return { statusCode: 400, body: { error: '支付订单或金额不匹配' } };
     }
+    const departure = await client.query(
+      `SELECT d.id FROM departures d JOIN booking_orders o ON o.departure_id=d.id
+       WHERE o.id=$1 FOR UPDATE OF d`,
+      [event.orderId],
+    );
+    if (!departure.rowCount) {
+      await client.query('ROLLBACK');
+      return { statusCode: 404, body: { error: '订单不存在' } };
+    }
+    departureId = departure.rows[0].id;
     await lockOrderTransaction(client, event.orderId);
     const paymentResult = await client.query(
-      `SELECT id,order_id,amount_fen,status FROM payment_transactions
+      `SELECT id,order_id,amount_fen,status,late_success FROM payment_transactions
        WHERE provider_reference=$1 FOR UPDATE`,
       [event.transactionReference],
     );
@@ -333,29 +399,187 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
       await client.query('ROLLBACK');
       return { statusCode: 400, body: { error: '支付订单或金额不匹配' } };
     }
-    if (payment.status !== 'pending') {
-      await client.query('COMMIT');
-      return { statusCode: 200, body: { duplicate: true, paymentStatus: payment.status } };
-    }
     const orderResult = await client.query(
-      `SELECT id,status,hold_id,total_amount_fen FROM booking_orders WHERE id=$1 FOR UPDATE`,
+      `SELECT o.id,o.status,o.hold_id,o.total_amount_fen,o.waitlist_entry_id,
+              h.status AS hold_status,h.expires_at AS hold_expires_at,
+              w.authorization_expires_at
+       FROM booking_orders o
+       LEFT JOIN seat_holds h ON h.id=o.hold_id
+       LEFT JOIN departure_waitlist_entries w ON w.id=o.waitlist_entry_id
+       WHERE o.id=$1 FOR UPDATE OF o`,
       [event.orderId],
     );
-    if (!orderResult.rowCount || orderResult.rows[0].status !== 'pending_payment'
-        || Number(orderResult.rows[0].total_amount_fen) !== event.amountFen) {
+    if (!orderResult.rowCount || Number(orderResult.rows[0].total_amount_fen) !== event.amountFen) {
       await client.query('ROLLBACK');
       return { statusCode: 409, body: { error: '订单已结束或金额已变更' } };
     }
     const order = orderResult.rows[0];
+    if (payment.status === 'pending' && event.outcome === 'success' && order.waitlist_entry_id) {
+      const deadline = order.authorization_expires_at ?? order.hold_expires_at;
+      const receivedAt = await client.query('SELECT clock_timestamp() AS now');
+      const seatStillHeld = await client.query(
+        `SELECT count(*)::integer AS count FROM seat_inventory s
+         JOIN booking_order_seats os ON os.seat_inventory_id=s.id
+         WHERE os.order_id=$1 AND os.status='pending_payment'
+           AND s.status='held' AND s.hold_id=$2`,
+        [order.id, order.hold_id],
+      );
+      const onTime = effectivePaymentAtOrBeforeDeadline(event.createdAt, deadline)
+        && order.hold_status === 'active'
+        && new Date(order.hold_expires_at) > new Date(receivedAt.rows[0].now)
+        && Number(seatStillHeld.rows[0].count) > 0;
+      if (!onTime) {
+        if (order.hold_status === 'active') {
+          releasedHold = {
+            id: order.hold_id,
+            seatIds: await releaseHoldInTransaction(client, order.hold_id, 'expired'),
+          };
+        }
+        await client.query(
+          `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),updated_at=now()
+           WHERE id=$1 AND status='pending_payment'`, [order.id],
+        );
+        await client.query(
+          `UPDATE booking_order_seats SET status='released'
+           WHERE order_id=$1 AND status='pending_payment'`, [order.id],
+        );
+        await client.query(
+          `UPDATE payment_transactions SET status='succeeded',late_success=true,callback_event_id=$2,
+            updated_at=now(),completed_at=now() WHERE id=$1`, [payment.id, event.eventId],
+        );
+        await client.query(
+          `INSERT INTO refund_obligations
+            (order_id,payment_transaction_id,amount_fen,reason,status,attempt_count,request_key,settled_at)
+           VALUES ($1,$2,$3,'late_waitlist_payment','sandbox_succeeded',1,$4,now())
+           ON CONFLICT (payment_transaction_id,reason) DO NOTHING`,
+          [order.id, payment.id, event.amountFen, `late-waitlist:${payment.id}`],
+        );
+        await client.query(
+          `UPDATE departure_waitlist_entries SET status='expired',updated_at=now()
+           WHERE id=$1 AND status IN ('authorized','converted')`, [order.waitlist_entry_id],
+        );
+        await client.query('COMMIT');
+        responseBody = {
+          paymentStatus: 'succeeded', latePaymentRefundRequired: true,
+          refundStatus: 'sandbox_succeeded', includedInFormation: false,
+        };
+      }
+    }
+    if (payment.status !== 'pending') {
+      if (payment.status === 'timed_out' && event.outcome === 'success' && order.waitlist_entry_id) {
+        const deadline = order.authorization_expires_at ?? order.hold_expires_at;
+        const receivedAt = await client.query('SELECT clock_timestamp() AS now');
+        const seatStillHeld = await client.query(
+          `SELECT count(*)::integer AS count FROM seat_inventory s
+           JOIN booking_order_seats os ON os.seat_inventory_id=s.id
+           WHERE os.order_id=$1 AND os.status='pending_payment'
+             AND s.status='held' AND s.hold_id=$2`,
+          [order.id, order.hold_id],
+        );
+        const onTime = effectivePaymentAtOrBeforeDeadline(event.createdAt, deadline)
+          && order.hold_status === 'active'
+          && new Date(order.hold_expires_at) > new Date(receivedAt.rows[0].now)
+          && Number(seatStillHeld.rows[0].count) > 0;
+        if (onTime) {
+          // A delayed webhook for a provider payment completed within the active hold may still settle.
+          await client.query(
+            `UPDATE payment_transactions SET status='pending',callback_event_id=NULL,updated_at=now()
+             WHERE id=$1`, [payment.id],
+          );
+        } else {
+          if (order.hold_status === 'active') {
+            releasedHold = {
+              id: order.hold_id,
+              seatIds: await releaseHoldInTransaction(client, order.hold_id, 'expired'),
+            };
+          }
+          await client.query(
+            `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),updated_at=now()
+             WHERE id=$1 AND status='pending_payment'`, [order.id],
+          );
+          await client.query(
+            `UPDATE booking_order_seats SET status='released'
+             WHERE order_id=$1 AND status='pending_payment'`, [order.id],
+          );
+          await client.query(
+            `UPDATE payment_transactions SET status='succeeded',late_success=true,
+              callback_event_id=$2,updated_at=now(),completed_at=now() WHERE id=$1`,
+            [payment.id, event.eventId],
+          );
+          await client.query(
+            `INSERT INTO refund_obligations
+              (order_id,payment_transaction_id,amount_fen,reason,status,attempt_count,request_key,settled_at)
+             VALUES ($1,$2,$3,'late_waitlist_payment','sandbox_succeeded',1,$4,now())
+             ON CONFLICT (payment_transaction_id,reason) DO NOTHING`,
+            [order.id, payment.id, event.amountFen, `late-waitlist:${payment.id}`],
+          );
+          const waitlistEntryId = order.waitlist_entry_id;
+          await client.query(
+            `UPDATE departure_waitlist_entries SET status='expired',updated_at=now()
+             WHERE id=$1 AND status IN ('authorized','converted')`, [waitlistEntryId],
+          );
+          await client.query('COMMIT');
+          responseBody = {
+            paymentStatus: 'succeeded', latePaymentRefundRequired: true,
+            refundStatus: 'sandbox_succeeded', includedInFormation: false,
+          };
+        }
+      } else {
+        await client.query('COMMIT');
+        return { statusCode: 200, body: { duplicate: true, paymentStatus: payment.status } };
+      }
+    }
+    if (responseBody) {
+      // The timed-out authorization was recorded and refunded above.
+    } else if (order.status !== 'pending_payment') {
+      await client.query('ROLLBACK');
+      return { statusCode: 409, body: { error: '订单已结束或金额已变更' } };
+    }
+    if (responseBody) {
+      // Continue to post-commit cleanup.
+    } else {
     const holdResult = await client.query(
-      `SELECT id,status,expires_at FROM seat_holds WHERE id=$1 FOR UPDATE`,
+      `SELECT id,status,expires_at,waitlist_entry_id FROM seat_holds WHERE id=$1 FOR UPDATE`,
       [order.hold_id],
     );
     if (!holdResult.rowCount || holdResult.rows[0].status !== 'active'
         || new Date(holdResult.rows[0].expires_at) <= new Date()) {
-      await client.query('ROLLBACK');
-      return { statusCode: 409, body: { error: '座位锁定已失效，订单无法支付' } };
+      if (event.outcome === 'success' && order.waitlist_entry_id) {
+        await client.query(
+          `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),updated_at=now()
+           WHERE id=$1`, [order.id],
+        );
+        await client.query(
+          `UPDATE booking_order_seats SET status='released'
+           WHERE order_id=$1 AND status='pending_payment'`, [order.id],
+        );
+        await client.query(
+          `UPDATE payment_transactions SET status='succeeded',late_success=true,
+            callback_event_id=$2,updated_at=now(),completed_at=now() WHERE id=$1`,
+          [payment.id, event.eventId],
+        );
+        await client.query(
+          `INSERT INTO refund_obligations
+            (order_id,payment_transaction_id,amount_fen,reason,status,attempt_count,request_key,settled_at)
+           VALUES ($1,$2,$3,'late_waitlist_payment','sandbox_succeeded',1,$4,now())
+           ON CONFLICT (payment_transaction_id,reason) DO NOTHING`,
+          [order.id, payment.id, event.amountFen, `late-waitlist:${payment.id}`],
+        );
+        await client.query(
+          `UPDATE departure_waitlist_entries SET status='expired',updated_at=now()
+           WHERE id=$1 AND status IN ('authorized','converted')`, [order.waitlist_entry_id],
+        );
+        await client.query('COMMIT');
+        responseBody = {
+          paymentStatus: 'succeeded', latePaymentRefundRequired: true,
+          refundStatus: 'sandbox_succeeded', includedInFormation: false,
+        };
+      } else {
+        await client.query('ROLLBACK');
+        return { statusCode: 409, body: { error: '座位锁定已失效，订单无法支付' } };
+      }
     }
+    if (!responseBody) {
     const seatResult = await client.query(
       `SELECT s.id FROM seat_inventory s JOIN booking_order_seats os ON os.seat_inventory_id=s.id
        WHERE os.order_id=$1 AND os.status='pending_payment' AND s.hold_id=$2 AND s.status='held'
@@ -407,6 +631,9 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
       releasedHold = { id: order.hold_id, seatIds: await releaseHoldInTransaction(client, order.hold_id, 'released') };
     }
     await client.query('COMMIT');
+    responseBody = { paymentStatus: event.outcome === 'success' ? 'succeeded' : event.outcome === 'timeout' ? 'timed_out' : 'failed' };
+    }
+    }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     log.error({ err: error }, 'Step 3 payment callback failed');
@@ -415,7 +642,11 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
     client.release();
   }
   if (releasedHold) await deleteHoldKeys(redis, releasedHold.id, releasedHold.seatIds).catch(() => {});
-  return { statusCode: 200, body: { paymentStatus: event.outcome === 'success' ? 'succeeded' : event.outcome === 'timeout' ? 'timed_out' : 'failed' } };
+  if (departureId && (event.outcome !== 'success' || responseBody?.latePaymentRefundRequired)) {
+    await dispatchWaitlistCandidates(pool, redis, departureId).catch((error) =>
+      log.warn({ err: error }, 'Waitlist dispatch after payment release failed'));
+  }
+  return { statusCode: 200, body: responseBody };
 }
 
 export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
@@ -435,6 +666,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
   }, 15000);
   reaper.unref();
   app.addHook('onClose', async () => clearInterval(reaper));
+  registerStep3WaitlistRoutes(app, { pool, redis, config, requireUser });
 
   app.get('/departures/:id/seats', { preHandler: [requireUser, requireRedis] }, async (request, reply) => {
     if (!validUuid(request.params.id)) return sendError(reply, 400, '活动编号无效');
@@ -506,9 +738,13 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         return sendError(reply, 404, '活动不存在或已截止报名');
       }
       const seats = await client.query(
-        `SELECT id,seat_number,price_fen,is_premium,status,hold_id
-         FROM seat_inventory WHERE departure_id=$1 AND sale_channel='platform' AND id=ANY($2::uuid[])
-         ORDER BY seat_number FOR UPDATE`,
+        `SELECT s.id,s.seat_number,s.price_fen,s.is_premium,s.status,s.hold_id,
+                (s.waitlist_released_at IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM departure_waitlist_entries w
+                  WHERE w.departure_id=s.departure_id AND w.status='waiting'
+                )) AS waitlist_priority
+         FROM seat_inventory s WHERE s.departure_id=$1 AND s.sale_channel='platform' AND s.id=ANY($2::uuid[])
+         ORDER BY s.seat_number FOR UPDATE`,
         [request.params.id, seatIds],
       );
       if (seats.rowCount !== seatIds.length) {
@@ -518,6 +754,10 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       if (seats.rows.some((seat) => seat.status !== 'available' || seat.hold_id)) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '所选座位刚被其他钓友锁定，请刷新座位图');
+      }
+      if (seats.rows.some((seat) => seat.waitlist_priority)) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '该座位正在按候补顺序授权，请刷新座位图');
       }
       lockedSeatIds = seats.rows.map((seat) => seat.id);
       holdId = randomUUID();
@@ -591,7 +831,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     try {
       await client.query('BEGIN');
       const holdResult = await client.query(
-        `SELECT id,departure_id,status,expires_at,order_id FROM seat_holds
+        `SELECT id,departure_id,status,expires_at,order_id,waitlist_entry_id FROM seat_holds
          WHERE id=$1 AND user_id=$2 FOR UPDATE`,
         [holdId, request.user.id],
       );
@@ -606,11 +846,18 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         return sendError(reply, 409, '该座位锁定已用于创建订单');
       }
       const departure = await client.query(
-        `SELECT id FROM departures
-         WHERE id=$1 AND status='open' AND departure_at>now() AND booking_deadline>now()
-           AND ${formationCutoffOpenSql}
-         FOR UPDATE`,
-        [hold.departure_id],
+        `SELECT d.id FROM departures d
+         LEFT JOIN departure_waitlist_entries w ON w.id=$3 AND w.user_id=$2
+         WHERE d.id=$1 AND d.status='open' AND d.departure_at>now()
+           AND ($3::uuid IS NULL OR (w.status='authorized' AND w.accepted_at IS NOT NULL
+             AND w.authorization_expires_at>now()))
+           AND (
+             (d.booking_deadline>now() AND ${formationCutoffOpenSql.replaceAll('departure_at', 'd.departure_at')})
+             OR ($3::uuid IS NOT NULL AND d.waitlist_window_closed_at IS NULL
+               AND ${closeoutAtSql('d')}>now())
+           )
+         FOR UPDATE OF d`,
+        [hold.departure_id, request.user.id, hold.waitlist_entry_id],
       );
       if (!departure.rowCount) {
         await client.query('ROLLBACK');
@@ -650,11 +897,11 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       const orderResult = await client.query(
         `INSERT INTO booking_orders
           (id,order_number,departure_id,seat_inventory_id,buyer_user_id,status,seat_fee_fen,
-           discount_fen,platform_fee_fen,total_amount_fen,hold_expires_at,hold_id,idempotency_key)
-         VALUES ($1,$2,$3,$4,$5,'pending_payment',$6,0,0,$6,$7,$8,$9)
+           discount_fen,platform_fee_fen,total_amount_fen,hold_expires_at,hold_id,idempotency_key,waitlist_entry_id)
+         VALUES ($1,$2,$3,$4,$5,'pending_payment',$6,0,0,$6,$7,$8,$9,$10)
          RETURNING id`,
         [orderId, orderNumber, hold.departure_id, seatIds[0], request.user.id,
-          seatFeeFen, hold.expires_at, holdId, idempotencyKey],
+          seatFeeFen, hold.expires_at, holdId, idempotencyKey, hold.waitlist_entry_id],
       );
       for (const seat of seatResult.rows) {
         await client.query(
@@ -687,6 +934,13 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         [orderId],
       );
       await client.query('UPDATE seat_holds SET order_id=$2 WHERE id=$1', [holdId, orderId]);
+      if (hold.waitlist_entry_id) {
+        await client.query(
+          `UPDATE departure_waitlist_entries SET status='converted',order_id=$2,updated_at=now()
+           WHERE id=$1 AND status='authorized'`,
+          [hold.waitlist_entry_id, orderId],
+        );
+      }
       await client.query('COMMIT');
       const order = await loadOrder(pool, orderId, request.user.id, security);
       return reply.code(201).send({ order, idempotentReplay: false });
@@ -786,6 +1040,111 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       client.release();
     }
   });
+
+  app.post('/orders/:id/supplement-rounds/:roundId/payment-intents',
+    { preHandler: requireUser }, async (request, reply) => {
+      if (config.nodeEnv === 'production') return sendError(reply, 404, '沙盒补差支付入口未开放');
+      if (!validUuid(request.params.id) || !validUuid(request.params.roundId)) {
+        return sendError(reply, 400, '订单或补差编号无效');
+      }
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const participantResult = await client.query(
+          `SELECT p.id,p.amount_fen,p.consent_status,p.payment_status,r.status AS round_status,
+                  r.response_deadline_at
+           FROM booking_orders o JOIN departure_supplement_participants p ON p.order_id=o.id
+           JOIN departure_supplement_rounds r ON r.id=p.round_id
+           WHERE o.id=$1 AND o.buyer_user_id=$2 AND r.id=$3 FOR UPDATE OF p,r`,
+          [request.params.id, request.user.id, request.params.roundId],
+        );
+        if (!participantResult.rowCount) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 404, '本订单没有对应的补差报价');
+        }
+        const participant = participantResult.rows[0];
+        if (participant.consent_status !== 'accepted' || participant.round_status !== 'collecting_payment'
+            || participant.payment_status === 'failed'
+            || new Date(participant.response_deadline_at) <= new Date()) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 409, '当前补差轮次不能发起支付');
+        }
+        if (Number(participant.amount_fen) <= 0) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 409, '本订单无需支付补差');
+        }
+        const existing = await client.query(
+          `SELECT id,provider_reference,amount_fen,status FROM payment_transactions
+           WHERE supplement_participant_id=$1 AND status='pending'`, [participant.id],
+        );
+        if (existing.rowCount) {
+          const row = existing.rows[0];
+          await client.query('COMMIT');
+          return { payment: {
+            id: row.id, reference: row.provider_reference, amountFen: Number(row.amount_fen),
+            status: row.status, adapter: 'sandbox', checkoutUrl: `sandbox-pay://supplement/${participant.id}`,
+          } };
+        }
+        const intent = paymentAdapter.createIntent({ orderId: participant.id, amountFen: Number(participant.amount_fen) });
+        const payment = await client.query(
+          `INSERT INTO payment_transactions
+             (purpose,supplement_participant_id,adapter_code,provider_reference,amount_fen)
+           VALUES ('supplement',$1,'sandbox',$2,$3) RETURNING id,status`,
+          [participant.id, intent.reference, intent.amountFen],
+        );
+        await client.query(
+          `UPDATE departure_supplement_participants SET payment_status='pending',updated_at=now()
+           WHERE id=$1`, [participant.id],
+        );
+        await client.query('COMMIT');
+        return reply.code(201).send({ payment: {
+          id: payment.rows[0].id, reference: intent.reference, amountFen: intent.amountFen,
+          status: payment.rows[0].status, adapter: 'sandbox', checkoutUrl: intent.checkoutUrl,
+        } });
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        request.log.error({ err: error }, 'Supplement payment intent failed');
+        return sendError(reply, 500, '创建补差支付请求失败');
+      } finally {
+        client.release();
+      }
+    });
+
+  app.post('/orders/:id/supplement-rounds/:roundId/sandbox-payment',
+    { preHandler: requireUser }, async (request, reply) => {
+      if (config.nodeEnv === 'production') return sendError(reply, 404, '沙盒补差支付入口未开放');
+      if (!validUuid(request.params.id) || !validUuid(request.params.roundId)
+          || !ALLOWED_OUTCOMES.has(request.body?.outcome)) {
+        return sendError(reply, 400, '沙盒补差支付结果无效');
+      }
+      const payment = await pool.query(
+        `SELECT t.provider_reference,t.amount_fen,t.status,p.id AS participant_id
+         FROM booking_orders o
+         JOIN departure_supplement_participants p ON p.order_id=o.id
+         JOIN departure_supplement_rounds r ON r.id=p.round_id
+         JOIN payment_transactions t ON t.supplement_participant_id=p.id
+         WHERE o.id=$1 AND o.buyer_user_id=$2 AND r.id=$3 AND t.status='pending'
+         ORDER BY t.created_at DESC LIMIT 1`,
+        [request.params.id, request.user.id, request.params.roundId],
+      );
+      if (!payment.rowCount) return sendError(reply, 409, '没有可处理的沙盒补差支付请求');
+      try {
+        const signed = paymentAdapter.buildCallback({
+          transactionReference: payment.rows[0].provider_reference,
+          orderId: payment.rows[0].participant_id,
+          amountFen: Number(payment.rows[0].amount_fen),
+          outcome: request.body.outcome,
+        });
+        const result = await handlePaymentEvent({
+          pool, redis, adapter: paymentAdapter, event: signed.event,
+          signature: signed.signature, log: request.log,
+        });
+        return reply.code(result.statusCode).send(result.body);
+      } catch (error) {
+        request.log.warn({ err: error }, 'Sandbox supplement payment adapter is not configured');
+        return sendError(reply, error.statusCode ?? 503, error.message);
+      }
+    });
 
   app.post('/orders/:id/sandbox-payment', { preHandler: requireUser }, async (request, reply) => {
     if (config.nodeEnv === 'production') return sendError(reply, 404, '沙盒支付入口未开放');

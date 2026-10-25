@@ -1,10 +1,21 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import pg from 'pg';
+import { createClient } from 'redis';
 import { buildApp } from '../src/app.js';
 import { config } from '../src/config.js';
 import { createSecurity, makeSandboxIdentityNumber } from '../src/security.js';
-import { processConfirmedChecklists, processFormationChecks } from '../src/step4-routes.js';
+import { createSandboxPaymentAdapter } from '../src/step3-adapters.js';
+import {
+  processConfirmedChecklists,
+  processFormationChecks,
+  processSandboxRefundObligations,
+} from '../src/step4-routes.js';
+import {
+  dispatchWaitlistCandidates,
+  formationConfirmationAt,
+  processWaitlistCloseouts,
+} from '../src/step3-waitlist.js';
 
 if (process.env.STEP4_ACCEPTANCE !== 'true') {
   throw new Error('Set STEP4_ACCEPTANCE=true and use an empty, isolated acceptance database.');
@@ -21,6 +32,7 @@ const testConfig = {
 const security = createSecurity(testConfig);
 const { Pool } = pg;
 const pool = new Pool({ connectionString: config.databaseUrl, max: 4 });
+const acceptanceRedis = createClient({ url: config.redisUrl });
 const app = buildApp(testConfig);
 let sequence = 0;
 let assertions = 0;
@@ -40,6 +52,31 @@ async function request(method, path, token, payload) {
   const contentType = response.headers['content-type'] ?? '';
   const body = contentType.includes('application/json') ? response.json() : response.body;
   return { status: response.statusCode, body, headers: response.headers };
+}
+
+async function signedPaymentCallback(event) {
+  const adapter = createSandboxPaymentAdapter(testConfig);
+  const response = await app.inject({
+    method: 'POST',
+    url: '/payment-adapters/sandbox/callback',
+    headers: { 'x-sandbox-signature': adapter.signCallback(event) },
+    payload: event,
+  });
+  return { status: response.statusCode, body: response.json() };
+}
+
+async function waitForLockedQuery(prefix) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const result = await scalar(
+      `SELECT count(*)::integer AS count FROM pg_stat_activity
+       WHERE datname=current_database() AND wait_event_type='Lock' AND state='active' AND query LIKE $1`,
+      [`${prefix}%`],
+    );
+    if (result.count > 0) return true;
+    await wait(20);
+  }
+  return false;
 }
 
 async function expect(method, path, token, payload, status = 200) {
@@ -126,14 +163,16 @@ async function makeEmptyConfirmedDeparture(captainId, boatId) {
 }
 
 async function makePaidOrder(userId, departureId, seat) {
+  sequence += 1;
+  const identitySuffix = String(sequence).padStart(3, '0');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const orderId = (await client.query(
       "INSERT INTO booking_orders " +
         "(order_number,departure_id,seat_inventory_id,buyer_user_id,status,seat_fee_fen,total_amount_fen,paid_at) " +
-        "VALUES ($1,$2,$3,$4,'paid',5000,5000,now()) RETURNING id",
-      ['SMOKE' + Date.now(), departureId, seat.id, userId],
+        "VALUES ($1,$2,$3,$4,'paid',$5,$5,now()) RETURNING id",
+      ['SMOKE' + Date.now() + '-' + identitySuffix, departureId, seat.id, userId, seat.price_fen],
     )).rows[0].id;
     await client.query(
       "INSERT INTO booking_order_seats (order_id,seat_inventory_id,seat_number,price_fen,status) " +
@@ -148,7 +187,7 @@ async function makePaidOrder(userId, departureId, seat) {
         orderId,
         seat.id,
         security.encrypt('张三'),
-        security.encrypt(makeSandboxIdentityNumber(String(sequence).padStart(3, '0'))),
+        security.encrypt(makeSandboxIdentityNumber(identitySuffix)),
         security.encrypt('13900000001'),
       ],
     );
@@ -173,6 +212,83 @@ async function makePaidOrder(userId, departureId, seat) {
   } finally {
     client.release();
   }
+}
+
+async function makeSupplementFixture(captain, boatId, label) {
+  const departureAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+  const bookingDeadline = new Date(departureAt.getTime() - 30 * 60 * 1000);
+  const departureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',$3::timestamptz,$3::timestamptz-interval '30 minutes',
+        $3::timestamptz+interval '7 hours',
+        'qd_coast','xiaogang',50000,50000,$4,'open',12,12,0,false) RETURNING id`,
+    [boatId, captain.id, departureAt.toISOString(), bookingDeadline.toISOString()],
+  )).rows[0].id;
+  const seat = (await pool.query(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel)
+     VALUES ($1,1,50000,'port','mid','booked','platform') RETURNING id,seat_number,price_fen`,
+    [departureId],
+  )).rows[0];
+  const user = await makeUser(label);
+  const orderId = await makePaidOrder(user.id, departureId, seat);
+  const closeoutAt = new Date(formationConfirmationAt(departureAt).getTime() + 10 * 60 * 1000);
+  await processFormationChecks(pool, closeoutAt);
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [departureId])).status,
+    'handling_shortfall', `${label}: server checkpoint freezes a shortfall before supplement`);
+  const response = await expect('POST', `/captain/departures/${departureId}/supplement-rounds`,
+    captain.token, { responseDeadlineAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }, 201);
+  check(response.round.shortfallFen, 5000, `${label}: frozen one-seat shortfall is ¥50`);
+  return { departureId, user, orderId, round: response.round };
+}
+
+async function makeWaitlistPaymentFixture(captain, boatId, label) {
+  const departureAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+  const bookingDeadline = new Date(departureAt.getTime() - 30 * 60 * 1000);
+  const departureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',$3::timestamptz,$3::timestamptz-interval '30 minutes',
+        $3::timestamptz+interval '7 hours','qd_coast','xiaogang',500000,50000,$4,'open',12,12,0,false)
+     RETURNING id`,
+    [boatId, captain.id, departureAt.toISOString(), bookingDeadline.toISOString()],
+  )).rows[0].id;
+  const seat = (await pool.query(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel)
+     VALUES ($1,1,50000,'port','mid','booked','platform') RETURNING id,seat_number,price_fen`,
+    [departureId],
+  )).rows[0];
+  const seller = await makeUser(`${label}原订单`);
+  const sellerOrderId = await makePaidOrder(seller.id, departureId, seat);
+  const candidate = await makeUser(`${label}候补`);
+  const registration = await expect('POST', `/departures/${departureId}/waitlist`, candidate.token,
+    { requestKey: `wait-${sequence}-${Date.now()}` }, 201);
+  await expect('POST', `/orders/${sellerOrderId}/cancel`, seller.token, {});
+  const authorized = await expect('GET', `/waitlist/${registration.entry.id}`, candidate.token);
+  check(authorized.entry.status, 'authorized', `${label}: pre-cutoff queue receives the released seat`);
+  await expect('POST', `/waitlist/${authorized.entry.id}/accept`, candidate.token, {});
+  const order = await expect('POST', '/orders', candidate.token, {
+    holdId: authorized.entry.holdId,
+    idempotencyKey: `waitlist-order-${sequence}-${Date.now()}`,
+    passengers: [{
+      seatId: authorized.entry.seatId,
+      fullName: '候补钓友',
+      identityNumber: makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0')),
+      phone: '13900009999',
+    }],
+  }, 201);
+  const intent = await expect('POST', `/orders/${order.order.id}/payment-intents`, candidate.token, {}, 201);
+  return {
+    departureId, departureAt, confirmationAt: formationConfirmationAt(departureAt),
+    entryId: authorized.entry.id, orderId: order.order.id, candidate,
+    intent: intent.payment, authorizationExpiresAt: authorized.entry.authorizationExpiresAt,
+  };
 }
 
 async function scalar(sql, values = []) {
@@ -204,6 +320,7 @@ async function main() {
   const existing = await scalar('SELECT count(*)::integer AS count FROM users');
   if (existing.count !== 0) throw new Error('Acceptance database must be empty; no fixture data was inserted.');
   await app.ready();
+  if (!acceptanceRedis.isOpen) await acceptanceRedis.connect();
 
   const captain = await makeUser('船长甲', true);
   const angler = await makeUser('钓友甲');
@@ -557,8 +674,8 @@ async function main() {
   await expect('POST', '/captain/departures/' + formationDepartureId + '/offline-ledger', captain.token,
     { amountDeltaFen: 600, note: '重用请求编号', requestKey: 'formation-offline-001' }, 409);
   const shortfallCheckpoint = await processFormationChecks(pool,
-    new Date(initialAccounts.accounts.confirmationAt));
-  check(shortfallCheckpoint.checked, 1, 'due departure receives one formation checkpoint');
+    new Date(Date.parse(initialAccounts.accounts.confirmationAt) + 10 * 60 * 1000));
+  check(shortfallCheckpoint.checked, 1, 'departure receives its formation checkpoint after the 18:10 waitlist closeout');
   check((await scalar('SELECT status FROM departures WHERE id=$1', [formationDepartureId])).status,
     'handling_shortfall', 'platform-only shortfall enters server-managed handling');
   check((await scalar('SELECT outcome FROM departure_formation_snapshots WHERE departure_id=$1',
@@ -619,7 +736,8 @@ async function main() {
       const waitingQuery = await scalar(
         `SELECT count(*)::integer AS count FROM pg_stat_activity
          WHERE wait_event_type='Lock' AND state='active'
-           AND query LIKE 'SELECT d.id,d.status,d.departure_at,%'`,
+           AND (query LIKE 'SELECT d.id,d.status,d.departure_at,%'
+             OR query LIKE 'SELECT d.id FROM departures d WHERE d.id=$1%')`,
       );
       if (waitingQuery.count > 0) {
         workerBlockedOnRow = true;
@@ -698,7 +816,7 @@ async function main() {
   check(autoAccounts.accounts.platform.ticketNetFen, 4500, 'automatic account uses discounted net ticket proceeds');
   check(autoAccounts.accounts.platform.penaltyPoolFen, 600, 'recorded penalty pool joins the platform account');
   const autoCheckpoint = await processFormationChecks(pool,
-    new Date(autoAccounts.accounts.confirmationAt));
+    new Date(Date.parse(autoAccounts.accounts.confirmationAt) + 10 * 60 * 1000));
   check(autoCheckpoint.checked, 1, 'automatic departure receives a checkpoint at its local cutoff');
   check((await scalar('SELECT status FROM departures WHERE id=$1', [autoDepartureId])).status,
     'confirmed', 'platform ledger meeting the threshold automatically confirms the departure');
@@ -875,7 +993,13 @@ async function main() {
   const full = await request('GET', '/captain/departures/' + departure.id + '/manifest.csv?format=full', captain.token);
   check(full.status, 200, 'full manifest downloads for captain');
   check(full.body.includes('张三'), true, 'full manifest contains authorized passenger name');
-  check(full.body.includes(makeSandboxIdentityNumber(String(sequence).padStart(3, '0'))), true,
+  const departureIdentity = await scalar(
+    `SELECT op.identity_number_ciphertext FROM order_passengers op
+     JOIN booking_orders o ON o.id=op.order_id
+     WHERE o.departure_id=$1 AND o.buyer_user_id=$2 ORDER BY o.created_at LIMIT 1`,
+    [departure.id, angler.id],
+  );
+  check(full.body.includes(security.decrypt(departureIdentity.identity_number_ciphertext)), true,
     'full manifest contains authorized identity number');
   check((await scalar('SELECT count(*)::integer AS count FROM manifest_export_audit WHERE departure_id=$1',
     [departure.id])).count, 2, 'both exports are audited');
@@ -893,6 +1017,358 @@ async function main() {
   await expect('GET', '/captain/departures/' + departure.id + '/fulfillment', otherCaptain.token, undefined, 404);
   await expect('GET', '/captain/departures/' + departure.id + '/manifest.csv?format=full', otherCaptain.token, undefined, 404);
 
+  // Founder-approved amount example, exercised through cancellation, waitlist,
+  // order, sandbox payment, formation closeout, and the one supplement round.
+  const exampleDepartureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',now()+interval '48 hours',now()+interval '47 hours 30 minutes',
+        now()+interval '56 hours','qd_coast','xiaogang',500000,50000,now()+interval '47 hours','open',12,12,0,false)
+     RETURNING id`, [quotaBoatId, captain.id],
+  )).rows[0].id;
+  const exampleSeats = await pool.query(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel)
+     SELECT $1,n,50000,'port','mid','booked','platform' FROM generate_series(1,12) AS n
+     RETURNING id,seat_number,price_fen`, [exampleDepartureId],
+  );
+  const examplePassengers = [];
+  for (let index = 0; index < 12; index += 1) {
+    const passenger = await makeUser(`算例钓友${index + 1}`);
+    const orderId = await makePaidOrder(passenger.id, exampleDepartureId, exampleSeats.rows[index]);
+    examplePassengers.push({ ...passenger, orderId });
+  }
+  const replacement = await makeUser('算例候补');
+  const waitlistRegistration = await expect('POST', `/departures/${exampleDepartureId}/waitlist`, replacement.token,
+    { requestKey: 'founder-example-waitlist-20261025' }, 201);
+  check(waitlistRegistration.entry.status, 'waiting', 'founder example enters waitlist through the API');
+
+  const cancelledPassengers = examplePassengers.slice(0, 4);
+  for (const passenger of cancelledPassengers) {
+    const cancellation = await expect('POST', `/orders/${passenger.orderId}/cancel`, passenger.token, {});
+    check(cancellation.penaltyFen, 15000, 'a cancellation inside the approved 30 percent band adds ¥150');
+    check(cancellation.refundFen, 35000, 'a cancellation inside the approved 30 percent band refunds ¥350');
+  }
+  check((await scalar(
+    `SELECT COALESCE(SUM(amount_fen),0)::bigint AS amount FROM departure_formation_adjustments
+     WHERE departure_id=$1 AND adjustment_type='penalty_pool'`, [exampleDepartureId],
+  )).amount, '60000', 'four cancellations add ¥600 to the departure penalty pool');
+  const authorizedWaitlist = await expect('GET', `/waitlist/${waitlistRegistration.entry.id}`, replacement.token);
+  check(authorizedWaitlist.entry.status, 'authorized', 'released platform seat is authorized to the queued candidate');
+  check(authorizedWaitlist.entry.seatId !== null, true, 'waitlist authorization identifies the released platform seat');
+  await expect('POST', `/waitlist/${authorizedWaitlist.entry.id}/accept`, replacement.token, {});
+  const replacementOrder = await expect('POST', '/orders', replacement.token, {
+    holdId: authorizedWaitlist.entry.holdId,
+    idempotencyKey: 'founder-example-waitlist-order-20261025',
+    passengers: [{
+      seatId: authorizedWaitlist.entry.seatId,
+      fullName: '算例候补',
+      identityNumber: makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0')),
+      phone: '13900009999',
+    }],
+  }, 201);
+  const replacementIntent = await expect('POST', `/orders/${replacementOrder.order.id}/payment-intents`, replacement.token, {}, 201);
+  check(replacementIntent.payment.amountFen, 50000, 'replacement seat ticket is charged at ¥500');
+  await expect('POST', `/orders/${replacementOrder.order.id}/sandbox-payment`, replacement.token, { outcome: 'success' });
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [replacementOrder.order.id])).status,
+    'paid', 'replacement payment settles through the sandbox callback');
+
+  const exampleDeparture = await scalar('SELECT departure_at FROM departures WHERE id=$1', [exampleDepartureId]);
+  const exampleConfirmationAt = formationConfirmationAt(exampleDeparture.departure_at);
+  const exampleCloseout = await processFormationChecks(pool,
+    new Date(exampleConfirmationAt.getTime() + 10 * 60 * 1000));
+  check(exampleCloseout.checked >= 1, true, 'the founder example reaches the 18:10 formation closeout');
+  const exampleSnapshot = await scalar('SELECT * FROM departure_formation_snapshots WHERE departure_id=$1', [exampleDepartureId]);
+  check(Number(exampleSnapshot.platform_ticket_net_fen), 405000, 'nine paid seats produce ¥4,050 platform ticket net');
+  check(Number(exampleSnapshot.penalty_pool_fen), 60000, 'the frozen penalty pool is ¥600');
+  check(Number(exampleSnapshot.platform_verifiable_fen), 465000, '¥4,050 net plus ¥600 pool equals ¥4,650');
+  check(exampleSnapshot.outcome, 'shortfall', '¥4,650 remains below the ¥5,000 sailing threshold');
+
+  const supplementDeadline = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const exampleRoundResponse = await expect('POST', `/captain/departures/${exampleDepartureId}/supplement-rounds`,
+    captain.token, { responseDeadlineAt: supplementDeadline }, 201);
+  const exampleRound = exampleRoundResponse.round;
+  check(exampleRound.shortfallFen, 35000, 'one round quotes the exact ¥350 shortfall');
+  check(exampleRound.participants.length, 9, 'all nine paid seats are included in the frozen round');
+  check(exampleRound.participants.reduce((sum, participant) => sum + participant.amountFen, 0), 35000,
+    'per-seat quotes sum to ¥350 without commission');
+  const tokenByOrder = new Map([
+    ...examplePassengers.filter((passenger) => !cancelledPassengers.includes(passenger))
+      .map((passenger) => [passenger.orderId, passenger.token]),
+    [replacementOrder.order.id, replacement.token],
+  ]);
+  for (const participant of exampleRound.participants) {
+    await expect('POST', `/orders/${participant.orderId}/supplement-rounds/${exampleRound.id}/decision`,
+      tokenByOrder.get(participant.orderId), { action: 'accept' });
+  }
+  check((await scalar('SELECT status FROM departure_supplement_rounds WHERE id=$1', [exampleRound.id])).status,
+    'collecting_payment', 'supplement collection begins only after every participant consents');
+  for (const participant of exampleRound.participants) {
+    const intent = await expect('POST',
+      `/orders/${participant.orderId}/supplement-rounds/${exampleRound.id}/payment-intents`,
+      tokenByOrder.get(participant.orderId), {}, 201);
+    await expect('POST',
+      `/orders/${participant.orderId}/supplement-rounds/${exampleRound.id}/sandbox-payment`,
+      tokenByOrder.get(participant.orderId), { outcome: 'success' });
+    check(intent.payment.amountFen >= 0, true, 'supplement amount is a non-negative integer number of fen');
+  }
+  const finalExampleAccounts = await expect('GET',
+    `/captain/departures/${exampleDepartureId}/formation-accounts`, captain.token);
+  check(finalExampleAccounts.accounts.platform.ticketNetFen, 405000, 'final platform ledger retains ¥4,050 ticket net');
+  check(finalExampleAccounts.accounts.platform.penaltyPoolFen, 60000, 'final platform ledger retains the ¥600 penalty pool');
+  check(finalExampleAccounts.accounts.platform.successfulSupplementFen, 35000, 'all accepted payments add exactly ¥350');
+  check(finalExampleAccounts.accounts.platform.verifiableTotalFen, 500000, 'verified platform receipts reach the ¥5,000 threshold');
+  check(finalExampleAccounts.accounts.departureStatus, 'confirmed', 'the server confirms departure after full payment and snapshot recheck');
+  check((await scalar('SELECT status FROM departure_supplement_rounds WHERE id=$1', [exampleRound.id])).status,
+    'succeeded', 'one full-consent, full-payment round succeeds');
+
+  const refusal = await makeSupplementFixture(captain, quotaBoatId, '补差拒绝用例');
+  const refusalChoice = await expect('POST',
+    `/orders/${refusal.orderId}/supplement-rounds/${refusal.round.id}/decision`, refusal.user.token,
+    { action: 'reject' });
+  check(refusalChoice.round.status, 'failed', 'one refusal immediately fails the entire round');
+  const refusalOrder = await scalar(
+    'SELECT status,cancelled_refund_fen,cancellation_penalty_fen FROM booking_orders WHERE id=$1',
+    [refusal.orderId],
+  );
+  check(refusalOrder.status, 'cancelled', 'a refusing passenger exits the order');
+  check(Number(refusalOrder.cancelled_refund_fen), 50000, 'refusal exits with a full ticket refund');
+  check(Number(refusalOrder.cancellation_penalty_fen), 0, 'refusal incurs no cancellation penalty');
+  check((await scalar(
+    `SELECT amount_fen FROM refund_obligations WHERE order_id=$1 AND reason='customer_cancellation'`,
+    [refusal.orderId],
+  )).amount_fen, 50000, 'refusal records a full refund obligation');
+  check((await scalar('SELECT status FROM seat_inventory WHERE departure_id=$1', [refusal.departureId])).status,
+    'available', 'refusal releases the passenger seat');
+  await expect('POST', `/captain/departures/${refusal.departureId}/supplement-rounds`, captain.token,
+    { responseDeadlineAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }, 409);
+  await processSandboxRefundObligations(pool);
+
+  const failedPayment = await makeSupplementFixture(captain, quotaBoatId, '补差付款失败用例');
+  await expect('POST',
+    `/orders/${failedPayment.orderId}/supplement-rounds/${failedPayment.round.id}/decision`,
+    failedPayment.user.token, { action: 'accept' });
+  const failedIntent = await expect('POST',
+    `/orders/${failedPayment.orderId}/supplement-rounds/${failedPayment.round.id}/payment-intents`,
+    failedPayment.user.token, {}, 201);
+  await expect('POST',
+    `/orders/${failedPayment.orderId}/supplement-rounds/${failedPayment.round.id}/sandbox-payment`,
+    failedPayment.user.token, { outcome: 'failure' });
+  check((await scalar('SELECT status FROM departure_supplement_rounds WHERE id=$1',
+    [failedPayment.round.id])).status, 'failed', 'one failed payment invalidates the full round');
+  check((await scalar('SELECT status FROM payment_transactions WHERE provider_reference=$1',
+    [failedIntent.payment.reference])).status, 'failed', 'failed supplement payment is recorded once');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departure_formation_adjustments
+     WHERE departure_id=$1 AND adjustment_type='successful_supplement'`, [failedPayment.departureId],
+  )).count, 0, 'failed payment is excluded from formation funds');
+
+  const latePayment = await makeSupplementFixture(captain, quotaBoatId, '补差迟到回调用例');
+  await expect('POST',
+    `/orders/${latePayment.orderId}/supplement-rounds/${latePayment.round.id}/decision`,
+    latePayment.user.token, { action: 'accept' });
+  const lateIntent = await expect('POST',
+    `/orders/${latePayment.orderId}/supplement-rounds/${latePayment.round.id}/payment-intents`,
+    latePayment.user.token, {}, 201);
+  await expect('POST',
+    `/orders/${latePayment.orderId}/supplement-rounds/${latePayment.round.id}/sandbox-payment`,
+    latePayment.user.token, { outcome: 'timeout' });
+  const paymentAdapter = createSandboxPaymentAdapter(testConfig);
+  const lateEvent = paymentAdapter.buildCallback({
+    transactionReference: lateIntent.payment.reference,
+    orderId: lateIntent.payment.participantId ?? latePayment.round.participants[0].id,
+    amountFen: lateIntent.payment.amountFen,
+    outcome: 'success',
+  }).event;
+  const lateResult = await signedPaymentCallback(lateEvent);
+  check(lateResult.status, 200, 'late success callback is accepted for accounting');
+  check(lateResult.body.latePaymentRefundRequired, true, 'late success creates an immediate refund obligation');
+  check(lateResult.body.includedInFormation, false, 'late success is excluded from formation funds');
+  check((await scalar('SELECT late_success FROM payment_transactions WHERE provider_reference=$1',
+    [lateIntent.payment.reference])).late_success, true, 'late callback is marked for audit');
+  check((await scalar(
+    `SELECT status FROM refund_obligations WHERE payment_transaction_id=(
+       SELECT id FROM payment_transactions WHERE provider_reference=$1
+     ) AND reason='supplement_failure'`, [lateIntent.payment.reference],
+  )).status, 'pending', 'late supplement payment is not labelled refunded before settlement');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departure_formation_adjustments
+     WHERE departure_id=$1 AND adjustment_type='successful_supplement'`, [latePayment.departureId],
+  )).count, 0, 'late supplement payment never enters the formation ledger');
+  await processSandboxRefundObligations(pool, 3, async () => false);
+  await processSandboxRefundObligations(pool, 3, async () => false);
+  await processSandboxRefundObligations(pool, 3, async () => false);
+  check((await scalar(
+    `SELECT status FROM refund_obligations WHERE payment_transaction_id=(
+       SELECT id FROM payment_transactions WHERE provider_reference=$1
+     ) AND reason='supplement_failure'`, [lateIntent.payment.reference],
+  )).status, 'manual_required', 'refund retry exhaustion remains an unpaid manual obligation');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM admin_manual_review_events e
+     JOIN refund_obligations r ON r.id=e.refund_obligation_id
+     JOIN payment_transactions t ON t.id=r.payment_transaction_id
+     WHERE t.provider_reference=$1`, [lateIntent.payment.reference],
+  )).count, 1, 'refund retry exhaustion creates one manual review event');
+
+  const duplicateCallback = await makeSupplementFixture(captain, quotaBoatId, '补差重复回调用例');
+  await expect('POST',
+    `/orders/${duplicateCallback.orderId}/supplement-rounds/${duplicateCallback.round.id}/decision`,
+    duplicateCallback.user.token, { action: 'accept' });
+  const duplicateIntent = await expect('POST',
+    `/orders/${duplicateCallback.orderId}/supplement-rounds/${duplicateCallback.round.id}/payment-intents`,
+    duplicateCallback.user.token, {}, 201);
+  const duplicateEvent = paymentAdapter.buildCallback({
+    transactionReference: duplicateIntent.payment.reference,
+    orderId: duplicateCallback.round.participants[0].id,
+    amountFen: duplicateIntent.payment.amountFen,
+    outcome: 'success',
+  }).event;
+  check((await signedPaymentCallback(duplicateEvent)).status, 200, 'first signed payment callback is accepted');
+  const duplicateResult = await signedPaymentCallback(duplicateEvent);
+  check(duplicateResult.body.duplicate, true, 'replayed callback is identified as a duplicate');
+  check((await scalar('SELECT count(*)::integer AS count FROM payment_transactions WHERE provider_reference=$1',
+    [duplicateIntent.payment.reference])).count, 1, 'duplicate callback leaves one payment transaction');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departure_formation_adjustments
+     WHERE source_reference=$1`, [`supplement-round:${duplicateCallback.round.id}`],
+  )).count, 1, 'duplicate callback adds the supplement ledger once');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [duplicateCallback.departureId])).status,
+    'confirmed', 'all successful supplement funds pass server formation recheck');
+
+  const lateWaitlist = await makeWaitlistPaymentFixture(captain, quotaBoatId, '候补迟到到账');
+  const nextWaitlistCandidate = await makeUser('候补迟到到账下一位');
+  const nextWaitlistEntry = await expect('POST', `/departures/${lateWaitlist.departureId}/waitlist`,
+    nextWaitlistCandidate.token, { requestKey: `late-next-${Date.now()}` }, 201);
+  check(nextWaitlistEntry.entry.status, 'waiting', 'the next candidate waits while the first seat is held');
+  const waitlistLateEvent = paymentAdapter.buildCallback({
+    transactionReference: lateWaitlist.intent.reference,
+    orderId: lateWaitlist.orderId,
+    amountFen: lateWaitlist.intent.amountFen,
+    outcome: 'success',
+  }).event;
+  waitlistLateEvent.createdAt = new Date(
+    Date.parse(lateWaitlist.authorizationExpiresAt) + 1,
+  ).toISOString();
+  const waitlistLateResult = await signedPaymentCallback(waitlistLateEvent);
+  check(waitlistLateResult.status, 200, 'late waitlist payment callback is recorded');
+  check(waitlistLateResult.body.latePaymentRefundRequired, true,
+    'late waitlist success is immediately placed in the refund path');
+  check(waitlistLateResult.body.includedInFormation, false,
+    'late waitlist payment does not count toward formation');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [lateWaitlist.orderId])).status,
+    'cancelled', 'late waitlist order cannot reclaim the released seat');
+  const nextAuthorization = await expect('GET', `/waitlist/${nextWaitlistEntry.entry.id}`,
+    nextWaitlistCandidate.token);
+  check(nextAuthorization.entry.status, 'authorized',
+    'a late refunded payment releases the eligible seat to the next pre-cutoff candidate');
+  check((await scalar('SELECT late_success FROM payment_transactions WHERE provider_reference=$1',
+    [lateWaitlist.intent.reference])).late_success, true, 'late waitlist callback is marked for audit');
+  check((await scalar(
+    `SELECT status FROM refund_obligations WHERE payment_transaction_id=(
+       SELECT id FROM payment_transactions WHERE provider_reference=$1
+     ) AND reason='late_waitlist_payment'`, [lateWaitlist.intent.reference],
+  )).status, 'sandbox_succeeded', 'late waitlist money records its sandbox refund result');
+  check((await signedPaymentCallback(waitlistLateEvent)).body.duplicate, true,
+    'replayed late waitlist callback cannot create a second refund');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM refund_obligations r
+     JOIN payment_transactions t ON t.id=r.payment_transaction_id
+     WHERE t.provider_reference=$1 AND r.reason='late_waitlist_payment'`,
+    [lateWaitlist.intent.reference],
+  )).count, 1, 'late waitlist callback has exactly one refund obligation');
+
+  const lateReleaseDepartureAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+  const lateReleaseConfirmationAt = formationConfirmationAt(lateReleaseDepartureAt);
+  const lateReleaseCloseAt = new Date(lateReleaseConfirmationAt.getTime() + 10 * 60 * 1000);
+  const lateReleaseDepartureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',$3::timestamptz,$3::timestamptz-interval '30 minutes',
+        $3::timestamptz+interval '7 hours','qd_coast','xiaogang',500000,50000,$4,'open',12,12,0,false)
+     RETURNING id`,
+    [quotaBoatId, captain.id, lateReleaseDepartureAt.toISOString(),
+      new Date(lateReleaseDepartureAt.getTime() - 30 * 60 * 1000).toISOString()],
+  )).rows[0].id;
+  const lateReleaseSeatId = (await pool.query(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel,waitlist_released_at)
+     VALUES ($1,1,50000,'port','mid','available','platform',$2) RETURNING id`,
+    [lateReleaseDepartureId, new Date(lateReleaseConfirmationAt.getTime() + 1).toISOString()],
+  )).rows[0].id;
+  const lateReleaseCandidate = await makeUser('18时后释放席位候补');
+  const lateReleaseEntry = await expect('POST', `/departures/${lateReleaseDepartureId}/waitlist`,
+    lateReleaseCandidate.token, { requestKey: `post-cutoff-${Date.now()}` }, 201);
+  check(lateReleaseEntry.entry.status, 'waiting', 'pre-cutoff candidate remains queued without an eligible seat');
+  const postCutoffDispatch = await dispatchWaitlistCandidates(
+    pool, acceptanceRedis, lateReleaseDepartureId,
+    new Date(lateReleaseConfirmationAt.getTime() + 60 * 1000),
+  );
+  check(postCutoffDispatch.length, 0, 'a seat released after 18:00 is not assigned in the closeout window');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [lateReleaseSeatId])).status,
+    'available', 'post-cutoff released seat remains outside waitlist holds');
+  check((await scalar('SELECT status FROM departure_waitlist_entries WHERE id=$1',
+    [lateReleaseEntry.entry.id])).status, 'waiting', 'late seat release does not authorize the queued candidate');
+  const exactCloseout = await processWaitlistCloseouts(pool, lateReleaseCloseAt);
+  check(exactCloseout.closed >= 1, true, 'the 18:10 boundary freezes a departure without pending work');
+  check((await scalar('SELECT waitlist_window_closed_at FROM departures WHERE id=$1',
+    [lateReleaseDepartureId])).waitlist_window_closed_at.toISOString(), lateReleaseCloseAt.toISOString(),
+  'closeout records the exact 18:10 hard deadline');
+  check((await scalar('SELECT status FROM departure_waitlist_entries WHERE id=$1',
+    [lateReleaseEntry.entry.id])).status, 'closed', 'the 18:10 freeze closes remaining candidates');
+
+  const concurrentWaitlist = await makeWaitlistPaymentFixture(captain, quotaBoatId, '候补支付并发冻结');
+  const concurrentEvent = paymentAdapter.buildCallback({
+    transactionReference: concurrentWaitlist.intent.reference,
+    orderId: concurrentWaitlist.orderId,
+    amountFen: concurrentWaitlist.intent.amountFen,
+    outcome: 'success',
+  }).event;
+  check(Date.parse(concurrentEvent.createdAt) <= Date.parse(concurrentWaitlist.authorizationExpiresAt),
+    true, 'payment callback event is created before the candidate authorization deadline');
+  const departureLock = await pool.connect();
+  let closeoutPromise;
+  let callbackPromise;
+  let closeoutBlocked = false;
+  let callbackBlocked = false;
+  try {
+    await departureLock.query('BEGIN');
+    await departureLock.query('SELECT id FROM departures WHERE id=$1 FOR UPDATE',
+      [concurrentWaitlist.departureId]);
+    closeoutPromise = processWaitlistCloseouts(pool,
+      new Date(concurrentWaitlist.confirmationAt.getTime() + 10 * 60 * 1000));
+    closeoutBlocked = await waitForLockedQuery(
+      "SELECT d.id FROM departures d WHERE d.id=$1 AND d.status IN ('open','forming')",
+    );
+    callbackPromise = signedPaymentCallback(concurrentEvent);
+    callbackBlocked = await waitForLockedQuery(
+      'SELECT d.id FROM departures d JOIN booking_orders o ON o.departure_id=d.id',
+    );
+  } finally {
+    await departureLock.query('COMMIT').catch(() => {});
+    departureLock.release();
+  }
+  const [racingCloseout, racingPayment] = await Promise.all([closeoutPromise, callbackPromise]);
+  check(closeoutBlocked, true, 'closeout worker queued behind the departure lock');
+  check(callbackBlocked, true, 'payment callback queued behind the same departure lock');
+  check(racingCloseout.waiting >= 1, true,
+    'the 18:10 closeout waits instead of freezing a pending waitlist payment');
+  check(racingPayment.status, 200, 'the in-flight payment callback completes after closeout yields');
+  check(racingPayment.body.paymentStatus, 'succeeded',
+    'provider success before authorization expiry settles during the closeout race');
+  check((await scalar('SELECT waitlist_window_closed_at FROM departures WHERE id=$1',
+    [concurrentWaitlist.departureId])).waitlist_window_closed_at, null,
+  'the first closeout pass does not freeze while payment is pending');
+  const afterPaymentCloseout = await processWaitlistCloseouts(pool,
+    new Date(concurrentWaitlist.confirmationAt.getTime() + 10 * 60 * 1000));
+  check(afterPaymentCloseout.closed >= 1, true,
+    'the retried 18:10 closeout freezes after the callback settles');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [concurrentWaitlist.orderId])).status,
+    'paid', 'the accepted callback remains in the frozen participant snapshot');
+
   console.log('Step 4 acceptance passed: ' + assertions + ' assertions.');
 }
 
@@ -900,5 +1376,6 @@ try {
   await main();
 } finally {
   await app.close();
+  if (acceptanceRedis.isOpen) await acceptanceRedis.quit();
   await pool.end();
 }

@@ -1,4 +1,5 @@
 import { createSecurity } from './security.js';
+import { closeoutAtSql, processWaitlistCloseouts } from './step3-waitlist.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const sendError = (reply, statusCode, message) => reply.code(statusCode).send({ error: message });
@@ -91,10 +92,361 @@ async function loadFormationAccounts(client, departureId) {
     },
     sourceCoverage: {
       platformTicketNet: 'live_paid_orders',
-      penaltyPool: 'schema_ready_no_workflow',
-      successfulSupplement: 'schema_ready_no_workflow',
+      penaltyPool: 'live_sandbox_customer_cancellations',
+      successfulSupplement: 'live_sandbox_round_payment',
     },
   };
+}
+
+export function refundRetryStatus(attemptNumber, succeeded, maxAttempts = 3) {
+  if (succeeded) return 'sandbox_succeeded';
+  return attemptNumber >= maxAttempts ? 'manual_required' : 'pending';
+}
+
+export function distributeSupplementFen(shortfallFen, orders) {
+  const total = Number(shortfallFen);
+  const totalSeats = orders.reduce((sum, order) => sum + Number(order.seat_count), 0);
+  if (!Number.isSafeInteger(total) || total <= 0 || totalSeats <= 0) {
+    throw new TypeError('A positive shortfall and at least one paid seat are required');
+  }
+  const baseFen = Math.floor(total / totalSeats);
+  let remainderFen = total % totalSeats;
+  return orders.map((order) => {
+    const seatCount = Number(order.seat_count);
+    const extraFen = Math.min(remainderFen, seatCount);
+    remainderFen -= extraFen;
+    return { ...order, seatCount, amountFen: baseFen * seatCount + extraFen };
+  });
+}
+
+async function failSupplementRound(client, roundId, reason, terminalStatus = 'failed') {
+  const roundResult = await client.query(
+    `SELECT id,status FROM departure_supplement_rounds WHERE id=$1 FOR UPDATE`, [roundId],
+  );
+  if (!roundResult.rowCount || !['collecting_consent','collecting_payment'].includes(roundResult.rows[0].status)) {
+    return false;
+  }
+  await client.query(
+    `UPDATE departure_supplement_rounds SET status=$2,failure_reason=$3,updated_at=now(),completed_at=now()
+     WHERE id=$1`, [roundId, terminalStatus, reason],
+  );
+  await client.query(
+    `UPDATE departure_supplement_participants SET
+       consent_status=CASE WHEN consent_status='pending' AND $2='response_deadline_expired'
+         THEN 'timed_out' ELSE consent_status END,
+       payment_status=CASE WHEN payment_status='pending' THEN 'failed' ELSE payment_status END,
+       updated_at=now()
+     WHERE round_id=$1`, [roundId, reason],
+  );
+  await client.query(
+    `UPDATE payment_transactions t SET status='timed_out',updated_at=now(),completed_at=now()
+     FROM departure_supplement_participants p
+     WHERE p.round_id=$1 AND t.supplement_participant_id=p.id AND t.status='pending'`, [roundId],
+  );
+  await client.query(
+    `INSERT INTO refund_obligations
+       (order_id,payment_transaction_id,amount_fen,reason,status,request_key)
+     SELECT p.order_id,t.id,t.amount_fen,'supplement_failure','pending',
+       'supplement-failure:'||t.id
+     FROM departure_supplement_participants p
+     JOIN payment_transactions t ON t.supplement_participant_id=p.id AND t.status='succeeded'
+     WHERE p.round_id=$1
+     ON CONFLICT (payment_transaction_id,reason) DO NOTHING`, [roundId],
+  );
+  await client.query(
+    `UPDATE departure_supplement_participants p SET payment_status='refund_pending',updated_at=now()
+     WHERE p.round_id=$1 AND EXISTS (
+       SELECT 1 FROM payment_transactions t
+       WHERE t.supplement_participant_id=p.id AND t.status='succeeded'
+     )`, [roundId],
+  );
+  return true;
+}
+
+async function refundSupplementDecliners(client, roundId) {
+  const exited = await client.query(
+    `SELECT p.order_id
+     FROM departure_supplement_participants p
+     JOIN booking_orders o ON o.id=p.order_id
+     WHERE p.round_id=$1 AND p.consent_status IN ('rejected','timed_out') AND o.status='paid'
+     FOR UPDATE OF p,o`, [roundId],
+  );
+  if (!exited.rowCount) return 0;
+  const orderIds = exited.rows.map((row) => row.order_id);
+  await client.query(
+    `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),
+       cancelled_refund_fen=total_amount_fen,cancellation_penalty_fen=0,updated_at=now()
+     WHERE id=ANY($1::uuid[]) AND status='paid'`, [orderIds],
+  );
+  await client.query(
+    `UPDATE booking_order_seats SET status='released'
+     WHERE order_id=ANY($1::uuid[]) AND status='paid'`, [orderIds],
+  );
+  await client.query(
+    `UPDATE seat_inventory SET status='available',hold_id=NULL,hold_expires_at=NULL,
+       waitlist_released_at=NULL,updated_at=now()
+     WHERE id IN (SELECT seat_inventory_id FROM booking_order_seats
+       WHERE order_id=ANY($1::uuid[])) AND status='booked'`, [orderIds],
+  );
+  await client.query(
+    `INSERT INTO refund_obligations
+       (order_id,payment_transaction_id,amount_fen,reason,status,request_key)
+     SELECT o.id,
+       (SELECT t.id FROM payment_transactions t
+        WHERE t.order_id=o.id AND t.status='succeeded' ORDER BY t.completed_at DESC,t.id DESC LIMIT 1),
+       o.total_amount_fen,'customer_cancellation','pending','supplement-exit:'||o.id
+     FROM booking_orders o WHERE o.id=ANY($1::uuid[]) AND o.total_amount_fen>0
+     ON CONFLICT (request_key) DO NOTHING`, [orderIds],
+  );
+  await client.query(
+    `UPDATE departure_waitlist_entries SET status='closed',updated_at=now()
+     WHERE order_id=ANY($1::uuid[]) AND status='converted'`, [orderIds],
+  );
+  return exited.rowCount;
+}
+
+async function finalizeSupplementRound(client, roundId) {
+  const roundResult = await client.query(
+    `SELECT * FROM departure_supplement_rounds WHERE id=$1 FOR UPDATE`, [roundId],
+  );
+  if (!roundResult.rowCount) return { status: 'missing' };
+  const round = roundResult.rows[0];
+  if (!['collecting_consent','collecting_payment'].includes(round.status)) return { status: round.status };
+  const participantResult = await client.query(
+    `SELECT id,order_id,consent_status,payment_status FROM departure_supplement_participants
+     WHERE round_id=$1 ORDER BY order_id`, [roundId],
+  );
+  if (!participantResult.rowCount || participantResult.rows.some((participant) =>
+    participant.consent_status !== 'accepted' || participant.payment_status !== 'succeeded')) {
+    return { status: round.status, waiting: true };
+  }
+  const accounts = await loadFormationAccounts(client, round.departure_id);
+  if (accounts.departureStatus !== 'handling_shortfall'
+      || participantResult.rowCount !== Number(round.participant_count)) {
+    await failSupplementRound(client, roundId, 'formation_state_or_participant_count_changed');
+    return { status: 'failed', reason: 'formation_state_or_participant_count_changed' };
+  }
+  const paidOrders = await client.query(
+    `SELECT id FROM booking_orders WHERE departure_id=$1 AND status='paid' ORDER BY id`,
+    [round.departure_id],
+  );
+  const currentOrderIds = paidOrders.rows.map((row) => row.id).sort();
+  const frozenOrderIds = [...round.source_order_ids].sort();
+  const snapshotValid = accounts.thresholdFen === Number(round.threshold_fen)
+    && accounts.platform.ticketNetFen === Number(round.ticket_net_fen)
+    && accounts.platform.penaltyPoolFen === Number(round.penalty_pool_fen)
+    && accounts.platform.remainingFen === Number(round.shortfall_fen)
+    && currentOrderIds.length === frozenOrderIds.length
+    && currentOrderIds.every((id, index) => id === frozenOrderIds[index]);
+  if (!snapshotValid) {
+    await failSupplementRound(client, roundId, 'formation_snapshot_changed');
+    return { status: 'failed', reason: 'formation_snapshot_changed' };
+  }
+  const participantPayments = await client.query(
+    `SELECT COALESCE(SUM(amount_fen),0)::bigint AS amount_fen
+     FROM payment_transactions WHERE supplement_participant_id=ANY($1::uuid[])
+       AND status='succeeded'`,
+    [participantResult.rows.map((participant) => participant.id)],
+  );
+  const paymentTotal = Number(participantPayments.rows[0].amount_fen);
+  if (paymentTotal !== Number(round.shortfall_fen)) {
+    await failSupplementRound(client, roundId, 'payment_total_mismatch');
+    return { status: 'failed', reason: 'payment_total_mismatch' };
+  }
+  await client.query(
+    `INSERT INTO departure_formation_adjustments
+       (departure_id,adjustment_type,amount_fen,source_reference)
+     VALUES ($1,'successful_supplement',$2,$3)
+     ON CONFLICT (departure_id,adjustment_type,source_reference) DO NOTHING`,
+    [round.departure_id, round.shortfall_fen, `supplement-round:${roundId}`],
+  );
+  await client.query(
+    `UPDATE departure_supplement_rounds SET status='succeeded',updated_at=now(),completed_at=now()
+     WHERE id=$1`, [roundId],
+  );
+  await client.query(
+    `UPDATE departures SET status='confirmed',updated_at=now()
+     WHERE id=$1 AND status='handling_shortfall'`, [round.departure_id],
+  );
+  return { status: 'succeeded', platformVerifiableFen: accounts.platform.verifiableTotalFen + paymentTotal };
+}
+
+export async function settleSupplementPayment(client, payment, event) {
+  const participantResult = await client.query(
+    `SELECT p.id,p.round_id,p.order_id,p.amount_fen,p.consent_status,p.payment_status,
+            r.departure_id,r.status AS round_status,r.response_deadline_at
+     FROM departure_supplement_participants p
+     JOIN departure_supplement_rounds r ON r.id=p.round_id
+     WHERE p.id=$1 FOR UPDATE OF p,r`,
+    [payment.supplement_participant_id],
+  );
+  if (!participantResult.rowCount) return { error: [404, '补差记录不存在'] };
+  const participant = participantResult.rows[0];
+  if (event.orderId !== participant.id || Number(payment.amount_fen) !== event.amountFen
+      || Number(participant.amount_fen) !== event.amountFen) {
+    return { error: [400, '补差订单或金额不匹配'] };
+  }
+  const now = (await client.query('SELECT clock_timestamp() AS now')).rows[0].now;
+  const deadlinePassed = new Date(now) >= new Date(participant.response_deadline_at);
+  const activeRound = ['collecting_consent','collecting_payment'].includes(participant.round_status)
+    && !deadlinePassed;
+  if (payment.status !== 'pending') {
+    if (payment.status === 'timed_out' && event.outcome === 'success') {
+      await failSupplementRound(client, participant.round_id,
+        deadlinePassed ? 'response_deadline_expired' : 'payment_arrived_after_timeout',
+        deadlinePassed ? 'expired' : 'failed');
+      await client.query(
+        `UPDATE payment_transactions SET status='succeeded',late_success=true,callback_event_id=$2,
+          updated_at=now(),completed_at=now() WHERE id=$1`, [payment.id, event.eventId],
+      );
+      await client.query(
+        `INSERT INTO refund_obligations
+          (order_id,payment_transaction_id,amount_fen,reason,status,request_key)
+         VALUES ($1,$2,$3,'supplement_failure','pending',$4)
+         ON CONFLICT (payment_transaction_id,reason) DO NOTHING`,
+        [participant.order_id, payment.id, event.amountFen, `supplement-failure:${payment.id}`],
+      );
+      await client.query(
+        `UPDATE departure_supplement_participants SET payment_status='refund_pending',updated_at=now()
+         WHERE id=$1`, [participant.id],
+      );
+      return { paymentStatus: 'succeeded', latePaymentRefundRequired: true, includedInFormation: false };
+    }
+    return { duplicate: true, paymentStatus: payment.status };
+  }
+  if (!activeRound || participant.consent_status !== 'accepted') {
+    if (event.outcome !== 'success') {
+      await client.query(
+        `UPDATE payment_transactions SET status=$2,callback_event_id=$3,updated_at=now(),completed_at=now()
+         WHERE id=$1`,
+        [payment.id, event.outcome === 'timeout' ? 'timed_out' : 'failed', event.eventId],
+      );
+      return { paymentStatus: event.outcome === 'timeout' ? 'timed_out' : 'failed' };
+    }
+    await failSupplementRound(client, participant.round_id,
+      deadlinePassed ? 'response_deadline_expired' : 'payment_without_valid_consent',
+      deadlinePassed ? 'expired' : 'failed');
+    await client.query(
+      `UPDATE payment_transactions SET status='succeeded',late_success=true,callback_event_id=$2,
+        updated_at=now(),completed_at=now() WHERE id=$1`, [payment.id, event.eventId],
+    );
+    await client.query(
+      `INSERT INTO refund_obligations
+        (order_id,payment_transaction_id,amount_fen,reason,status,request_key)
+       VALUES ($1,$2,$3,'supplement_failure','pending',$4)
+       ON CONFLICT (payment_transaction_id,reason) DO NOTHING`,
+      [participant.order_id, payment.id, event.amountFen, `supplement-failure:${payment.id}`],
+    );
+    await client.query(
+      `UPDATE departure_supplement_participants SET payment_status='refund_pending',updated_at=now()
+       WHERE id=$1`, [participant.id],
+    );
+    return { paymentStatus: 'succeeded', latePaymentRefundRequired: true, includedInFormation: false };
+  }
+  if (event.outcome !== 'success') {
+    await client.query(
+      `UPDATE payment_transactions SET status=$2,callback_event_id=$3,updated_at=now(),completed_at=now()
+       WHERE id=$1`,
+      [payment.id, event.outcome === 'timeout' ? 'timed_out' : 'failed', event.eventId],
+    );
+    await client.query(
+      `UPDATE departure_supplement_participants SET payment_status='failed',updated_at=now() WHERE id=$1`,
+      [participant.id],
+    );
+    await failSupplementRound(client, participant.round_id, `payment_${event.outcome}`);
+    return { paymentStatus: event.outcome === 'timeout' ? 'timed_out' : 'failed', roundStatus: 'failed' };
+  }
+  await client.query(
+    `UPDATE payment_transactions SET status='succeeded',callback_event_id=$2,updated_at=now(),completed_at=now()
+     WHERE id=$1`, [payment.id, event.eventId],
+  );
+  await client.query(
+    `UPDATE departure_supplement_participants SET payment_status='succeeded',paid_at=now(),updated_at=now()
+     WHERE id=$1`, [participant.id],
+  );
+  const completion = await finalizeSupplementRound(client, participant.round_id);
+  return { paymentStatus: 'succeeded', roundStatus: completion.status, ...completion };
+}
+
+export async function processSupplementDeadlines(pool, asOf = new Date()) {
+  const due = await pool.query(
+    `SELECT id,departure_id FROM departure_supplement_rounds
+     WHERE status IN ('collecting_consent','collecting_payment') AND response_deadline_at <= $1
+     ORDER BY response_deadline_at,id LIMIT 100`, [asOf],
+  );
+  let expired = 0;
+  for (const row of due.rows) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT id FROM departures WHERE id=$1 FOR UPDATE', [row.departure_id]);
+      const result = await failSupplementRound(client, row.id, 'response_deadline_expired', 'expired');
+      if (result) await refundSupplementDecliners(client, row.id);
+      await client.query('COMMIT');
+      if (result) expired += 1;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  return { expired };
+}
+
+export async function processSandboxRefundObligations(pool, maxAttempts = 3, refundAttempt = async () => true) {
+  const pending = await pool.query(
+    `SELECT id,request_key,attempt_count FROM refund_obligations
+     WHERE status='pending' ORDER BY created_at,id LIMIT 100`,
+  );
+  let settled = 0;
+  for (const obligation of pending.rows) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const locked = await client.query(
+        `SELECT id,request_key,attempt_count,status,payment_transaction_id FROM refund_obligations
+         WHERE id=$1 AND status='pending' FOR UPDATE SKIP LOCKED`, [obligation.id],
+      );
+      if (!locked.rowCount) {
+        await client.query('COMMIT');
+        continue;
+      }
+      const attempts = Number(locked.rows[0].attempt_count) + 1;
+      // This phase is sandbox-only; production refund transport is not authorized or configured.
+      const succeeded = await refundAttempt(locked.rows[0]);
+      const status = refundRetryStatus(attempts, succeeded, maxAttempts);
+      const updated = await client.query(
+        `UPDATE refund_obligations SET status=$2::varchar,attempt_count=$3,updated_at=now(),
+          settled_at=CASE WHEN $2::varchar IN ('sandbox_succeeded','manual_required') THEN now() ELSE NULL END
+         WHERE id=$1 RETURNING id`, [obligation.id, status, attempts],
+      );
+      if (locked.rows[0].payment_transaction_id) {
+        await client.query(
+          `UPDATE departure_supplement_participants p SET payment_status=$2,updated_at=now()
+           FROM payment_transactions t
+           WHERE t.id=$1 AND t.supplement_participant_id=p.id`,
+          [locked.rows[0].payment_transaction_id,
+            status === 'sandbox_succeeded' ? 'refunded' : status === 'manual_required' ? 'manual_required' : 'refund_pending'],
+        );
+      }
+      if (status === 'manual_required') {
+        await client.query(
+          `INSERT INTO admin_manual_review_events (event_type,refund_obligation_id,detail)
+           VALUES ('refund_manual_required',$1,'Sandbox refund retry limit reached')
+           ON CONFLICT (refund_obligation_id) DO NOTHING`, [obligation.id],
+        );
+      }
+      settled += updated.rowCount;
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  return { settled };
 }
 
 async function departureHasPassed(client, departureId) {
@@ -115,9 +467,12 @@ async function markFormationOverdue(client, departureId) {
 /** Capture the approved T-1 18:00 Asia/Shanghai checkpoint once per departure. */
 export async function processFormationChecks(pool, asOf = new Date(), onError = () => {}) {
   if (!pool) return { checked: 0, deferred: 0, overdue: 0 };
+  await processWaitlistCloseouts(pool, asOf);
+  await processSupplementDeadlines(pool, asOf);
+  await processSandboxRefundObligations(pool);
   const due = await pool.query(
     `SELECT d.id FROM departures d
-     WHERE d.status IN ('open','forming') AND ${confirmationAtSql('d')} <= $1
+     WHERE d.status IN ('open','forming') AND ${closeoutAtSql('d')} <= $1
        AND NOT EXISTS (SELECT 1 FROM departure_formation_snapshots s WHERE s.departure_id=d.id)
      ORDER BY d.departure_at,d.id LIMIT 100`,
     [asOf],
@@ -129,10 +484,10 @@ export async function processFormationChecks(pool, asOf = new Date(), onError = 
     try {
       const outcome = await withTransaction(pool, async (client) => {
         const departure = await client.query(
-          `SELECT d.id,d.status,d.departure_at,
+          `SELECT d.id,d.status,d.departure_at,d.waitlist_window_closed_at,
                   ${confirmationAtSql('d')} AS confirmation_at
            FROM departures d WHERE d.id=$1 AND d.status IN ('open','forming')
-             AND ${confirmationAtSql('d')} <= $2
+             AND ${closeoutAtSql('d')} <= $2
              AND NOT EXISTS (SELECT 1 FROM departure_formation_snapshots s WHERE s.departure_id=d.id)
            FOR UPDATE`,
           [candidate.id, asOf],
@@ -142,6 +497,7 @@ export async function processFormationChecks(pool, asOf = new Date(), onError = 
           await markFormationOverdue(client, candidate.id);
           return 'overdue';
         }
+        if (!departure.rows[0].waitlist_window_closed_at) return 'deferred';
         const pending = await client.query(
           `SELECT EXISTS (SELECT 1 FROM booking_orders
              WHERE departure_id=$1 AND status='pending_payment') AS has_pending_payment`,
@@ -370,6 +726,213 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
       return reply.code(result.idempotentReplay ? 200 : 201).send(result);
     });
 
+  app.post('/captain/departures/:id/supplement-rounds',
+    { preHandler: [requireUser, requireCaptain] }, async (request, reply) => {
+      if (config.nodeEnv === 'production') return sendError(reply, 404, '沙盒补差尚未开放');
+      if (!validUuid(request.params.id)) return sendError(reply, 400, '班次编号无效');
+      const deadlineMs = Date.parse(request.body?.responseDeadlineAt ?? '');
+      if (!Number.isFinite(deadlineMs)) return sendError(reply, 400, '请明确选择补差响应截止时间');
+      const result = await withTransaction(pool, async (client) => {
+        const departure = await requireCaptainOwnership(client, request.params.id, request.user.id, true);
+        if (!departure) return { error: [404, '班次不存在'] };
+        if (departure.status !== 'handling_shortfall' || new Date(departure.departure_at) <= new Date()) {
+          return { error: [409, '当前班次不在待补差状态'] };
+        }
+        const cutoff = await client.query(
+          `SELECT d.waitlist_window_closed_at,${confirmationAtSql('d')} AS confirmation_at
+           FROM departures d WHERE d.id=$1`, [departure.id],
+        );
+        if (!cutoff.rows[0].waitlist_window_closed_at) {
+          return { error: [409, '候补收尾窗口尚未冻结'] };
+        }
+        const now = await client.query('SELECT clock_timestamp() AS now');
+        if (deadlineMs <= new Date(now.rows[0].now).getTime()
+            || deadlineMs >= new Date(departure.departure_at).getTime()) {
+          return { error: [400, '补差截止时间必须晚于现在并早于出航时间'] };
+        }
+        const existing = await client.query(
+          `SELECT id,status,response_deadline_at,shortfall_fen
+           FROM departure_supplement_rounds WHERE departure_id=$1`, [departure.id],
+        );
+        if (existing.rowCount) {
+          const row = existing.rows[0];
+          if (['collecting_consent','collecting_payment'].includes(row.status)) {
+            const participants = await client.query(
+              `SELECT id,order_id,amount_fen,consent_status,payment_status
+               FROM departure_supplement_participants WHERE round_id=$1 ORDER BY order_id`, [row.id],
+            );
+            return { round: {
+              id: row.id, status: row.status, responseDeadlineAt: row.response_deadline_at,
+              shortfallFen: Number(row.shortfall_fen), participants: participants.rows.map((item) => ({
+                id: item.id, orderId: item.order_id, amountFen: Number(item.amount_fen),
+                consentStatus: item.consent_status, paymentStatus: item.payment_status,
+              })),
+            }, idempotentReplay: true };
+          }
+          return { error: [409, '本航次的一轮补差已结束，不能发起第二轮'] };
+        }
+        const snapshot = await client.query(
+          `SELECT threshold_fen,platform_ticket_net_fen,penalty_pool_fen,outcome
+           FROM departure_formation_snapshots WHERE departure_id=$1 FOR UPDATE`, [departure.id],
+        );
+        if (!snapshot.rowCount || snapshot.rows[0].outcome !== 'shortfall') {
+          return { error: [409, '缺少服务端未达标核算快照'] };
+        }
+        const accounts = await loadFormationAccounts(client, departure.id);
+        if (accounts.platform.remainingFen <= 0
+            || Number(snapshot.rows[0].threshold_fen) !== accounts.thresholdFen
+            || Number(snapshot.rows[0].platform_ticket_net_fen) !== accounts.platform.ticketNetFen
+            || Number(snapshot.rows[0].penalty_pool_fen) !== accounts.platform.penaltyPoolFen) {
+          return { error: [409, '核算快照已变化，请先处理班次状态'] };
+        }
+        const paidOrders = await client.query(
+          `SELECT o.id,o.buyer_user_id,COUNT(os.seat_inventory_id)::integer AS seat_count
+           FROM booking_orders o JOIN booking_order_seats os ON os.order_id=o.id AND os.status='paid'
+           WHERE o.departure_id=$1 AND o.status='paid'
+           GROUP BY o.id,o.buyer_user_id ORDER BY MIN(o.created_at),o.id`, [departure.id],
+        );
+        const totalSeats = paidOrders.rows.reduce((sum, order) => sum + Number(order.seat_count), 0);
+        if (!totalSeats || !paidOrders.rowCount) return { error: [409, '没有可参与本轮补差的有效付费席位'] };
+        const round = await client.query(
+          `INSERT INTO departure_supplement_rounds
+             (departure_id,status,response_deadline_at,threshold_fen,ticket_net_fen,penalty_pool_fen,
+              shortfall_fen,source_order_ids,participant_count)
+           VALUES ($1,'collecting_consent',$2,$3,$4,$5,$6,$7::uuid[],$8)
+           RETURNING id,status,response_deadline_at,shortfall_fen`,
+          [departure.id, new Date(deadlineMs).toISOString(), accounts.thresholdFen,
+            accounts.platform.ticketNetFen, accounts.platform.penaltyPoolFen,
+            accounts.platform.remainingFen, paidOrders.rows.map((order) => order.id), paidOrders.rowCount],
+        );
+        const participants = [];
+        const quotes = distributeSupplementFen(accounts.platform.remainingFen, paidOrders.rows);
+        for (const order of quotes) {
+          const seatCount = order.seatCount;
+          const participant = await client.query(
+            `INSERT INTO departure_supplement_participants
+               (round_id,order_id,user_id,paid_seat_count,amount_fen)
+             VALUES ($1,$2,$3,$4,$5)
+             RETURNING id,order_id,amount_fen,consent_status,payment_status`,
+            [round.rows[0].id, order.id, order.buyer_user_id, seatCount, order.amountFen],
+          );
+          participants.push({
+            id: participant.rows[0].id, orderId: participant.rows[0].order_id,
+            amountFen: Number(participant.rows[0].amount_fen), seatCount,
+            consentStatus: participant.rows[0].consent_status,
+            paymentStatus: participant.rows[0].payment_status,
+          });
+        }
+        return { round: {
+          id: round.rows[0].id, status: round.rows[0].status,
+          responseDeadlineAt: round.rows[0].response_deadline_at,
+          shortfallFen: Number(round.rows[0].shortfall_fen), totalSeatCount: totalSeats,
+          participants,
+        }, idempotentReplay: false };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return reply.code(result.idempotentReplay ? 200 : 201).send(result);
+    });
+
+  app.get('/orders/:id/supplement-round', { preHandler: requireUser }, async (request, reply) => {
+    if (!validUuid(request.params.id)) return sendError(reply, 400, '订单编号无效');
+    const result = await pool.query(
+      `SELECT r.id,r.status,r.response_deadline_at,r.shortfall_fen,p.id AS participant_id,
+              p.amount_fen,p.paid_seat_count,p.consent_status,p.payment_status
+       FROM booking_orders o JOIN departure_supplement_rounds r ON r.departure_id=o.departure_id
+       LEFT JOIN departure_supplement_participants p ON p.round_id=r.id AND p.order_id=o.id
+       WHERE o.id=$1 AND o.buyer_user_id=$2
+       ORDER BY r.created_at DESC LIMIT 1`,
+      [request.params.id, request.user.id],
+    );
+    if (!result.rowCount) return { round: null };
+    const row = result.rows[0];
+    return { round: {
+      id: row.id, status: row.status, responseDeadlineAt: row.response_deadline_at,
+      shortfallFen: Number(row.shortfall_fen), participant: row.participant_id ? {
+        id: row.participant_id, orderId: request.params.id, amountFen: Number(row.amount_fen),
+        seatCount: Number(row.paid_seat_count), consentStatus: row.consent_status,
+        paymentStatus: row.payment_status,
+      } : null,
+    } };
+  });
+
+  app.post('/orders/:id/supplement-rounds/:roundId/decision',
+    { preHandler: requireUser }, async (request, reply) => {
+      if (!validUuid(request.params.id) || !validUuid(request.params.roundId)) {
+        return sendError(reply, 400, '订单或补差编号无效');
+      }
+      const action = request.body?.action;
+      if (!['accept','reject'].includes(action)) return sendError(reply, 400, '补差选择无效');
+      const result = await withTransaction(pool, async (client) => {
+        const lookup = await client.query(
+          `SELECT departure_id FROM booking_orders WHERE id=$1 AND buyer_user_id=$2`,
+          [request.params.id, request.user.id],
+        );
+        if (!lookup.rowCount) return { error: [404, '订单不存在'] };
+        await client.query('SELECT id FROM departures WHERE id=$1 FOR UPDATE', [lookup.rows[0].departure_id]);
+        const roundResult = await client.query(
+          `SELECT * FROM departure_supplement_rounds WHERE id=$1 AND departure_id=$2 FOR UPDATE`,
+          [request.params.roundId, lookup.rows[0].departure_id],
+        );
+        if (!roundResult.rowCount) return { error: [404, '补差轮次不存在'] };
+        const round = roundResult.rows[0];
+        const participantResult = await client.query(
+          `SELECT * FROM departure_supplement_participants
+           WHERE round_id=$1 AND order_id=$2 AND user_id=$3 FOR UPDATE`,
+          [round.id, request.params.id, request.user.id],
+        );
+        if (!participantResult.rowCount) return { error: [403, '该订单不属于本轮补差'] };
+        const participant = participantResult.rows[0];
+        const now = await client.query('SELECT clock_timestamp() AS now');
+        if (!['collecting_consent','collecting_payment'].includes(round.status)) {
+          return { error: [409, '本轮补差已结束'] };
+        }
+        if (new Date(now.rows[0].now) >= new Date(round.response_deadline_at)) {
+          await failSupplementRound(client, round.id, 'response_deadline_expired', 'expired');
+          await refundSupplementDecliners(client, round.id);
+          return { error: [409, '本轮补差已超时并整轮失效'] };
+        }
+        if (participant.consent_status !== 'pending') {
+          if (participant.consent_status === (action === 'accept' ? 'accepted' : 'rejected')) {
+            return { round: { id: round.id, status: round.status, idempotentReplay: true } };
+          }
+          return { error: [409, '该订单已提交相反选择'] };
+        }
+        await client.query(
+          `UPDATE departure_supplement_participants SET consent_status=$2,responded_at=now(),updated_at=now()
+           WHERE id=$1`, [participant.id, action === 'accept' ? 'accepted' : 'rejected'],
+        );
+        if (action === 'reject') {
+          await failSupplementRound(client, round.id, 'participant_rejected');
+          await refundSupplementDecliners(client, round.id);
+          return { round: { id: round.id, status: 'failed', rejected: true } };
+        }
+        const consent = await client.query(
+          `SELECT COUNT(*)::integer AS total,
+             COUNT(*) FILTER (WHERE consent_status='accepted')::integer AS accepted
+           FROM departure_supplement_participants WHERE round_id=$1`, [round.id],
+        );
+        if (Number(consent.rows[0].total) === Number(consent.rows[0].accepted)) {
+          await client.query(
+            `UPDATE departure_supplement_rounds SET status='collecting_payment',updated_at=now()
+             WHERE id=$1 AND status='collecting_consent'`, [round.id],
+          );
+          await client.query(
+            `UPDATE departure_supplement_participants SET payment_status='succeeded',paid_at=now(),updated_at=now()
+             WHERE round_id=$1 AND amount_fen=0`, [round.id],
+          );
+          const completion = await finalizeSupplementRound(client, round.id);
+          return { round: {
+            id: round.id, status: completion.status,
+            paymentRequired: completion.status !== 'succeeded' && participant.amount_fen > 0,
+            platformVerifiableFen: completion.platformVerifiableFen,
+          } };
+        }
+        return { round: { id: round.id, status: 'collecting_consent', accepted: true } };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return result;
+    });
+
   app.post('/captain/departures/:id/formation/decision',
     { preHandler: [requireUser, requireCaptain] }, async (request, reply) => {
       if (!validUuid(request.params.id)) return sendError(reply, 400, '班次编号无效');
@@ -382,6 +945,14 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
         if (departure.status !== 'handling_shortfall') return { error: [409, '当前班次不在待处置状态'] };
         if (new Date(departure.departure_at) <= new Date()) {
           return { error: [409, '出航时间已过，成行确认需人工处理'] };
+        }
+        const activeSupplement = await client.query(
+          `SELECT id FROM departure_supplement_rounds
+           WHERE departure_id=$1 AND status IN ('collecting_consent','collecting_payment')`,
+          [departure.id],
+        );
+        if (activeSupplement.rowCount) {
+          return { error: [409, '本轮补差仍在进行，暂不能同时选择船长确认成行'] };
         }
         const snapshot = await client.query(
           'SELECT outcome FROM departure_formation_snapshots WHERE departure_id=$1 FOR UPDATE',

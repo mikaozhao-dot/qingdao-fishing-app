@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
+
 import 'api_client.dart';
 import 'fishing_tokens.dart';
 import 'step3_flow.dart';
@@ -340,8 +341,11 @@ class _AnglerOrderPage extends StatefulWidget {
 class _AnglerOrderPageState extends State<_AnglerOrderPage> {
   Map<String, dynamic> _order = {};
   Map<String, dynamic> _flow = {};
+  Map<String, dynamic> _supplementRound = {};
   bool _loading = true;
+  bool _supplementWorking = false;
   String? _error;
+  String? _supplementError;
 
   @override
   void initState() {
@@ -361,11 +365,16 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
           '/orders/${widget.orderId}/fulfillment',
           token: widget.token,
         ),
+        Step1Api.get(
+          '/orders/${widget.orderId}/supplement-round',
+          token: widget.token,
+        ),
       ]);
       if (!mounted) return;
       setState(() {
         _order = _map(results[0]['order']);
         _flow = results[1];
+        _supplementRound = _map(results[2]['round']);
       });
     } catch (error) {
       if (!mounted) return;
@@ -384,6 +393,126 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
       isScrollControlled: true,
       builder: (context) => _ChecklistSheet(checklist: checklist),
     );
+  }
+
+  Future<void> _decideSupplement(String action) async {
+    if (_supplementWorking) return;
+    if (action == 'reject') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('拒绝本轮补差？'),
+          content: const Text('拒绝会使整轮补差失效，相关订单按规则全额退款，且不会自动发起第二轮。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('再想想'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('确认拒绝'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    setState(() {
+      _supplementWorking = true;
+      _supplementError = null;
+    });
+    try {
+      await Step1Api.post(
+        '/orders/${widget.orderId}/supplement-rounds/${_supplementRound['id']}/decision',
+        {'action': action},
+        token: widget.token,
+      );
+      await _load();
+    } catch (error) {
+      if (!mounted) return;
+      setState(
+        () =>
+            _supplementError = error.toString().replaceFirst('Exception: ', ''),
+      );
+    } finally {
+      if (mounted) setState(() => _supplementWorking = false);
+    }
+  }
+
+  Future<void> _openSupplementPayment() async {
+    if (_supplementWorking) return;
+    setState(() {
+      _supplementWorking = true;
+      _supplementError = null;
+    });
+    try {
+      final intent = await Step1Api.post(
+        '/orders/${widget.orderId}/supplement-rounds/${_supplementRound['id']}/payment-intents',
+        const {},
+        token: widget.token,
+      );
+      if (!mounted) return;
+      final payment = _map(intent['payment']);
+      setState(() => _supplementWorking = false);
+      final outcome = await showModalBottomSheet<String>(
+        context: context,
+        showDragHandle: true,
+        builder: (context) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('补差沙盒支付', style: _sectionTitle),
+              const SizedBox(height: 8),
+              Text('本次补差 ¥${_yuan(_int(payment['amountFen']))}', style: _body),
+              const SizedBox(height: 6),
+              const Text('仅用于开发演示，不会扣款。选择模拟结果以验证整轮流程。', style: _muted),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () => Navigator.pop(context, 'success'),
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text('模拟支付成功'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [
+                  OutlinedButton(
+                    onPressed: () => Navigator.pop(context, 'failure'),
+                    child: const Text('模拟支付失败'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => Navigator.pop(context, 'timeout'),
+                    child: const Text('模拟支付超时'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+      if (outcome != null && mounted) {
+        setState(() => _supplementWorking = true);
+        await Step1Api.post(
+          '/orders/${widget.orderId}/supplement-rounds/${_supplementRound['id']}/sandbox-payment',
+          {'outcome': outcome},
+          token: widget.token,
+        );
+      }
+      if (mounted) await _load();
+    } catch (error) {
+      if (!mounted) return;
+      setState(
+        () =>
+            _supplementError = error.toString().replaceFirst('Exception: ', ''),
+      );
+    } finally {
+      if (mounted) setState(() => _supplementWorking = false);
+    }
   }
 
   @override
@@ -440,16 +569,29 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
                     ],
                   ),
                 ),
+                if (_supplementRound.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  _SupplementRoundCard(
+                    round: _supplementRound,
+                    working: _supplementWorking,
+                    error: _supplementError,
+                    onDecision: _decideSupplement,
+                    onPay: _openSupplementPayment,
+                  ),
+                ],
                 const SizedBox(height: 10),
                 OutlinedButton.icon(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => OrderDetailPage(
-                        orderId: widget.orderId,
-                        token: widget.token,
+                  onPressed: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => OrderDetailPage(
+                          orderId: widget.orderId,
+                          token: widget.token,
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                    if (mounted) _load();
+                  },
                   icon: const Icon(Icons.receipt_long_outlined),
                   label: const Text('订单金额与保险详情'),
                 ),
@@ -901,6 +1043,152 @@ class _GatePage extends StatelessWidget {
     ],
   );
 }
+
+class _SupplementRoundCard extends StatelessWidget {
+  const _SupplementRoundCard({
+    required this.round,
+    required this.working,
+    required this.error,
+    required this.onDecision,
+    required this.onPay,
+  });
+
+  final Map<String, dynamic> round;
+  final bool working;
+  final String? error;
+  final ValueChanged<String> onDecision;
+  final VoidCallback onPay;
+
+  @override
+  Widget build(BuildContext context) {
+    final participant = _map(round['participant']);
+    final roundStatus = (round['status'] ?? '').toString();
+    final consent = (participant['consentStatus'] ?? '').toString();
+    final payment = (participant['paymentStatus'] ?? '').toString();
+    final amountFen = _int(participant['amountFen']);
+    final statusLabel = switch (roundStatus) {
+      'collecting_consent' => '等待全员确认',
+      'collecting_payment' => '等待补差支付',
+      'succeeded' => '补差完成',
+      'failed' => '本轮已失效',
+      'expired' => '响应超时',
+      _ => '补差状态更新中',
+    };
+
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(child: Text('成团补差', style: _sectionTitle)),
+              _StagePill(label: statusLabel),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _InfoLine(
+            label: '本轮缺口',
+            value: '¥${_yuan(_int(round['shortfallFen']))}',
+          ),
+          _InfoLine(
+            label: '确认截止',
+            value: _dateTime(round['responseDeadlineAt']),
+          ),
+          if (participant.isEmpty) ...[
+            const SizedBox(height: 6),
+            const Text('本订单不在本轮补差参与范围内。', style: _muted),
+          ] else ...[
+            _InfoLine(label: '本单补差', value: '¥${_yuan(amountFen)}'),
+            _InfoLine(label: '确认状态', value: _consentLabel(consent)),
+            if (roundStatus == 'collecting_consent' &&
+                consent == 'pending') ...[
+              const SizedBox(height: 12),
+              const Text('同意后需等待所有参与订单确认；本轮只发起一次。', style: _muted),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilledButton(
+                    onPressed: working ? null : () => onDecision('accept'),
+                    child: const Text('同意本轮补差'),
+                  ),
+                  OutlinedButton(
+                    onPressed: working ? null : () => onDecision('reject'),
+                    child: const Text('拒绝本轮'),
+                  ),
+                ],
+              ),
+            ],
+            if (roundStatus == 'collecting_consent' && consent == 'accepted')
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('已确认，等待其他参与订单回复。', style: _muted),
+              ),
+            if (roundStatus == 'collecting_payment') ...[
+              _InfoLine(label: '支付状态', value: _supplementPaymentLabel(payment)),
+              if (consent == 'accepted' &&
+                  amountFen > 0 &&
+                  payment != 'succeeded') ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: working ? null : onPay,
+                    icon: const Icon(Icons.lock_outline),
+                    label: const Text('继续沙盒补差支付'),
+                  ),
+                ),
+              ],
+              if (amountFen == 0)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text('本单分摊金额为 ¥0，无需支付。', style: _muted),
+                ),
+            ],
+            if (roundStatus == 'succeeded')
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('本轮补差已完成，服务器已复核成行结果。', style: _muted),
+              ),
+            if (['failed', 'expired'].contains(roundStatus))
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('本轮不会自动重开；请查看订单退款状态。', style: _muted),
+              ),
+          ],
+          if (working) ...[
+            const SizedBox(height: 10),
+            const LinearProgressIndicator(minHeight: 2),
+          ],
+          if (error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              error!,
+              style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+String _consentLabel(String status) => switch (status) {
+  'pending' => '待确认',
+  'accepted' => '已同意',
+  'rejected' => '已拒绝',
+  'timed_out' => '已超时',
+  _ => '—',
+};
+
+String _supplementPaymentLabel(String status) => switch (status) {
+  'pending' => '待支付',
+  'succeeded' => '已支付',
+  'failed' => '失败 · 本轮已失效',
+  'refund_pending' => '退款处理中',
+  _ => '尚未开始',
+};
 
 class _NoticeCard extends StatelessWidget {
   const _NoticeCard({required this.message, this.onRetry});

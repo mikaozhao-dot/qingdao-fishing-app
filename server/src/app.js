@@ -86,7 +86,7 @@ export function buildApp(runtimeConfig = config) {
   const { requireUser } = registerStep1Routes(app, { pool, config: runtimeConfig });
   registerStep2Routes(app, { pool, config: runtimeConfig, requireUser });
   registerStep3Routes(app, { pool, redis, config: runtimeConfig, requireUser });
-  registerStep4Routes(app, { pool, config: runtimeConfig, requireUser });
+  registerStep4Routes(app, { pool, redis, config: runtimeConfig, requireUser });
 
   app.addHook('onClose', async () => {
     await pool?.end();

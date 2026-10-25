@@ -17,7 +17,7 @@ void main() {
     headers: const {'content-type': 'application/json; charset=utf-8'},
   );
 
-  testWidgets('captures native supplement consent, payment, and completion', (
+  testWidgets('captures mock supplement consent, payment, and completion', (
     tester,
   ) async {
     const orderId = '00000000-0000-4000-8000-000000000001';
@@ -64,7 +64,9 @@ void main() {
           jsonEncode({
             'departure': {
               'id': '00000000-0000-4000-8000-000000000003',
-              'status': 'handling_shortfall',
+              'status': roundStatus == 'succeeded'
+                  ? 'confirmed'
+                  : 'handling_shortfall',
               'departureAt': '2026-10-28T01:00:00.000Z',
               'meetingAt': '2026-10-28T00:30:00.000Z',
               'marinaCode': '青岛小港码头',
@@ -187,7 +189,7 @@ void main() {
     expect(find.text('本轮缺口'), findsOneWidget);
     expect(find.text('¥38.89'), findsOneWidget);
     expect(
-      await binding.takeScreenshot('18-step4-supplement-consent'),
+      await binding.takeScreenshot('mock-18-step4-supplement-consent'),
       isNotEmpty,
     );
 
@@ -197,7 +199,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('等待补差支付'), findsOneWidget);
     expect(
-      await binding.takeScreenshot('19-step4-supplement-payment'),
+      await binding.takeScreenshot('mock-19-step4-supplement-payment'),
       isNotEmpty,
     );
 
@@ -207,8 +209,9 @@ void main() {
     await tester.tap(find.text('模拟支付成功'));
     await tester.pumpAndSettle();
     expect(find.text('补差完成'), findsOneWidget);
+    expect(find.text('平台已成行'), findsOneWidget);
     expect(
-      await binding.takeScreenshot('20-step4-supplement-complete'),
+      await binding.takeScreenshot('mock-20-step4-supplement-complete'),
       isNotEmpty,
     );
   });

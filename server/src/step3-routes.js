@@ -3,8 +3,10 @@ import { createSecurity, verifyChineseIdentityNumber } from './security.js';
 import { createSandboxInsuranceAdapter, createSandboxPaymentAdapter } from './step3-adapters.js';
 import { settleSupplementPayment } from './step4-routes.js';
 import { registerStep3WaitlistRoutes } from './step3-waitlist-routes.js';
+import { configuredStep3Clock, readStep3Clock } from './step3-clock.js';
 import {
   closeoutAtSql,
+  confirmationAtSql,
   dispatchWaitlistCandidates,
   effectivePaymentAtOrBeforeDeadline,
   processWaitlistDispatches,
@@ -24,6 +26,22 @@ const holdKey = (seatId) => `${HOLD_KEY_PREFIX}${seatId}`;
 
 function validUuid(value) {
   return typeof value === 'string' && UUID_PATTERN.test(value);
+}
+
+function bookingWindowOpen(departure, now) {
+  return departure?.status === 'open'
+    && new Date(departure.departure_at) > new Date(now)
+    && new Date(departure.booking_deadline) > new Date(now)
+    && new Date(departure.confirmation_at) > new Date(now);
+}
+
+function orderWindowOpen(departure, waitlistEntry, hold, now) {
+  if (new Date(hold.expires_at) <= new Date(now)
+      || departure?.status !== 'open' || new Date(departure.departure_at) <= new Date(now)) return false;
+  if (!hold.waitlist_entry_id) return bookingWindowOpen(departure, now);
+  return waitlistEntry?.status === 'authorized' && waitlistEntry.accepted_at
+    && new Date(waitlistEntry.authorization_expires_at) > new Date(now)
+    && !departure.waitlist_window_closed_at && new Date(departure.closeout_at) > new Date(now);
 }
 
 function maskName(value) {
@@ -111,7 +129,7 @@ async function releaseHoldInTransaction(client, holdId, terminalStatus) {
   return seatIds;
 }
 
-async function expireHolds(pool, redis, departureId = null) {
+async function expireHolds(pool, redis, departureId = null, clockNow = null) {
   const client = await pool.connect();
   const expired = [];
   try {
@@ -166,9 +184,9 @@ async function expireHolds(pool, redis, departureId = null) {
   }
   for (const hold of expired) await deleteHoldKeys(redis, hold.id, hold.seatIds).catch(() => {});
   for (const departureId of new Set(expired.map((hold) => hold.departureId))) {
-    await dispatchWaitlistCandidates(pool, redis, departureId).catch(() => {});
+    await dispatchWaitlistCandidates(pool, redis, departureId, new Date(), clockNow).catch(() => {});
   }
-  await processWaitlistDispatches(pool, redis).catch(() => {});
+  await processWaitlistDispatches(pool, redis, new Date(), clockNow).catch(() => {});
   return expired.length;
 }
 
@@ -307,7 +325,7 @@ function validPassengers(value, seatIds) {
   return { value: passengers };
 }
 
-async function handlePaymentEvent({ pool, redis, adapter, event, signature, log }) {
+async function handlePaymentEvent({ pool, redis, adapter, event, signature, log, clockNow = null }) {
   if (!adapter.verifyCallback(event, signature)) return { statusCode: 401, body: { error: '支付回调签名无效' } };
   if (!validUuid(event.eventId) || !validUuid(event.orderId)
       || typeof event.transactionReference !== 'string'
@@ -416,7 +434,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
     const order = orderResult.rows[0];
     if (payment.status === 'pending' && event.outcome === 'success' && order.waitlist_entry_id) {
       const deadline = order.authorization_expires_at ?? order.hold_expires_at;
-      const receivedAt = await client.query('SELECT clock_timestamp() AS now');
+      const receivedAt = await readStep3Clock(client, clockNow);
       const seatStillHeld = await client.query(
         `SELECT count(*)::integer AS count FROM seat_inventory s
          JOIN booking_order_seats os ON os.seat_inventory_id=s.id
@@ -426,7 +444,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
       );
       const onTime = effectivePaymentAtOrBeforeDeadline(event.createdAt, deadline)
         && order.hold_status === 'active'
-        && new Date(order.hold_expires_at) > new Date(receivedAt.rows[0].now)
+        && new Date(order.hold_expires_at) > new Date(receivedAt)
         && Number(seatStillHeld.rows[0].count) > 0;
       if (!onTime) {
         if (order.hold_status === 'active') {
@@ -468,7 +486,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
     if (payment.status !== 'pending') {
       if (payment.status === 'timed_out' && event.outcome === 'success' && order.waitlist_entry_id) {
         const deadline = order.authorization_expires_at ?? order.hold_expires_at;
-        const receivedAt = await client.query('SELECT clock_timestamp() AS now');
+        const receivedAt = await readStep3Clock(client, clockNow);
         const seatStillHeld = await client.query(
           `SELECT count(*)::integer AS count FROM seat_inventory s
            JOIN booking_order_seats os ON os.seat_inventory_id=s.id
@@ -478,7 +496,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
         );
         const onTime = effectivePaymentAtOrBeforeDeadline(event.createdAt, deadline)
           && order.hold_status === 'active'
-          && new Date(order.hold_expires_at) > new Date(receivedAt.rows[0].now)
+          && new Date(order.hold_expires_at) > new Date(receivedAt)
           && Number(seatStillHeld.rows[0].count) > 0;
         if (onTime) {
           // A delayed webhook for a provider payment completed within the active hold may still settle.
@@ -542,8 +560,9 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
       `SELECT id,status,expires_at,waitlist_entry_id FROM seat_holds WHERE id=$1 FOR UPDATE`,
       [order.hold_id],
     );
+    const holdCheckedAt = await readStep3Clock(client, clockNow);
     if (!holdResult.rowCount || holdResult.rows[0].status !== 'active'
-        || new Date(holdResult.rows[0].expires_at) <= new Date()) {
+        || new Date(holdResult.rows[0].expires_at) <= new Date(holdCheckedAt)) {
       if (event.outcome === 'success' && order.waitlist_entry_id) {
         await client.query(
           `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),updated_at=now()
@@ -643,7 +662,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
   }
   if (releasedHold) await deleteHoldKeys(redis, releasedHold.id, releasedHold.seatIds).catch(() => {});
   if (departureId && (event.outcome !== 'success' || responseBody?.latePaymentRefundRequired)) {
-    await dispatchWaitlistCandidates(pool, redis, departureId).catch((error) =>
+    await dispatchWaitlistCandidates(pool, redis, departureId, new Date(), clockNow).catch((error) =>
       log.warn({ err: error }, 'Waitlist dispatch after payment release failed'));
   }
   return { statusCode: 200, body: responseBody };
@@ -651,6 +670,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log 
 
 export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
   const security = createSecurity(config);
+  const clockNow = configuredStep3Clock(config);
   const paymentAdapter = createSandboxPaymentAdapter(config);
   const insuranceAdapter = createSandboxInsuranceAdapter(config);
   const requireRedis = async (_request, reply) => {
@@ -661,17 +681,20 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       return sendError(reply, 503, '锁位服务暂不可用，请稍后重试');
     }
   };
-  const reaper = setInterval(() => {
-    if (pool) expireHolds(pool, redis).catch((error) => app.log.warn({ err: error }, 'Seat hold reaper failed'));
-  }, 15000);
-  reaper.unref();
-  app.addHook('onClose', async () => clearInterval(reaper));
+  if (config.nodeEnv !== 'test') {
+    const reaper = setInterval(() => {
+      if (pool) expireHolds(pool, redis, null, clockNow)
+        .catch((error) => app.log.warn({ err: error }, 'Seat hold reaper failed'));
+    }, 15000);
+    reaper.unref();
+    app.addHook('onClose', async () => clearInterval(reaper));
+  }
   registerStep3WaitlistRoutes(app, { pool, redis, config, requireUser });
 
   app.get('/departures/:id/seats', { preHandler: [requireUser, requireRedis] }, async (request, reply) => {
     if (!validUuid(request.params.id)) return sendError(reply, 400, '活动编号无效');
     try {
-      await expireHolds(pool, redis, request.params.id);
+      await expireHolds(pool, redis, request.params.id, clockNow);
       const departure = await pool.query(
         `SELECT id,seat_template_count,seat_layout_snapshot FROM departures WHERE id=$1 AND status='open' AND departure_at>now()
            AND booking_deadline>now() AND ${formationCutoffOpenSql}`,
@@ -728,12 +751,22 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     let lockedSeatIds = [];
     try {
       await client.query('BEGIN');
-      const departure = await client.query(
-        `SELECT id FROM departures WHERE id=$1 AND status='open' AND departure_at>now()
-           AND booking_deadline>now() AND ${formationCutoffOpenSql} FOR UPDATE`,
+      const departureLock = await client.query(
+        'SELECT id FROM departures WHERE id=$1 FOR UPDATE',
         [request.params.id],
       );
-      if (!departure.rowCount) {
+      if (!departureLock.rowCount) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 404, '活动不存在或已截止报名');
+      }
+      const departureResult = await client.query(
+        `SELECT d.status,d.departure_at,d.booking_deadline,
+                ${confirmationAtSql('d')} AS confirmation_at
+         FROM departures d WHERE d.id=$1`, [request.params.id],
+      );
+      const departure = departureResult.rows[0];
+      const lockedAt = await readStep3Clock(client, clockNow);
+      if (!bookingWindowOpen(departure, lockedAt)) {
         await client.query('ROLLBACK');
         return sendError(reply, 404, '活动不存在或已截止报名');
       }
@@ -759,12 +792,18 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '该座位正在按候补顺序授权，请刷新座位图');
       }
+      const seatLockAt = await readStep3Clock(client, clockNow);
+      if (!bookingWindowOpen(departure, seatLockAt)) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 404, '活动不存在或已截止报名');
+      }
       lockedSeatIds = seats.rows.map((seat) => seat.id);
       holdId = randomUUID();
+      const expiresAt = new Date(new Date(seatLockAt).getTime() + HOLD_MS);
       const hold = await client.query(
         `INSERT INTO seat_holds (id,departure_id,user_id,expires_at)
-         VALUES ($1,$2,$3,now()+interval '10 minutes') RETURNING expires_at`,
-        [holdId, request.params.id, request.user.id],
+         VALUES ($1,$2,$3,$4) RETURNING expires_at`,
+        [holdId, request.params.id, request.user.id, expiresAt],
       );
       for (const seat of seats.rows) {
         await client.query(
@@ -781,13 +820,20 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       const script = `for i,key in ipairs(KEYS) do if redis.call('EXISTS',key)==1 then return 0 end end for i,key in ipairs(KEYS) do redis.call('SET',key,ARGV[1],'PX',ARGV[2]) end return 1`;
       const result = await redis.eval(script, {
         keys: seats.rows.map((seat) => holdKey(seat.id)),
-        arguments: [holdId, String(HOLD_MS)],
+        arguments: [holdId, String(Math.max(1, expiresAt.getTime() - new Date(seatLockAt).getTime()))],
       });
       if (Number(result) !== 1) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '所选座位正在被其他钓友锁定，请刷新座位图');
       }
       redisSet = true;
+      const commitAt = await readStep3Clock(client, clockNow);
+      if (!bookingWindowOpen(departure, commitAt)) {
+        await client.query('ROLLBACK');
+        await deleteHoldKeys(redis, holdId, lockedSeatIds).catch(() => {});
+        redisSet = false;
+        return sendError(reply, 404, '活动不存在或已截止报名');
+      }
       await client.query('COMMIT');
       return reply.code(201).send({
         holdId,
@@ -835,8 +881,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
          WHERE id=$1 AND user_id=$2 FOR UPDATE`,
         [holdId, request.user.id],
       );
-      if (!holdResult.rowCount || holdResult.rows[0].status !== 'active'
-          || new Date(holdResult.rows[0].expires_at) <= new Date()) {
+      if (!holdResult.rowCount || holdResult.rows[0].status !== 'active') {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '选位锁定已失效，请重新选择座位');
       }
@@ -845,21 +890,27 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '该座位锁定已用于创建订单');
       }
-      const departure = await client.query(
-        `SELECT d.id FROM departures d
-         LEFT JOIN departure_waitlist_entries w ON w.id=$3 AND w.user_id=$2
-         WHERE d.id=$1 AND d.status='open' AND d.departure_at>now()
-           AND ($3::uuid IS NULL OR (w.status='authorized' AND w.accepted_at IS NOT NULL
-             AND w.authorization_expires_at>now()))
-           AND (
-             (d.booking_deadline>now() AND ${formationCutoffOpenSql.replaceAll('departure_at', 'd.departure_at')})
-             OR ($3::uuid IS NOT NULL AND d.waitlist_window_closed_at IS NULL
-               AND ${closeoutAtSql('d')}>now())
-           )
-         FOR UPDATE OF d`,
-        [hold.departure_id, request.user.id, hold.waitlist_entry_id],
+      const departureLock = await client.query(
+        'SELECT id FROM departures WHERE id=$1 FOR UPDATE', [hold.departure_id],
       );
-      if (!departure.rowCount) {
+      if (!departureLock.rowCount) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '班次已停止报名，不能创建订单');
+      }
+      const departureResult = await client.query(
+        `SELECT d.status,d.departure_at,d.booking_deadline,d.waitlist_window_closed_at,
+                ${confirmationAtSql('d')} AS confirmation_at,
+                ${closeoutAtSql('d')} AS closeout_at
+         FROM departures d WHERE d.id=$1`, [hold.departure_id],
+      );
+      const waitlistResult = hold.waitlist_entry_id ? await client.query(
+        `SELECT status,accepted_at,authorization_expires_at FROM departure_waitlist_entries
+         WHERE id=$1 AND user_id=$2 FOR UPDATE`, [hold.waitlist_entry_id, request.user.id],
+      ) : { rowCount: 0, rows: [] };
+      const departure = departureResult.rows[0];
+      const waitlistEntry = waitlistResult.rows[0] ?? null;
+      const departureLockAt = await readStep3Clock(client, clockNow);
+      if (!orderWindowOpen(departure, waitlistEntry, hold, departureLockAt)) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '班次已停止报名，不能创建订单');
       }
@@ -886,6 +937,11 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         await client.query('COMMIT');
         await deleteHoldKeys(redis, holdId, seatIdsToRelease).catch(() => {});
         return sendError(reply, 409, '座位锁定服务已过期，请重新选位');
+      }
+      const orderCommitCheckAt = await readStep3Clock(client, clockNow);
+      if (!orderWindowOpen(departure, waitlistEntry, hold, orderCommitCheckAt)) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '班次已停止报名，不能创建订单');
       }
       const seatFeeFen = seatResult.rows.reduce((sum, seat) => sum + Number(seat.price_fen), 0);
       if (!Number.isSafeInteger(seatFeeFen) || seatFeeFen > 2_000_000_000) {
@@ -1075,15 +1131,19 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         }
         const existing = await client.query(
           `SELECT id,provider_reference,amount_fen,status FROM payment_transactions
-           WHERE supplement_participant_id=$1 AND status='pending'`, [participant.id],
+           WHERE supplement_participant_id=$1 AND status IN ('pending','succeeded')
+           ORDER BY CASE status WHEN 'succeeded' THEN 0 ELSE 1 END,created_at DESC LIMIT 1`,
+          [participant.id],
         );
         if (existing.rowCount) {
           const row = existing.rows[0];
           await client.query('COMMIT');
-          return { payment: {
+          return reply.code(200).send({ payment: {
             id: row.id, reference: row.provider_reference, amountFen: Number(row.amount_fen),
-            status: row.status, adapter: 'sandbox', checkoutUrl: `sandbox-pay://supplement/${participant.id}`,
-          } };
+            status: row.status, adapter: 'sandbox',
+            checkoutUrl: row.status === 'pending' ? `sandbox-pay://supplement/${participant.id}` : null,
+            idempotentReplay: true,
+          } });
         }
         const intent = paymentAdapter.createIntent({ orderId: participant.id, amountFen: Number(participant.amount_fen) });
         const payment = await client.query(
@@ -1137,7 +1197,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         });
         const result = await handlePaymentEvent({
           pool, redis, adapter: paymentAdapter, event: signed.event,
-          signature: signed.signature, log: request.log,
+          signature: signed.signature, log: request.log, clockNow,
         });
         return reply.code(result.statusCode).send(result.body);
       } catch (error) {
@@ -1168,7 +1228,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       });
       const result = await handlePaymentEvent({
         pool, redis, adapter: paymentAdapter, event: signed.event,
-        signature: signed.signature, log: request.log,
+        signature: signed.signature, log: request.log, clockNow,
       });
       return reply.code(result.statusCode).send(result.body);
     } catch (error) {
@@ -1181,7 +1241,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     try {
       const result = await handlePaymentEvent({
         pool, redis, adapter: paymentAdapter, event: request.body,
-        signature: String(request.headers['x-sandbox-signature'] ?? ''), log: request.log,
+        signature: String(request.headers['x-sandbox-signature'] ?? ''), log: request.log, clockNow,
       });
       return reply.code(result.statusCode).send(result.body);
     } catch (error) {

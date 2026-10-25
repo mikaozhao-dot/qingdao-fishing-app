@@ -1,5 +1,6 @@
 import { createSecurity } from './security.js';
 import { closeoutAtSql, processWaitlistCloseouts } from './step3-waitlist.js';
+import { configuredStep3Clock } from './step3-clock.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const sendError = (reply, statusCode, message) => reply.code(statusCode).send({ error: message });
@@ -291,9 +292,9 @@ export async function settleSupplementPayment(client, payment, event) {
   const activeRound = ['collecting_consent','collecting_payment'].includes(participant.round_status)
     && !deadlinePassed;
   if (payment.status !== 'pending') {
-    if (payment.status === 'timed_out' && event.outcome === 'success') {
+    if (['timed_out','failed'].includes(payment.status) && event.outcome === 'success') {
       await failSupplementRound(client, participant.round_id,
-        deadlinePassed ? 'response_deadline_expired' : 'payment_arrived_after_timeout',
+        deadlinePassed ? 'response_deadline_expired' : `payment_arrived_after_${payment.status}`,
         deadlinePassed ? 'expired' : 'failed');
       await client.query(
         `UPDATE payment_transactions SET status='succeeded',late_success=true,callback_event_id=$2,
@@ -311,6 +312,9 @@ export async function settleSupplementPayment(client, payment, event) {
          WHERE id=$1`, [participant.id],
       );
       return { paymentStatus: 'succeeded', latePaymentRefundRequired: true, includedInFormation: false };
+    }
+    if (payment.status === 'succeeded' && event.outcome === 'success') {
+      return { duplicate: true, paymentStatus: 'succeeded', latePaymentRefundRequired: payment.late_success };
     }
     return { duplicate: true, paymentStatus: payment.status };
   }
@@ -465,9 +469,10 @@ async function markFormationOverdue(client, departureId) {
 }
 
 /** Capture the approved T-1 18:00 Asia/Shanghai checkpoint once per departure. */
-export async function processFormationChecks(pool, asOf = new Date(), onError = () => {}) {
+export async function processFormationChecks(pool, asOf = new Date(), onError = () => {},
+  { redis = null, clockNow = null } = {}) {
   if (!pool) return { checked: 0, deferred: 0, overdue: 0 };
-  await processWaitlistCloseouts(pool, asOf);
+  await processWaitlistCloseouts(pool, asOf, redis, clockNow);
   await processSupplementDeadlines(pool, asOf);
   await processSandboxRefundObligations(pool);
   const due = await pool.query(
@@ -655,9 +660,10 @@ function csvCell(value) {
   return '"' + safe.replaceAll('"', '""') + '"';
 }
 
-export function registerStep4Routes(app, { pool, config, requireUser }) {
+export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
   const security = createSecurity(config);
   const requireCaptain = captainPreHandler(pool);
+  const clockNow = configuredStep3Clock(config);
 
   app.get('/captain/departures/:id/formation-accounts',
     { preHandler: [requireUser, requireCaptain] }, async (request, reply) => {
@@ -883,6 +889,27 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
         if (!participantResult.rowCount) return { error: [403, '该订单不属于本轮补差'] };
         const participant = participantResult.rows[0];
         const now = await client.query('SELECT clock_timestamp() AS now');
+        if (['failed','expired'].includes(round.status) && action === 'reject') {
+          if (['rejected','timed_out'].includes(participant.consent_status)) {
+            return { round: {
+              id: round.id, status: round.status, rejected: true,
+              exitRefundRequested: true, idempotentReplay: true,
+            } };
+          }
+          if (!['pending','accepted'].includes(participant.consent_status)) {
+            return { error: [409, '当前补差参与状态不能退出'] };
+          }
+          await client.query(
+            `UPDATE departure_supplement_participants SET consent_status='rejected',
+               responded_at=COALESCE(responded_at,$2),updated_at=now() WHERE id=$1`,
+            [participant.id, now.rows[0].now],
+          );
+          await refundSupplementDecliners(client, round.id);
+          return { round: {
+            id: round.id, status: round.status, rejected: true,
+            exitRefundRequested: true,
+          } };
+        }
         if (!['collecting_consent','collecting_payment'].includes(round.status)) {
           return { error: [409, '本轮补差已结束'] };
         }
@@ -1238,14 +1265,16 @@ export function registerStep4Routes(app, { pool, config, requireUser }) {
     return { checklist: result.rows[0].checklist, generatedAt: result.rows[0].generated_at };
   });
 
-  const interval = setInterval(() => {
-    processConfirmedChecklists(pool, (error) => {
-      app.log.error({ err: error }, 'Step 4 checklist pass failed');
-    });
-    processFormationChecks(pool, new Date(), (error) => {
-      app.log.error({ err: error }, 'Step 4 formation check failed');
-    });
-  }, 60_000);
-  interval.unref?.();
-  app.addHook('onClose', async () => clearInterval(interval));
+  if (config.nodeEnv !== 'test') {
+    const interval = setInterval(() => {
+      processConfirmedChecklists(pool, (error) => {
+        app.log.error({ err: error }, 'Step 4 checklist pass failed');
+      }).catch((error) => app.log.error({ err: error }, 'Step 4 checklist worker failed'));
+      processFormationChecks(pool, new Date(), (error) => {
+        app.log.error({ err: error }, 'Step 4 formation check failed');
+      }, { redis, clockNow }).catch((error) => app.log.error({ err: error }, 'Step 4 formation worker failed'));
+    }, 60_000);
+    interval.unref?.();
+    app.addHook('onClose', async () => clearInterval(interval));
+  }
 }

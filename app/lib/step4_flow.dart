@@ -398,11 +398,19 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
   Future<void> _decideSupplement(String action) async {
     if (_supplementWorking) return;
     if (action == 'reject') {
+      final roundAlreadyFailed = [
+        'failed',
+        'expired',
+      ].contains(_supplementRound['status']);
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('拒绝本轮补差？'),
-          content: const Text('拒绝会使整轮补差失效，相关订单按规则全额退款，且不会自动发起第二轮。'),
+          title: Text(roundAlreadyFailed ? '退出并申请全额退款？' : '拒绝本轮补差？'),
+          content: Text(
+            roundAlreadyFailed
+                ? '本轮已失效。退出将取消本订单并申请全额退款，不收取退改违约金；已支付的补差款另按退款义务处理。'
+                : '拒绝会使整轮补差失效，相关订单按规则全额退款，且不会自动发起第二轮。',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -410,7 +418,7 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('确认拒绝'),
+              child: Text(roundAlreadyFailed ? '确认退出' : '确认拒绝'),
             ),
           ],
         ),
@@ -1156,6 +1164,19 @@ class _SupplementRoundCard extends StatelessWidget {
                 padding: EdgeInsets.only(top: 8),
                 child: Text('本轮不会自动重开；请查看订单退款状态。', style: _muted),
               ),
+            if (['failed', 'expired'].contains(roundStatus) &&
+                !['rejected', 'timed_out'].contains(consent)) ...[
+              const SizedBox(height: 8),
+              const Text('本轮失效后，你仍可退出本订单并申请全额退款。', style: _muted),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: working ? null : () => onDecision('reject'),
+                  child: const Text('退出并申请全额退款'),
+                ),
+              ),
+            ],
           ],
           if (working) ...[
             const SizedBox(height: 10),

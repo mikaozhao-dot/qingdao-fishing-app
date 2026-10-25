@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readStep3Clock } from './step3-clock.js';
 
 const HOLD_KEY_PREFIX = 'fishing:step3:seat:';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -62,7 +63,7 @@ async function acquireSeatKey(redis, seatId, holdId, expiresAt, now) {
 }
 
 /** Offer the oldest released platform seat to the oldest pre-cutoff waitlist entry. */
-export async function dispatchWaitlistCandidates(pool, redis, departureId, asOf = new Date()) {
+export async function dispatchWaitlistCandidates(pool, redis, departureId, _asOf = new Date(), clockNow = null) {
   if (!pool || !redis?.isOpen) return [];
   const assignments = [];
   while (assignments.length < 30) {
@@ -70,19 +71,25 @@ export async function dispatchWaitlistCandidates(pool, redis, departureId, asOf 
     let assigned = null;
     try {
       await client.query('BEGIN');
+      const departureLock = await client.query(
+        'SELECT id FROM departures WHERE id=$1 FOR UPDATE',
+        [departureId],
+      );
+      if (!departureLock.rowCount) {
+        await client.query('COMMIT');
+        break;
+      }
       const departureResult = await client.query(
         `SELECT d.id,d.status,d.departure_at,d.waitlist_window_closed_at,
                 ${confirmationAtSql('d')} AS confirmation_at,
                 ${closeoutAtSql('d')} AS closeout_at
-         FROM departures d WHERE d.id=$1 FOR UPDATE`,
+         FROM departures d WHERE d.id=$1`,
         [departureId],
       );
-      if (!departureResult.rowCount) {
-        await client.query('COMMIT');
-        break;
-      }
       const departure = departureResult.rows[0];
-      const now = new Date(asOf);
+      // Capture time only after the departure lock is acquired; request-start
+      // time can become stale while this transaction waits on the row lock.
+      const now = await readStep3Clock(client, clockNow);
       if (!['open','forming'].includes(departure.status)
           || new Date(departure.departure_at) <= now
           || now >= new Date(departure.closeout_at)
@@ -167,7 +174,7 @@ export async function dispatchWaitlistCandidates(pool, redis, departureId, asOf 
   return assignments;
 }
 
-export async function processWaitlistCloseouts(pool, asOf = new Date()) {
+export async function processWaitlistCloseouts(pool, asOf = new Date(), redis = null, clockNow = null) {
   if (!pool) return { closed: 0, waiting: 0 };
   const due = await pool.query(
     `SELECT d.id FROM departures d
@@ -182,28 +189,76 @@ export async function processWaitlistCloseouts(pool, asOf = new Date()) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const departure = await client.query(
-        `SELECT d.id FROM departures d WHERE d.id=$1 AND d.status IN ('open','forming')
-          AND d.waitlist_window_closed_at IS NULL AND ${closeoutAtSql('d')} <= $2 FOR UPDATE`,
-        [row.id, asOf],
+      const departureLock = await client.query(
+        `SELECT id FROM departures WHERE id=$1 AND status IN ('open','forming')
+          AND waitlist_window_closed_at IS NULL FOR UPDATE`,
+        [row.id],
       );
-      if (!departure.rowCount) {
+      if (!departureLock.rowCount) {
         await client.query('COMMIT');
         continue;
       }
-      const active = await client.query(
-        `SELECT EXISTS (
-           SELECT 1 FROM departure_waitlist_entries w
-           JOIN seat_holds h ON h.id=w.hold_id
-           WHERE w.departure_id=$1 AND w.status='authorized'
-             AND h.status='active' AND h.expires_at > $2
-         ) AS has_active_authorization`,
-        [row.id, asOf],
+      const departure = await client.query(
+        `SELECT ${closeoutAtSql('d')} AS closeout_at
+         FROM departures d WHERE d.id=$1`,
+        [row.id],
       );
-      if (active.rows[0].has_active_authorization) {
-        waiting += 1;
+      const now = await readStep3Clock(client, clockNow);
+      const closeoutAt = departure.rows[0].closeout_at;
+      if (new Date(closeoutAt) > new Date(now)) {
         await client.query('COMMIT');
         continue;
+      }
+
+      const activeHolds = await client.query(
+        `SELECT h.id FROM seat_holds h
+         JOIN departure_waitlist_entries w ON w.hold_id=h.id
+         WHERE w.departure_id=$1 AND w.status IN ('authorized','converted') AND h.status='active'
+         ORDER BY h.id FOR UPDATE OF h`, [row.id],
+      );
+      const holdIds = activeHolds.rows.map((hold) => hold.id);
+      const holdSeats = [];
+      for (const holdId of holdIds) {
+        const seats = await client.query(
+          'SELECT seat_inventory_id FROM seat_hold_items WHERE hold_id=$1 AND status=\'active\'',
+          [holdId],
+        );
+        holdSeats.push({ id: holdId, seatIds: seats.rows.map((seat) => seat.seat_inventory_id) });
+      }
+
+      const pendingOrders = await client.query(
+        `SELECT id,hold_id FROM booking_orders
+         WHERE departure_id=$1 AND waitlist_entry_id IS NOT NULL AND status='pending_payment'
+         ORDER BY id FOR UPDATE`, [row.id],
+      );
+      const pendingOrderIds = pendingOrders.rows.map((order) => order.id);
+      if (pendingOrderIds.length) {
+        await client.query(
+          `UPDATE payment_transactions SET status='timed_out',updated_at=now(),completed_at=now()
+           WHERE order_id=ANY($1::uuid[]) AND status='pending'`, [pendingOrderIds],
+        );
+        await client.query(
+          `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,$2),updated_at=now()
+           WHERE id=ANY($1::uuid[]) AND status='pending_payment'`, [pendingOrderIds, closeoutAt],
+        );
+        await client.query(
+          `UPDATE booking_order_seats SET status='released'
+           WHERE order_id=ANY($1::uuid[]) AND status='pending_payment'`, [pendingOrderIds],
+        );
+      }
+      if (holdIds.length) {
+        await client.query(
+          `UPDATE seat_inventory SET status='available',hold_id=NULL,hold_expires_at=NULL,updated_at=now()
+           WHERE hold_id=ANY($1::uuid[]) AND status='held'`, [holdIds],
+        );
+        await client.query(
+          `UPDATE seat_hold_items SET status='released'
+           WHERE hold_id=ANY($1::uuid[]) AND status='active'`, [holdIds],
+        );
+        await client.query(
+          `UPDATE seat_holds SET status='expired',released_at=$2
+           WHERE id=ANY($1::uuid[]) AND status='active'`, [holdIds, closeoutAt],
+        );
       }
       await client.query(
         `UPDATE departure_waitlist_entries SET status='closed',updated_at=now()
@@ -211,24 +266,26 @@ export async function processWaitlistCloseouts(pool, asOf = new Date()) {
       );
       await client.query(
         `UPDATE departure_waitlist_entries SET status='expired',updated_at=now()
-         WHERE departure_id=$1 AND status='authorized' AND authorization_expires_at <= $2`,
-        [row.id, asOf],
+         WHERE departure_id=$1 AND (status='authorized'
+           OR (status='converted' AND order_id=ANY($2::uuid[])))`,
+        [row.id, pendingOrderIds],
       );
-      const pendingPayment = await client.query(
-        `SELECT EXISTS (SELECT 1 FROM booking_orders WHERE departure_id=$1 AND status='pending_payment') AS pending`,
-        [row.id],
-      );
-      if (pendingPayment.rows[0].pending) {
-        waiting += 1;
-        await client.query('COMMIT');
-        continue;
-      }
+      // Persist the policy cutoff, not the time at which a delayed worker ran.
       await client.query(
         `UPDATE departures SET waitlist_window_closed_at=$2,updated_at=now()
-         WHERE id=$1 AND waitlist_window_closed_at IS NULL`, [row.id, asOf],
+         WHERE id=$1 AND waitlist_window_closed_at IS NULL`, [row.id, closeoutAt],
       );
       closed += 1;
       await client.query('COMMIT');
+      if (redis?.isOpen) {
+        const script = `for i,key in ipairs(KEYS) do if redis.call('GET',key)==ARGV[i] then redis.call('DEL',key) end end return 1`;
+        for (const hold of holdSeats) {
+          await redis.eval(script, {
+            keys: hold.seatIds.map((seatId) => `${HOLD_KEY_PREFIX}${seatId}`),
+            arguments: hold.seatIds.map(() => hold.id),
+          }).catch(() => {});
+        }
+      }
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;
@@ -239,7 +296,7 @@ export async function processWaitlistCloseouts(pool, asOf = new Date()) {
   return { closed, waiting };
 }
 
-export async function processWaitlistDispatches(pool, redis, asOf = new Date()) {
+export async function processWaitlistDispatches(pool, redis, asOf = new Date(), clockNow = null) {
   if (!pool || !redis?.isOpen) return { dispatched: 0 };
   const due = await pool.query(
     `SELECT DISTINCT d.id FROM departures d
@@ -253,7 +310,7 @@ export async function processWaitlistDispatches(pool, redis, asOf = new Date()) 
   );
   let dispatched = 0;
   for (const row of due.rows) {
-    dispatched += (await dispatchWaitlistCandidates(pool, redis, row.id, asOf)).length;
+    dispatched += (await dispatchWaitlistCandidates(pool, redis, row.id, asOf, clockNow)).length;
   }
   return { dispatched };
 }

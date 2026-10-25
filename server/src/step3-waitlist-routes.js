@@ -6,6 +6,7 @@ import {
   validWaitlistRequestKey,
   validWaitlistUuid,
 } from './step3-waitlist.js';
+import { configuredStep3Clock, readStep3Clock } from './step3-clock.js';
 
 const HOLD_KEY_PREFIX = 'fishing:step3:seat:';
 const sendError = (reply, statusCode, message) => reply.code(statusCode).send({ error: message });
@@ -45,6 +46,7 @@ async function loadWaitlistEntry(pool, entryId, userId) {
 }
 
 export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireUser }) {
+  const clockNow = configuredStep3Clock(config);
   app.post('/departures/:id/waitlist', { preHandler: requireUser }, async (request, reply) => {
     if (!validWaitlistUuid(request.params.id)) return sendError(reply, 400, '活动编号无效');
     if (request.user.identity_status !== 'verified') return sendError(reply, 403, '请先完成实名核验后加入候补');
@@ -55,14 +57,24 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
       let entryId;
       try {
         await client.query('BEGIN');
-        const departure = await client.query(
-          `SELECT d.id FROM departures d WHERE d.id=$1 AND d.status='open'
-             AND d.departure_at>now() AND d.booking_deadline>now()
-             AND d.waitlist_window_closed_at IS NULL AND ${confirmationAtSql('d')}>now()
-           FOR UPDATE`,
+        const lockedDeparture = await client.query(
+          'SELECT id FROM departures WHERE id=$1 FOR UPDATE',
           [request.params.id],
         );
-        if (!departure.rowCount) {
+        if (!lockedDeparture.rowCount) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 409, '候补登记已截止');
+        }
+        const departure = await client.query(
+          `SELECT d.status,d.departure_at,d.booking_deadline,d.waitlist_window_closed_at,
+                  ${confirmationAtSql('d')} AS confirmation_at
+           FROM departures d WHERE d.id=$1`, [request.params.id],
+        );
+        const now = await readStep3Clock(client, clockNow);
+        const row = departure.rows[0];
+        if (row.status !== 'open' || new Date(row.departure_at) <= now
+            || new Date(row.booking_deadline) <= now || row.waitlist_window_closed_at
+            || new Date(row.confirmation_at) <= now) {
           await client.query('ROLLBACK');
           return sendError(reply, 409, '候补登记已截止');
         }
@@ -86,7 +98,7 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
       } finally {
         client.release();
       }
-      await dispatchWaitlistCandidates(pool, redis, request.params.id);
+      await dispatchWaitlistCandidates(pool, redis, request.params.id, new Date(), clockNow);
       return reply.code(201).send({ entry: await loadWaitlistEntry(pool, entryId, request.user.id) });
     } catch (error) {
       request.log.error({ err: error }, 'Waitlist registration failed');
@@ -114,16 +126,52 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
 
   app.post('/waitlist/:id/accept', { preHandler: requireUser }, async (request, reply) => {
     if (!validWaitlistUuid(request.params.id)) return sendError(reply, 400, '候补编号无效');
-    const result = await pool.query(
-      `UPDATE departure_waitlist_entries w SET accepted_at=COALESCE(accepted_at,now()),updated_at=now()
-       FROM seat_holds h,departures d
-       WHERE w.id=$1 AND w.user_id=$2 AND w.status='authorized' AND h.id=w.hold_id
-         AND h.status='active' AND h.expires_at>now() AND d.id=w.departure_id
-         AND d.waitlist_window_closed_at IS NULL AND ${closeoutAtSql('d')}>now()
-       RETURNING w.id`,
-      [request.params.id, request.user.id],
-    );
-    if (!result.rowCount) return sendError(reply, 409, '候补授权已失效或已到期');
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const lookup = await client.query(
+        'SELECT departure_id FROM departure_waitlist_entries WHERE id=$1 AND user_id=$2',
+        [request.params.id, request.user.id],
+      );
+      if (!lookup.rowCount) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 404, '候补记录不存在');
+      }
+      const departureLock = await client.query(
+        'SELECT id FROM departures WHERE id=$1 FOR UPDATE', [lookup.rows[0].departure_id],
+      );
+      if (!departureLock.rowCount) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '候补授权已失效或已到期');
+      }
+      const rowResult = await client.query(
+        `SELECT w.status,w.accepted_at,w.hold_id,h.status AS hold_status,h.expires_at,
+                d.waitlist_window_closed_at,${closeoutAtSql('d')} AS closeout_at
+         FROM departure_waitlist_entries w
+         JOIN departures d ON d.id=w.departure_id
+         LEFT JOIN seat_holds h ON h.id=w.hold_id
+         WHERE w.id=$1 AND w.user_id=$2`, [request.params.id, request.user.id],
+      );
+      const now = await readStep3Clock(client, clockNow);
+      const row = rowResult.rows[0];
+      if (!row || row.status !== 'authorized' || row.hold_status !== 'active'
+          || new Date(row.expires_at) <= now || row.waitlist_window_closed_at
+          || new Date(row.closeout_at) <= now) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '候补授权已失效或已到期');
+      }
+      await client.query(
+        `UPDATE departure_waitlist_entries SET accepted_at=COALESCE(accepted_at,$2),updated_at=now()
+         WHERE id=$1`, [request.params.id, now],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      request.log.error({ err: error }, 'Waitlist authorization accept failed');
+      return sendError(reply, 503, '候补授权暂不可用');
+    } finally {
+      client.release();
+    }
     return { entry: await loadWaitlistEntry(pool, request.params.id, request.user.id) };
   });
 
@@ -180,7 +228,8 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
       const script = `for i,key in ipairs(KEYS) do if redis.call('GET',key)==ARGV[1] then redis.call('DEL',key) end end return 1`;
       await redis?.eval(script, { keys: hold.seatIds.map((id) => `${HOLD_KEY_PREFIX}${id}`), arguments: [hold.id] }).catch(() => {});
     }
-    await dispatchWaitlistCandidates(pool, redis, departureId).catch((error) => request.log.warn({ err: error }, 'Waitlist handoff failed'));
+    await dispatchWaitlistCandidates(pool, redis, departureId, new Date(), clockNow)
+      .catch((error) => request.log.warn({ err: error }, 'Waitlist handoff failed'));
     return { withdrawn: true };
   });
 
@@ -288,7 +337,7 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
     } finally {
       client.release();
     }
-    result.waitlistAuthorizations = await dispatchWaitlistCandidates(pool, redis, departureId)
+    result.waitlistAuthorizations = await dispatchWaitlistCandidates(pool, redis, departureId, new Date(), clockNow)
       .catch((error) => {
         request.log.error({ err: error }, 'Waitlist dispatch after cancellation failed');
         return [];

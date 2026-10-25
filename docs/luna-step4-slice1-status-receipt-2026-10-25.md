@@ -77,3 +77,8 @@
 - 新增 PostgreSQL 锁竞争测试：派发从 18:09:59 等到 18:10:01，验证没有发出授权、hold 或 Redis TTL；复用验收脚本统一注入时钟。
 - 本地隔离数据库应用迁移 001–017，数据库验收 463 项通过；`npm run check` 通过，`npm test` 8/8。GitHub Actions [run 40184399073](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40184399073) 对提交 head `9562c3b` 验收成功，日志显示 464 项断言通过。截图沿用已复核版本，本轮未重新生成。
 - **状态：M1/M2 修复证据待 Dot 复核；切片 1 仍未验收。** 本地沙盒测试不表示真实资金或退款。
+
+## 最终复核与后续状态
+
+- Dot 于 2026-10-25 在 main 提交 `0393743` 写入最终定点复核：R1–R6 全部关闭，切片 1 在已审的沙盒范围内通过。Dot 明确说明未独立空库复跑；不覆盖生产支付、真实退款、Android 真机或第 4 步其他切片。
+- 按既有夜间续作顺序，开发已接续切片 2“退改四档完整验收”。代码提交 `8a881f6` 已入 main；对应代码、金额和本地测试证据见 `docs/step4-slice2-cancellation-review-request-2026-10-25.md`，当前等待 Dot 复核。

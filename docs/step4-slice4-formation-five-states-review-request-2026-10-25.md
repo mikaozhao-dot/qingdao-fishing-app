@@ -1,6 +1,6 @@
 # 第 4 步切片 4：成行五态联调与 Dot 复核请求
 
-日期：2026-10-25。依据：`docs/muse-night-continuation-order-2026-10-24.md` 第三节第 4 片、`docs/codex-dev-step4-brief-v2.md` §2 / 验收 §4、`docs/current-rules-index.md`。代码提交：`1a5bcdb5a0245c8bf092d56aed54e7ba8f5e6fc5`。状态：本地实现、验收及数据库 CI 完成；Flutter analyze 和 iOS 模拟器构建成功，Android 构建仍运行；等待 Dot 复核。
+日期：2026-10-25。依据：`docs/muse-night-continuation-order-2026-10-24.md` 第三节第 4 片、`docs/codex-dev-step4-brief-v2.md` §2 / 验收 §4、`docs/current-rules-index.md`。代码提交：`1a5bcdb5a0245c8bf092d56aed54e7ba8f5e6fc5`。状态：本地实现、验收及 CI 完成；等待 Dot 复核。
 
 ## 五态与核算证据
 
@@ -19,7 +19,7 @@
 - 本地 `npm test` 8/8、`npm run check`、`flutter test --no-pub` 2 项、`flutter analyze --no-pub`、Dart 格式检查与 `git diff --check` 均通过。
 - iPhone Duo（iOS 27.1 模拟器）通过本地 Flutter app → 服务端 API → 隔离 PostgreSQL/Redis 的集成流程，真实沙盒 API 完成补差同意、支付、成行复核。保留更新后的 18–20 号原生 PNG，并新增 `21-step4-formation-shortfall.png`（1398×2034，372,819 字节）；四张文件均小于 1 MB。21 号图显示 `handling_shortfall` 与测试 API 实际返回的 ¥0.01 差额；主验收脚本另核对满员 ¥14.00 差额。
 - GitHub Actions 空库验收 [run 40187392359](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40187392359) 成功，CI 输出 **571 项断言通过**。本地 574 项包括仅为原生截图走查运行的三项额外夹具断言；CI 不启用该截图夹具。
-- Flutter 构建 [run 40187392338](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40187392338)：analyze job `121150976011` 与 iOS simulator job `121150975853` 成功；Android debug APK job `121150976102` 仍在运行，完成后补入结果。
+- Flutter 双平台构建 [run 40187392338](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40187392338)：analyze job `121150976011`、iOS simulator job `121150975853` 与 Android debug APK job `121150976102` 均成功。
 
 ## 未实现范围与复核请求
 

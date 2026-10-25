@@ -149,11 +149,11 @@
 - 本地隔离 PostgreSQL 17.11 / Redis 8.10.2 应用迁移 001–017，验收脚本通过 **554 项断言**；`npm test` 8/8、`npm run check` 与 `git diff --check` 通过。GitHub Actions [run 40186663165](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40186663165) 的 `acceptance` job `121148792529` 成功，输出 554 项断言通过。
 - 状态：待 Dot 对补充状态矩阵独立复核。本记录不是 Muse 验收、真实保单核验或第 4 步 v2 全量通过；未接真实保险服务。
 
-### 成行五态联调（代码提交 `1a5bcdb`，CI 局部通过、待 Android job 与 Dot 复核）
+### 成行五态联调（代码提交 `1a5bcdb`，数据库 CI 与双平台构建通过，待 Dot 复核）
 
 - 订单行程接口仅在服务端已写入 `shortfall` 快照且班次仍为 `handling_shortfall` 时返回冻结差额；钓友行程页以“平台可核验金额尚差 ¥X，班次待处置”显示该数，不把船长线下自报金额计入自动成行。
 - 隔离数据库脚本核对 18:00（Asia/Shanghai）确认点前的待确认状态、自动成行、船长已确认成行、8 席全部付款但平台账低于门槛的待处置状态，以及成行后的天气取消独立状态。8 席样例：票款 ¥40.00、平台净额 ¥36.00、门槛 ¥50.00、差额 ¥14.00；登记 ¥14.00 线下账只支持船长确认，不改变平台账。自动成行样例为平台净票款 ¥45.00＋本航次违约金池 ¥6.00，超过 ¥50.00 门槛。
 - 天气取消用例仅在隔离测试夹具中把已经自动成行的记录改为 `weather_cancelled`，通过真实订单行程 API 检查独立状态，并核对原自动成行快照与已付订单仍在。天气触发条件、决策人、通知、改期与退款 SOP 尚未批准；本提交没有增加天气取消接口或资金处置。
 - 本地迁移 001–017 的空数据库验收通过 **574 项断言**；`npm test` 8/8、`npm run check`、`git diff --check`、Flutter 单测 2 项、`flutter analyze --no-pub` 和 Dart 格式检查通过。iPhone Duo（iOS 27.1 模拟器）通过真实本地 API/PostgreSQL/Redis 的 `flutter drive` 补差完整流程；新截图 `21-step4-formation-shortfall.png`（372,819 字节）展示冻结差额，刷新后的 18–20 号原生截图展示补差中及服务端确认成行。四张均为 1398×2034 PNG、小于 1 MB，未压缩。
-- GitHub Actions 空库验收 [run 40187392359](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40187392359) 成功，输出 **571 项断言通过**；CI 未启用只用于本地原生截图的三项夹具断言。本机启用截图夹具共通过 574 项。Flutter 构建 [run 40187392338](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40187392338) 的 analyze 与 iOS simulator build 已成功，Android debug APK build 仍运行。状态保持待 Dot 复核，不代表 Muse 或创始人验收，也不代表天气取消流程获准。
+- GitHub Actions 空库验收 [run 40187392359](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40187392359) 成功，输出 **571 项断言通过**；CI 未启用只用于本地原生截图的三项夹具断言。本机启用截图夹具共通过 574 项。Flutter 双平台构建 [run 40187392338](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40187392338) 全部成功：analyze（含 Flutter 回归测试）、iOS simulator build 与 Android debug APK build 均通过。状态保持待 Dot 复核，不代表 Muse 或创始人验收，也不代表天气取消流程获准。
 

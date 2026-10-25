@@ -432,120 +432,97 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
       return { statusCode: 409, body: { error: '订单已结束或金额已变更' } };
     }
     const order = orderResult.rows[0];
-    if (payment.status === 'pending' && event.outcome === 'success' && order.waitlist_entry_id) {
+    const lateRefundReason = order.waitlist_entry_id
+      ? 'late_waitlist_payment' : 'late_booking_payment';
+    const lateRefundRequestKey = order.waitlist_entry_id
+      ? `late-waitlist:${payment.id}` : `late-booking:${payment.id}`;
+    let timedOutWaitlistCallbackRestored = false;
+    async function callbackMatchesActiveHold() {
       const deadline = order.authorization_expires_at ?? order.hold_expires_at;
       const receivedAt = await readStep3Clock(client, clockNow);
-      const seatStillHeld = await client.query(
-        `SELECT count(*)::integer AS count FROM seat_inventory s
-         JOIN booking_order_seats os ON os.seat_inventory_id=s.id
-         WHERE os.order_id=$1 AND os.status='pending_payment'
-           AND s.status='held' AND s.hold_id=$2`,
+      const seatCounts = await client.query(
+        `SELECT
+           (SELECT count(*)::integer FROM booking_order_seats
+            WHERE order_id=$1 AND status='pending_payment') AS expected,
+           (SELECT count(*)::integer FROM seat_inventory s
+            JOIN booking_order_seats os ON os.seat_inventory_id=s.id
+            WHERE os.order_id=$1 AND os.status='pending_payment'
+              AND s.status='held' AND s.hold_id=$2) AS held`,
         [order.id, order.hold_id],
       );
-      const onTime = effectivePaymentAtOrBeforeDeadline(event.createdAt, deadline)
+      const expected = Number(seatCounts.rows[0].expected);
+      return effectivePaymentAtOrBeforeDeadline(event.createdAt, deadline)
+        && order.status === 'pending_payment'
         && order.hold_status === 'active'
         && new Date(order.hold_expires_at) > new Date(receivedAt)
-        && Number(seatStillHeld.rows[0].count) > 0;
-      if (!onTime) {
+        && expected > 0
+        && Number(seatCounts.rows[0].held) === expected;
+    }
+    async function recordLateBookingSuccess() {
+      if (order.hold_id) {
+        let seatIds;
         if (order.hold_status === 'active') {
-          releasedHold = {
-            id: order.hold_id,
-            seatIds: await releaseHoldInTransaction(client, order.hold_id, 'expired'),
-          };
+          seatIds = await releaseHoldInTransaction(client, order.hold_id, 'expired');
+        } else {
+          const heldItems = await client.query(
+            'SELECT seat_inventory_id FROM seat_hold_items WHERE hold_id=$1', [order.hold_id],
+          );
+          seatIds = heldItems.rows.map((seat) => seat.seat_inventory_id);
         }
-        await client.query(
-          `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),updated_at=now()
-           WHERE id=$1 AND status='pending_payment'`, [order.id],
-        );
-        await client.query(
-          `UPDATE booking_order_seats SET status='released'
-           WHERE order_id=$1 AND status='pending_payment'`, [order.id],
-        );
-        await client.query(
-          `UPDATE payment_transactions SET status='succeeded',late_success=true,callback_event_id=$2,
-            updated_at=now(),completed_at=now() WHERE id=$1`, [payment.id, event.eventId],
-        );
-        await client.query(
-          `INSERT INTO refund_obligations
-            (order_id,payment_transaction_id,amount_fen,reason,status,attempt_count,request_key,settled_at)
-           VALUES ($1,$2,$3,'late_waitlist_payment','sandbox_succeeded',1,$4,now())
-           ON CONFLICT (payment_transaction_id,reason) DO NOTHING`,
-          [order.id, payment.id, event.amountFen, `late-waitlist:${payment.id}`],
-        );
+        releasedHold = { id: order.hold_id, seatIds };
+      }
+      await client.query(
+        `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),updated_at=now()
+         WHERE id=$1 AND status='pending_payment'`, [order.id],
+      );
+      await client.query(
+        `UPDATE booking_order_seats SET status='released'
+         WHERE order_id=$1 AND status='pending_payment'`, [order.id],
+      );
+      await client.query(
+        `UPDATE payment_transactions SET status='succeeded',late_success=true,callback_event_id=$2,
+          updated_at=now(),completed_at=now() WHERE id=$1`, [payment.id, event.eventId],
+      );
+      await client.query(
+        `INSERT INTO refund_obligations
+          (order_id,payment_transaction_id,amount_fen,reason,status,attempt_count,request_key,settled_at)
+         VALUES ($1,$2,$3,$4,'sandbox_succeeded',1,$5,now())
+         ON CONFLICT (payment_transaction_id,reason) DO NOTHING`,
+        [order.id, payment.id, event.amountFen, lateRefundReason, lateRefundRequestKey],
+      );
+      if (order.waitlist_entry_id) {
         await client.query(
           `UPDATE departure_waitlist_entries SET status='expired',updated_at=now()
            WHERE id=$1 AND status IN ('authorized','converted')`, [order.waitlist_entry_id],
         );
-        await client.query('COMMIT');
-        responseBody = {
-          paymentStatus: 'succeeded', latePaymentRefundRequired: true,
-          refundStatus: 'sandbox_succeeded', includedInFormation: false,
-        };
       }
+      await client.query('COMMIT');
+      responseBody = {
+        paymentStatus: 'succeeded', latePaymentRefundRequired: true,
+        refundStatus: 'sandbox_succeeded', includedInFormation: false,
+      };
     }
-    if (payment.status !== 'pending') {
-      if (payment.status === 'timed_out' && event.outcome === 'success' && order.waitlist_entry_id) {
-        const deadline = order.authorization_expires_at ?? order.hold_expires_at;
-        const receivedAt = await readStep3Clock(client, clockNow);
-        const seatStillHeld = await client.query(
-          `SELECT count(*)::integer AS count FROM seat_inventory s
-           JOIN booking_order_seats os ON os.seat_inventory_id=s.id
-           WHERE os.order_id=$1 AND os.status='pending_payment'
-             AND s.status='held' AND s.hold_id=$2`,
-          [order.id, order.hold_id],
+
+    if ((payment.status === 'pending' || payment.status === 'timed_out')
+        && event.outcome === 'success') {
+      const onTime = await callbackMatchesActiveHold();
+      if (!onTime) {
+        await recordLateBookingSuccess();
+      } else if (payment.status === 'timed_out' && order.waitlist_entry_id) {
+        // A delayed webhook for an on-time waitlist payment may still settle while its hold is active.
+        await client.query(
+          `UPDATE payment_transactions SET status='pending',callback_event_id=NULL,updated_at=now()
+           WHERE id=$1`, [payment.id],
         );
-        const onTime = effectivePaymentAtOrBeforeDeadline(event.createdAt, deadline)
-          && order.hold_status === 'active'
-          && new Date(order.hold_expires_at) > new Date(receivedAt)
-          && Number(seatStillHeld.rows[0].count) > 0;
-        if (onTime) {
-          // A delayed webhook for a provider payment completed within the active hold may still settle.
-          await client.query(
-            `UPDATE payment_transactions SET status='pending',callback_event_id=NULL,updated_at=now()
-             WHERE id=$1`, [payment.id],
-          );
-        } else {
-          if (order.hold_status === 'active') {
-            releasedHold = {
-              id: order.hold_id,
-              seatIds: await releaseHoldInTransaction(client, order.hold_id, 'expired'),
-            };
-          }
-          await client.query(
-            `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),updated_at=now()
-             WHERE id=$1 AND status='pending_payment'`, [order.id],
-          );
-          await client.query(
-            `UPDATE booking_order_seats SET status='released'
-             WHERE order_id=$1 AND status='pending_payment'`, [order.id],
-          );
-          await client.query(
-            `UPDATE payment_transactions SET status='succeeded',late_success=true,
-              callback_event_id=$2,updated_at=now(),completed_at=now() WHERE id=$1`,
-            [payment.id, event.eventId],
-          );
-          await client.query(
-            `INSERT INTO refund_obligations
-              (order_id,payment_transaction_id,amount_fen,reason,status,attempt_count,request_key,settled_at)
-             VALUES ($1,$2,$3,'late_waitlist_payment','sandbox_succeeded',1,$4,now())
-             ON CONFLICT (payment_transaction_id,reason) DO NOTHING`,
-            [order.id, payment.id, event.amountFen, `late-waitlist:${payment.id}`],
-          );
-          const waitlistEntryId = order.waitlist_entry_id;
-          await client.query(
-            `UPDATE departure_waitlist_entries SET status='expired',updated_at=now()
-             WHERE id=$1 AND status IN ('authorized','converted')`, [waitlistEntryId],
-          );
-          await client.query('COMMIT');
-          responseBody = {
-            paymentStatus: 'succeeded', latePaymentRefundRequired: true,
-            refundStatus: 'sandbox_succeeded', includedInFormation: false,
-          };
-        }
-      } else {
+        timedOutWaitlistCallbackRestored = true;
+      } else if (payment.status === 'timed_out') {
         await client.query('COMMIT');
         return { statusCode: 200, body: { duplicate: true, paymentStatus: payment.status } };
       }
+    }
+    if (payment.status !== 'pending' && !responseBody && !timedOutWaitlistCallbackRestored) {
+      await client.query('COMMIT');
+      return { statusCode: 200, body: { duplicate: true, paymentStatus: payment.status } };
     }
     if (responseBody) {
       // The timed-out authorization was recorded and refunded above.

@@ -216,22 +216,27 @@ export async function processWaitlistCloseouts(pool, asOf = new Date(), redis = 
          WHERE w.departure_id=$1 AND w.status IN ('authorized','converted') AND h.status='active'
          ORDER BY h.id FOR UPDATE OF h`, [row.id],
       );
-      const holdIds = activeHolds.rows.map((hold) => hold.id);
+      const pendingOrders = await client.query(
+        `SELECT o.id,o.hold_id FROM booking_orders o
+         LEFT JOIN seat_holds h ON h.id=o.hold_id
+         WHERE o.departure_id=$1 AND o.status='pending_payment'
+           AND (o.waitlist_entry_id IS NOT NULL
+             OR (h.status='active' AND h.expires_at<=$2::timestamptz))
+         ORDER BY o.id FOR UPDATE OF o`, [row.id, closeoutAt],
+      );
+      const pendingOrderIds = pendingOrders.rows.map((order) => order.id);
+      const holdIds = [...new Set([
+        ...activeHolds.rows.map((hold) => hold.id),
+        ...pendingOrders.rows.map((order) => order.hold_id).filter(Boolean),
+      ])];
       const holdSeats = [];
       for (const holdId of holdIds) {
         const seats = await client.query(
-          'SELECT seat_inventory_id FROM seat_hold_items WHERE hold_id=$1 AND status=\'active\'',
+          'SELECT seat_inventory_id FROM seat_hold_items WHERE hold_id=$1',
           [holdId],
         );
         holdSeats.push({ id: holdId, seatIds: seats.rows.map((seat) => seat.seat_inventory_id) });
       }
-
-      const pendingOrders = await client.query(
-        `SELECT id,hold_id FROM booking_orders
-         WHERE departure_id=$1 AND waitlist_entry_id IS NOT NULL AND status='pending_payment'
-         ORDER BY id FOR UPDATE`, [row.id],
-      );
-      const pendingOrderIds = pendingOrders.rows.map((order) => order.id);
       if (pendingOrderIds.length) {
         await client.query(
           `UPDATE payment_transactions SET status='timed_out',updated_at=now(),completed_at=now()

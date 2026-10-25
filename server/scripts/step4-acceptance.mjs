@@ -336,6 +336,32 @@ async function makeWaitlistPaymentFixture(captain, boatId, label, clockOffsets =
   };
 }
 
+async function makeOrdinaryPendingPaymentFixture(captain, boatId, label) {
+  const departure = await makeWindowDeparture(captain, boatId, label);
+  const buyer = await makeUser(`${label}钓友`);
+  simulatedStep3Time = new Date(departure.confirmationAt.getTime() - 60_000);
+  const hold = await expect('POST', `/departures/${departure.departureId}/seat-holds`, buyer.token,
+    { seatIds: [departure.seat.id] }, 201);
+  const order = await expect('POST', '/orders', buyer.token, {
+    holdId: hold.holdId,
+    idempotencyKey: `ordinary-window-order-${sequence}-${Date.now()}`,
+    passengers: [{
+      seatId: departure.seat.id,
+      fullName: '普通订单钓友',
+      identityNumber: makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0')),
+      phone: '13900009999',
+    }],
+  }, 201);
+  const intent = await expect('POST', `/orders/${order.order.id}/payment-intents`, buyer.token, {}, 201);
+  return {
+    ...departure,
+    buyer,
+    holdId: hold.holdId,
+    orderId: order.order.id,
+    intent: intent.payment,
+  };
+}
+
 async function makeWindowDeparture(captain, boatId, label) {
   const departureAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
   const bookingDeadline = new Date(departureAt.getTime() - 30 * 60 * 1000);
@@ -1560,6 +1586,58 @@ async function main() {
   check((await scalar('SELECT status FROM departure_waitlist_entries WHERE id=$1',
     [lateReleaseEntry.entry.id])).status, 'closed', 'the 18:10 freeze closes remaining candidates');
 
+  const dispatchCutoff = await makeWindowDeparture(captain, quotaBoatId, '候补派发跨18:10锁竞争');
+  const dispatchCandidate = await makeUser('派发跨18:10候补钓友');
+  const dispatchCloseoutAt = new Date(dispatchCutoff.confirmationAt.getTime() + 10 * 60 * 1000);
+  simulatedStep3Time = new Date(dispatchCutoff.confirmationAt.getTime() - 1000);
+  const dispatchRegistration = await expect('POST', `/departures/${dispatchCutoff.departureId}/waitlist`,
+    dispatchCandidate.token, { requestKey: `dispatch-closeout-${Date.now()}` }, 201);
+  check(dispatchRegistration.entry.status, 'waiting',
+    'candidate enters queue before the waitlist dispatch cutoff');
+  await pool.query('UPDATE seat_inventory SET waitlist_released_at=$2 WHERE id=$1',
+    [dispatchCutoff.seat.id, new Date(dispatchCutoff.confirmationAt.getTime() - 1000).toISOString()]);
+  simulatedStep3Time = new Date(dispatchCloseoutAt.getTime() - 1000);
+  const dispatchLock = await pool.connect();
+  let dispatchPromise;
+  let dispatchBlocked = false;
+  try {
+    await dispatchLock.query('BEGIN');
+    await dispatchLock.query('SELECT id FROM departures WHERE id=$1 FOR UPDATE',
+      [dispatchCutoff.departureId]);
+    dispatchPromise = dispatchWaitlistCandidates(
+      pool, acceptanceRedis, dispatchCutoff.departureId,
+      new Date(dispatchCloseoutAt.getTime() - 1000), testConfig.step3ClockNow,
+    );
+    dispatchBlocked = await waitForLockedQuery('SELECT id FROM departures WHERE id=$1 FOR UPDATE');
+    simulatedStep3Time = new Date(dispatchCloseoutAt.getTime() + 1000);
+  } finally {
+    await dispatchLock.query('COMMIT').catch(() => {});
+    dispatchLock.release();
+  }
+  const dispatchAfterCloseout = await dispatchPromise;
+  check(dispatchBlocked, true, 'waitlist dispatch itself waits on the departure row lock');
+  check(dispatchAfterCloseout.length, 0,
+    'dispatch starting at 18:09:59 reads the shared clock after lock wait past 18:10');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [dispatchCutoff.seat.id])).status,
+    'available', 'post-18:10 dispatch leaves the released seat available');
+  check((await scalar('SELECT status FROM departure_waitlist_entries WHERE id=$1',
+    [dispatchRegistration.entry.id])).status, 'waiting', 'post-18:10 dispatch creates no authorization');
+  check((await scalar(`SELECT count(*)::integer AS count FROM seat_holds WHERE departure_id=$1 AND status='active'`,
+    [dispatchCutoff.departureId])).count, 0, 'post-18:10 dispatch creates no active hold');
+  const dispatchRedisKey = `fishing:step3:seat:${dispatchCutoff.seat.id}`;
+  check(await acceptanceRedis.get(dispatchRedisKey), null, 'post-18:10 dispatch creates no Redis hold key');
+  check(await acceptanceRedis.pTTL(dispatchRedisKey), -2,
+    'post-18:10 dispatch leaves no Redis key with a positive TTL');
+  simulatedStep3Time = new Date(dispatchCloseoutAt.getTime() + 1000);
+  const dispatchCloseout = await processWaitlistCloseouts(
+    pool, dispatchCloseoutAt, acceptanceRedis, testConfig.step3ClockNow,
+  );
+  check(dispatchCloseout.closed, 1, 'the same injected clock closes the queue after the dispatch cutoff');
+  check((await scalar('SELECT status FROM departure_waitlist_entries WHERE id=$1',
+    [dispatchRegistration.entry.id])).status, 'closed',
+  'cutoff closeout closes the candidate that received no expired authorization');
+  simulatedStep3Time = null;
+
   const registrationCutoff = await makeWindowDeparture(captain, quotaBoatId, '候补登记截止锁竞争');
   const registrationUser = await makeUser('候补截止竞争钓友');
   const registrationLock = await pool.connect();
@@ -1722,6 +1800,93 @@ async function main() {
      WHERE p.provider_reference=$1 AND r.reason='late_waitlist_payment'`,
     [closeoutFirst.intent.reference],
   )).status, 'sandbox_succeeded', 'post-closeout money is recorded in the refund path');
+
+  const ordinaryCloseout = await makeOrdinaryPendingPaymentFixture(
+    captain, quotaBoatId, 'reaper停用时普通订单收口',
+  );
+  const ordinaryHoldExpiry = (await scalar(
+    'SELECT expires_at FROM seat_holds WHERE id=$1', [ordinaryCloseout.holdId],
+  )).expires_at;
+  const ordinaryCloseAt = new Date(ordinaryCloseout.confirmationAt.getTime() + 10 * 60 * 1000);
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1',
+    [ordinaryCloseout.orderId])).status, 'pending_payment',
+  'ordinary order remains pending before the 18:10 worker runs');
+  check((await scalar('SELECT status FROM payment_transactions WHERE provider_reference=$1',
+    [ordinaryCloseout.intent.reference])).status, 'pending',
+  'ordinary payment remains pending before the 18:10 worker runs');
+  simulatedStep3Time = ordinaryCloseAt;
+  const ordinaryCheckpoint = await processFormationChecksAt(ordinaryCloseAt);
+  check(ordinaryCheckpoint.deferred, 0,
+    'formation does not defer on an expired ordinary payment when the reaper never runs');
+  check(ordinaryCheckpoint.checked >= 1, true,
+    '18:10 closeout and formation snapshot finish in the same bounded worker pass');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1',
+    [ordinaryCloseout.orderId])).status, 'cancelled',
+  '18:10 closeout cancels the expired ordinary pending order');
+  check((await scalar('SELECT status FROM payment_transactions WHERE provider_reference=$1',
+    [ordinaryCloseout.intent.reference])).status, 'timed_out',
+  '18:10 closeout times out the expired ordinary payment');
+  check((await scalar('SELECT status FROM seat_holds WHERE id=$1',
+    [ordinaryCloseout.holdId])).status, 'expired',
+  '18:10 closeout expires the ordinary order hold without the reaper');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1',
+    [ordinaryCloseout.seat.id])).status, 'available',
+  '18:10 closeout releases the expired ordinary seat');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1',
+    [ordinaryCloseout.orderId])).status, 'released',
+  '18:10 closeout releases the ordinary order seat record');
+  const ordinarySnapshot = await scalar(
+    'SELECT outcome,platform_ticket_net_fen FROM departure_formation_snapshots WHERE departure_id=$1',
+    [ordinaryCloseout.departureId],
+  );
+  check(ordinarySnapshot.outcome, 'shortfall',
+    'the frozen formation snapshot excludes the unpaid ordinary order');
+  check(ordinarySnapshot.platform_ticket_net_fen, '0',
+    'unpaid ordinary ticket money is absent from frozen formation funds');
+  check((await scalar('SELECT status FROM departures WHERE id=$1',
+    [ordinaryCloseout.departureId])).status, 'handling_shortfall',
+  'ordinary order closeout leaves the departure in its frozen shortfall state');
+
+  const ordinaryLateEvent = paymentAdapter.buildCallback({
+    transactionReference: ordinaryCloseout.intent.reference,
+    orderId: ordinaryCloseout.orderId,
+    amountFen: ordinaryCloseout.intent.amountFen,
+    outcome: 'success',
+  }).event;
+  ordinaryLateEvent.createdAt = new Date(new Date(ordinaryHoldExpiry).getTime() + 1000).toISOString();
+  simulatedStep3Time = new Date(ordinaryCloseAt.getTime() + 1000);
+  const ordinaryLateResult = await signedPaymentCallback(ordinaryLateEvent);
+  check(ordinaryLateResult.status, 200, 'late ordinary booking success is accepted for refund accounting');
+  check(ordinaryLateResult.body.latePaymentRefundRequired, true,
+    'late ordinary booking success enters the refund path');
+  check(ordinaryLateResult.body.includedInFormation, false,
+    'late ordinary booking success is excluded from frozen formation funds');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1',
+    [ordinaryCloseout.orderId])).status, 'cancelled',
+  'late ordinary success does not revive the cancelled order');
+  check((await scalar('SELECT status FROM payment_transactions WHERE provider_reference=$1',
+    [ordinaryCloseout.intent.reference])).status, 'succeeded',
+  'late ordinary success is recorded exactly as received');
+  check((await scalar('SELECT late_success FROM payment_transactions WHERE provider_reference=$1',
+    [ordinaryCloseout.intent.reference])).late_success, true,
+  'late ordinary success is marked for audit');
+  check((await scalar(
+    `SELECT status FROM refund_obligations WHERE payment_transaction_id=(
+       SELECT id FROM payment_transactions WHERE provider_reference=$1
+     ) AND reason='late_booking_payment'`, [ordinaryCloseout.intent.reference],
+  )).status, 'sandbox_succeeded',
+  'late ordinary booking funds receive a refund obligation');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1',
+    [ordinaryCloseout.seat.id])).status, 'available',
+  'late ordinary success cannot reclaim the released seat');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1',
+    [ordinaryCloseout.orderId])).status, 'released',
+  'late ordinary success cannot restore the cancelled passenger manifest');
+  check((await scalar('SELECT status FROM departures WHERE id=$1',
+    [ordinaryCloseout.departureId])).status, 'handling_shortfall',
+  'late ordinary success cannot alter the frozen departure state');
+  check((await signedPaymentCallback(ordinaryLateEvent)).body.duplicate, true,
+    'replayed ordinary late success remains idempotent');
 
   simulatedStep3Time = null;
 

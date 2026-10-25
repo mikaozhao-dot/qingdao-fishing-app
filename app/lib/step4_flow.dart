@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 import 'api_client.dart';
 import 'fishing_tokens.dart';
 import 'step3_flow.dart';
+import 'step5_flow.dart';
 
 class Step4CaptainWorkspace extends StatefulWidget {
   const Step4CaptainWorkspace({
@@ -148,6 +149,29 @@ class _Step4CaptainWorkspaceState extends State<Step4CaptainWorkspace> {
     }
   }
 
+  Future<void> _showCaptainCatch(Map<String, dynamic> item) async {
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => Step5CaptainCatchSheet(
+        departureId: '${item['id']}',
+        token: widget.token!,
+      ),
+    );
+    if (saved == true && mounted) await _load();
+  }
+
+  Future<void> _showBoatFacts(Map<String, dynamic> item) async {
+    final boatId = item['boatId'];
+    if (boatId == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Step5BoatFactsPage(boatId: '$boatId'),
+      ),
+    );
+  }
+
   Future<void> _shareManifest(Map<String, dynamic> item, String format) async {
     if (widget.token == null) return;
     try {
@@ -207,6 +231,8 @@ class _Step4CaptainWorkspaceState extends State<Step4CaptainWorkspace> {
           const SizedBox(height: 18),
           if (_loading) const LinearProgressIndicator(minHeight: 2),
           if (_error != null) _NoticeCard(message: _error!, onRetry: _load),
+          Step5CaptainFactsCard(token: widget.token!),
+          const SizedBox(height: 12),
           if (!_loading && _error == null && _items.isEmpty)
             const _NoticeCard(message: '暂时没有已确认的行程。确认后会显示在这里。'),
           ..._items.map(
@@ -221,6 +247,8 @@ class _Step4CaptainWorkspaceState extends State<Step4CaptainWorkspace> {
                 onManifest: (format) => _shareManifest(item, format),
                 onChecklist: () => _showChecklist(item),
                 onInsuranceGate: () => _showInsuranceGate(item),
+                onCatchReport: () => _showCaptainCatch(item),
+                onBoatFacts: () => _showBoatFacts(item),
               ),
             ),
           ),
@@ -651,6 +679,40 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
                   const SizedBox(height: 10),
                   const _NoticeCard(message: '行前清单正在生成，请稍后刷新查看。'),
                 ],
+                if (status == 'completed') ...[
+                  const SizedBox(height: 10),
+                  if (departure['captainId'] != null) ...[
+                    Step5CaptainFactsCard(
+                      captainId: '${departure['captainId']}',
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (departure['boatId'] != null)
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => Step5BoatFactsPage(
+                            boatId: '${departure['boatId']}',
+                          ),
+                        ),
+                      ),
+                      icon: const Icon(Icons.directions_boat_outlined),
+                      label: const Text('查看船况事实'),
+                    ),
+                  FilledButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => Step5AnglerReportPage(
+                          departureId: '${departure['id']}',
+                          orderId: widget.orderId,
+                          token: widget.token,
+                        ),
+                      ),
+                    ),
+                    icon: const Icon(Icons.phishing_outlined),
+                    label: const Text('返港记录与评价'),
+                  ),
+                ],
               ],
             ),
     );
@@ -665,6 +727,8 @@ class _CaptainTripCard extends StatelessWidget {
     required this.onManifest,
     required this.onChecklist,
     required this.onInsuranceGate,
+    required this.onCatchReport,
+    required this.onBoatFacts,
   });
 
   final Map<String, dynamic> item;
@@ -672,6 +736,8 @@ class _CaptainTripCard extends StatelessWidget {
   final ValueChanged<String> onManifest;
   final VoidCallback onChecklist;
   final VoidCallback onInsuranceGate;
+  final VoidCallback onCatchReport;
+  final VoidCallback onBoatFacts;
 
   @override
   Widget build(BuildContext context) {
@@ -751,6 +817,23 @@ class _CaptainTripCard extends StatelessWidget {
               label: const Text('查看行前清单'),
             ),
             _manifestActions(),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: onCatchReport,
+                  icon: const Icon(Icons.phishing_outlined),
+                  label: const Text('回填本航渔获'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: onBoatFacts,
+                  icon: const Icon(Icons.directions_boat_outlined),
+                  label: const Text('查看船况事实'),
+                ),
+              ],
+            ),
           ],
         ],
       ),

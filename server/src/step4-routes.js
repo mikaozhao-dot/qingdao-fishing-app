@@ -1118,7 +1118,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
 
   app.get('/captain/fulfillment', { preHandler: [requireUser, requireCaptain] }, async (request) => {
     const result = await pool.query(
-      "SELECT d.id,d.status,d.trip_type,d.departure_at,d.meeting_at,d.marina_code " +
+      "SELECT d.id,d.boat_id,d.status,d.trip_type,d.departure_at,d.meeting_at,d.marina_code " +
       "FROM departures d WHERE d.captain_user_id=$1 AND d.status IN ('confirmed','captain_confirmed','in_progress','completed') " +
       'ORDER BY d.departure_at DESC LIMIT 100',
       [request.user.id],
@@ -1126,6 +1126,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
     return {
       items: result.rows.map((row) => ({
         id: row.id,
+        boatId: row.boat_id,
         status: row.status,
         platformGuarantee: row.status === 'captain_confirmed' ? false : null,
         tripType: row.trip_type,
@@ -1320,7 +1321,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
   app.get('/orders/:id/fulfillment', { preHandler: requireUser }, async (request, reply) => {
     if (!validUuid(request.params.id)) return sendError(reply, 400, '订单编号无效');
     const result = await pool.query(
-      'SELECT o.id,o.status,d.id AS departure_id,d.status AS departure_status,d.departure_at,d.meeting_at,' +
+      'SELECT o.id,o.status,d.id AS departure_id,d.boat_id,d.captain_user_id,d.status AS departure_status,d.departure_at,d.meeting_at,' +
       'd.marina_code,d.trip_type,c.checklist,' +
       "CASE WHEN d.status='handling_shortfall' AND s.outcome='shortfall' " +
       'THEN GREATEST(s.threshold_fen-s.platform_verifiable_fen,0) ELSE NULL END AS formation_shortfall_fen,' +
@@ -1352,6 +1353,8 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       orderStatus: row.status,
       departure: {
         id: row.departure_id,
+        boatId: row.boat_id,
+        captainId: row.captain_user_id,
         status: row.departure_status,
         departureAt: row.departure_at,
         meetingAt: row.meeting_at,

@@ -6,6 +6,7 @@ import { registerStep1Routes } from './step1-routes.js';
 import { registerStep2Routes } from './step2-routes.js';
 import { registerStep3Routes } from './step3-routes.js';
 import { registerStep4Routes } from './step4-routes.js';
+import { registerStep5Routes } from './step5-routes.js';
 
 const { Pool } = pg;
 
@@ -87,6 +88,7 @@ export function buildApp(runtimeConfig = config) {
   registerStep2Routes(app, { pool, config: runtimeConfig, requireUser });
   registerStep3Routes(app, { pool, redis, config: runtimeConfig, requireUser });
   registerStep4Routes(app, { pool, redis, config: runtimeConfig, requireUser });
+  registerStep5Routes(app, { pool, config: runtimeConfig, requireUser });
 
   app.addHook('onClose', async () => {
     await pool?.end();

@@ -1,6 +1,6 @@
 # 约钓者｜青岛海钓拼船
 
-iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；第 2 步支持发班与活动浏览；第 3 步接通选位、锁位、下单、沙盒支付和保险适配。
+iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；第 2 步支持发班与活动浏览；第 3 步接通选位、锁位、下单、沙盒支付和保险适配；第 5 步切片 1 提供返航后渔获、评价事实与个人鱼种图鉴。
 
 ## 仓库结构
 
@@ -44,7 +44,9 @@ flutter run
 
 第 0 步构建记录见 `docs/step0-build-notes.md`；第 1 步记录与验收证据见 `docs/step1-build-notes.md`；第 2 步实现与自检见 `docs/step2-build-notes.md`；第 3 步交易沙盒实现与自检见 `docs/step3-build-notes.md`。当前不包含真实短信、实名供应商、实时海况、真实支付或真实保险出单。
 
-第 4 步当前执行范围以 `docs/codex-dev-step4-brief-v2.md` 和 `docs/current-rules-index.md` 为准；履约子集和本轮实现状态见 `docs/step4-build-notes.md`。切片 1 在 Dot 审查的沙盒范围内通过；切片 2、4 按 Dot 既有复核结论在限定范围内通过。切片 3 的个人级保险出航 POST 门禁已接入，固定代码提交 `0d46add7` 的数据库验收（709 项断言）、Flutter 检查及 iOS 模拟器／Android APK 构建均通过，当前等待 Dot 定点复核；逐项证据见 `docs/step4-slice3-insurance-post-gate-fix-receipt-2026-10-26.md`。天气取消仅验证独立状态与保留原成团快照；触发、通知及退款流程仍待 SOP 批准。第 4 步 v2 仍未全量验收，真实支付、真实退款和生产使用未获授权。
+第 4 步当前执行范围以 `docs/codex-dev-step4-brief-v2.md` 和 `docs/current-rules-index.md` 为准；履约子集和本轮实现状态见 `docs/step4-build-notes.md`。切片 1 在 Dot 审查的沙盒范围内通过；切片 2、4 按 Dot 既有复核结论在限定范围内通过。切片 3 的个人级保险出航 POST 门禁固定代码提交 `0d46add7` 通过 709 项数据库验收、Flutter 检查及 iOS 模拟器／Android APK 构建，并经 Dot 在限定沙盒范围内定点通过；逐项证据见 `docs/step4-slice3-insurance-post-gate-fix-receipt-2026-10-26.md`。天气取消仅验证独立状态与保留原成团快照；触发、通知及退款流程仍待 SOP 批准。第 4 步 v2 仍未全量验收，真实支付、真实退款和生产使用未获授权。
+
+第 5 步切片 1（返航后渔获双源回填、结构化返港评价、船长/船况分离事实与个人鱼种图鉴）的实现与验收状态见 `docs/step5-slice1-delivery-receipt-2026-10-26.md`；数据口径和新增表见 `docs/data-model-step5-slice1-addendum.md`。该切片完成后仍须 Dot 定点复核，未获复核通过前不进入下一切片。
 
 ## 关键文件
 
@@ -55,6 +57,7 @@ flutter run
 - `docs/codex-dev-step1-brief-v1.md`、`docs/step1-build-notes.md`、`docs/step1-review-84828e0f87c2.md`、`docs/step1-review-request-2026-10-24.md`：第 1 步任务、实施记录与 Muse 独立评审。
 - `docs/data-model-step1-addendum.md`：只记录第 1 步新增字段与实体，不改数据模型 v1 正本。
 - `docs/data-model-step2-addendum.md`：只记录第 2 步新增字段与座位库存快照口径。
+- `docs/data-model-step5-slice1-addendum.md`、`docs/step5-slice1-delivery-receipt-2026-10-26.md`：第 5 步切片 1 数据模型、口径假设、验证证据与 Dot 定点复核请求。
 - `docs/codex-seat-map-v04-rework-order-2026-10-24.md`、`docs/muse-seat-premium-scope-reply-2026-10-24.md`、`docs/codex-seat-map-implementation-order-2026-10-24.md`：V04 草图返工、船尾四位同额加价和当前执行边界；2026-10-25 创始人最新选位参考追加在 V04 返工令末尾。
 - `docs/seat-map-v04-implementation-receipt-2026-10-24.md`、`docs/seat-map-spatial-redesign-status-2026-10-24.md`、`docs/step3-build-notes.md`、`docs/step3-review-request-2026-10-24.md`：选位页历史回执、当前返工进度、构建证据与 dot 复核请求。
 - `docs/v04-targeted-repair-followup-2026-10-25.md`：V04 旧航次座位快照、部分配额船图和触控重叠定点修复，以及待 Muse / dot 复核的证据。

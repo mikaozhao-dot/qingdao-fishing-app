@@ -1,4 +1,4 @@
-name: Step 4 isolated database acceptance
+name: Step 4 and 5 isolated database acceptance
 
 on:
   workflow_dispatch:
@@ -45,6 +45,7 @@ jobs:
       ENABLE_DEMO_SANDBOX: 'true'
       PAYMENT_SANDBOX_SECRET_HEX: '3333333333333333333333333333333333333333333333333333333333333333'
       STEP4_ACCEPTANCE: 'true'
+      STEP5_ACCEPTANCE: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -61,3 +62,6 @@ jobs:
       - name: Run Step 4 database acceptance
         working-directory: server
         run: npm run smoke:step4
+      - name: Run Step 5 slice 1 database acceptance
+        working-directory: server
+        run: npm run smoke:step5

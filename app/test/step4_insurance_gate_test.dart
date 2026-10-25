@@ -5,7 +5,7 @@ import 'package:qingdao_fishing_app/step4_flow.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('departure submits only passengers with effective coverage', (
+  testWidgets('departure sends full paid roster for server gate decisions', (
     tester,
   ) async {
     List<String>? submittedPassengerIds;

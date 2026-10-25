@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 
 import 'api_client.dart';
 import 'fishing_tokens.dart';
+import 'step5_flow.dart';
 
 class Step1Workspace extends StatefulWidget {
   const Step1Workspace({
@@ -187,17 +188,32 @@ class _Step1WorkspaceState extends State<Step1Workspace> {
           else if (widget.roleLabel == '船长端')
             _captainContent()
           else
-            const _InfoCard(
-              icon: Icons.verified_user_outlined,
-              title: '实名已验证',
-              body: '账号已完成沙盒核验。切换到船长端可继续提交入驻资料。',
-              action: Text(
-                '实名认证状态已同步',
-                style: TextStyle(
-                  color: FishingTokens.success,
-                  fontWeight: FontWeight.w700,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const _InfoCard(
+                  icon: Icons.verified_user_outlined,
+                  title: '实名已验证',
+                  body: '账号已完成沙盒核验。切换到船长端可继续提交入驻资料。',
+                  action: Text(
+                    '实名认证状态已同步',
+                    style: TextStyle(
+                      color: FishingTokens.success,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => Step5FishAtlasPage(token: widget.token!),
+                    ),
+                  ),
+                  icon: const Icon(Icons.phishing_outlined),
+                  label: const Text('我的鱼种图鉴'),
+                ),
+              ],
             ),
         ],
         if (_loadError != null && _user != null) ...[
@@ -230,10 +246,28 @@ class _Step1WorkspaceState extends State<Step1Workspace> {
         onSubmitted: _refresh,
       );
     }
-    return _ApplicationStatusCard(
-      application: _application!,
-      onRefresh: _refresh,
-      isRefreshing: _loading,
+    final boat = _application!['boat'] as Map<String, dynamic>? ?? {};
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _ApplicationStatusCard(
+          application: _application!,
+          onRefresh: _refresh,
+          isRefreshing: _loading,
+        ),
+        if (_application!['status'] == 'approved' && boat['id'] != null) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => Step5BoatFactsPage(boatId: '${boat['id']}'),
+              ),
+            ),
+            icon: const Icon(Icons.directions_boat_outlined),
+            label: const Text('查看船况事实'),
+          ),
+        ],
+      ],
     );
   }
 }

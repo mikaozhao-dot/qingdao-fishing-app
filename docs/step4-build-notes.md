@@ -1,6 +1,6 @@
 # 第 4 步构建记录
 
-状态：v1 非金额履约子集已实现；Muse 于 2026-10-24 有条件通过。第 4 步 v2 已开始，首单冻结、配额隔离、B1 确认时点及保险门禁均有代码切片。Muse 的 F02/Q01–Q03 独立复跑报告（145/146/145 项零失败）已交 Dot 核验，汇总仍待更新。切片 1 已由 Dot 在审查的沙盒范围内通过；退改四档、保险门禁补充状态和成行五态均已交 Dot 复核。天气取消仅验证独立状态读取与保留成团快照，触发、通知及退款仍受待批准 SOP 限制。本文不表示第 4 步 v2 全量验收、创始人验收或真实交易获准。
+状态：v1 非金额履约子集已实现；Muse 于 2026-10-24 有条件通过。第 4 步 v2 已开始，首单冻结、配额隔离、B1 确认时点及保险门禁均有代码切片。Muse 的 F02/Q01–Q03 独立复跑报告（145/146/145 项零失败）已交 Dot 核验，汇总仍待更新。切片 1 已由 Dot 在审查的沙盒范围内通过；切片 2、4 按 Dot 既有结论在限定范围内通过。切片 3 的个人级保险出航 POST 门禁已实现：代码提交 `0d46add7ea545a87dec5068c30bda3a98f36680a` 的 GitHub 数据库验收通过 709 项断言，Flutter 检查、iOS 模拟器与 Android APK 构建均成功；当前等待 Dot 定点复核，详见本文件末尾。天气取消仅验证独立状态读取与保留成团快照，触发、通知及退款仍受待批准 SOP 限制。本文不表示第 4 步 v2 全量验收、创始人验收或真实交易获准。
 
 ## 范围
 
@@ -163,4 +163,14 @@
 - 切片 4 完成确认点前平台账达标提示、`captain_confirmed` 的 `platformGuarantee:false` 与双端解释文案，并让船长确认班次使用既有支持的清单、名单、出航打卡和登船门禁入口。iOS 沙盒 API 原生截图为 22–23 号；更新的 18–21 号图与其余回归结果见 `docs/step4-slices2-4-followup-review-request-2026-10-25.md`。
 - 本地隔离数据库验收 616 项；GitHub Actions [run 40192792416](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40192792416) 通过 612 项。差异是本地截图夹具额外的 4 项检查：3 项夹具状态检查和补差轮次 API 的 1 项响应状态检查。双平台构建 [run 40192792442](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40192792442) 的 analyze、iOS simulator 与 Android debug APK jobs 均成功。
 - 状态：等待 Dot 复核；没有记录 Muse 或创始人验收。切片 3 的真实出航门禁仍未接通；无真实保险、支付或退款服务，也不构成第 4 步 v2 全量验收。
+
+### 切片 3 保险出航 POST 个人级门禁修复（代码提交 `0d46add7ea545a87dec5068c30bda3a98f36680a`，CI 通过，待 Dot 定点复核）
+
+- 船长出航 POST 现在必须提交完整且不重复的已支付乘客名单。服务端锁定班次、航次必需保障和乘客保障后，按当前出航与返航时段核验：航次保障缺失、待核实或失败时整船返回 409；航次保障有效时，逐名记录准入结果，保障有效者获准，未投保、待核实、失败或不属于当前时段者被阻断。
+- 只要至少一名乘客保障有效，该班次可按获准乘客出航；阻断者有乘客级决定记录，且不进入出航后的实际名单。无人获准时返回 409，只保留预期的乘客阻断决定，不写 `departed` 事件或改变班次状态。门禁没有取消订单、退款或重算成团。
+- `confirmed` 与 `captain_confirmed` 均覆盖；全员有效、重复出航请求、客户端伪造保障状态、旧订单级 `issued` 不适用于新时段，以及保障更新与出航两种并发顺序均有验收。保障更新和出航使用班次优先的统一锁顺序，准入读取发生在同一事务持有锁期间。
+- 迁移 `018_departure_passenger_boardings.sql` 新增当前准入结果表。船长出航弹层展示被阻断乘客和可继续出航人数；widget 交互用例 `app/test/step4_insurance_gate_test.dart` 验证阻断提示、确认按钮人数和完整乘客名单提交。此次没有生成单独原生截图。
+- 本地：隔离 PostgreSQL 17.11 / Redis 验收通过 **709 项断言**；`npm run check`、`npm test`（8/8）、Flutter 回归/widget 测试、`flutter analyze --no-pub` 和 `git diff --check` 通过。
+- GitHub Actions 数据库验收 [run 40213532254](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40213532254) 对固定代码提交成功；`acceptance` job `121229676333` 日志确认迁移 018 已应用，**709 项断言通过**。双平台工作流 [run 40213532287](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40213532287) 的 analyze（含 Flutter 回归测试）、iOS simulator 与 Android debug APK jobs 均成功。
+- 状态：待 Dot 对本次修复定点复核；不记为 Muse/创始人验收或 D 闭环完成。仅限沙盒准入记录，不接真实保险、不出真实保单、不碰真实资金，也不构成第 4 步 v2 全量验收。
 

@@ -65,7 +65,7 @@ async function transaction(pool, task) {
   }
 }
 
-async function completedDeparture(client, departureId) {
+async function completedDeparture(client, departureId, lockForWrite = false) {
   const result = await client.query(
     `SELECT d.id,d.captain_user_id,d.boat_id,d.status,
             EXISTS (SELECT 1 FROM departure_checkins dc
@@ -74,7 +74,7 @@ async function completedDeparture(client, departureId) {
             EXISTS (SELECT 1 FROM departure_checkins rc
                     WHERE rc.departure_id=d.id AND rc.event='returned'
                       AND rc.captain_user_id=d.captain_user_id) AS returned
-     FROM departures d WHERE d.id=$1`,
+     FROM departures d WHERE d.id=$1${lockForWrite ? ' FOR UPDATE OF d' : ''}`,
     [departureId],
   );
   const departure = result.rows[0];
@@ -82,8 +82,10 @@ async function completedDeparture(client, departureId) {
   return departure;
 }
 
-async function authorizeParticipant(client, departureId, user, security, expectedOrderId = null) {
-  const departure = await completedDeparture(client, departureId);
+async function authorizeParticipant(
+  client, departureId, user, security, expectedOrderId = null, lockDepartureForWrite = false,
+) {
+  const departure = await completedDeparture(client, departureId, lockDepartureForWrite);
   if (!departure) return { error: [409, '仅已返航且完成出返航打卡的班次可操作'] };
   if (departure.captain_user_id === user.id) return { role: 'captain', departure };
   if (user.identity_status !== 'verified') return { error: [403, '仅实名验证通过的实际出航乘客可操作'] };
@@ -267,17 +269,19 @@ async function captainFacts(pool, captainId, security) {
   );
   const [serviceReviews, crossSource] = await Promise.all([
     pool.query(
-      `SELECT count(DISTINCT review.id)::integer AS sample_count,
-              COALESCE(array_agg(tag_counts.tag ORDER BY tag_counts.tag)
-                FILTER (WHERE tag_counts.tag IS NOT NULL), '{}') AS tags,
-              COALESCE(array_agg(tag_counts.tag_count ORDER BY tag_counts.tag)
-                FILTER (WHERE tag_counts.tag IS NOT NULL), '{}') AS tag_counts
-       FROM step5_trip_reviews review
-       LEFT JOIN LATERAL (
+      `WITH review_sample AS (
+         SELECT id,captain_tags FROM step5_trip_reviews
+         WHERE captain_user_id=$1 AND created_at >= now()-interval '12 months'
+       ), tag_aggregates AS (
          SELECT tag,count(*)::integer AS tag_count
-         FROM unnest(review.captain_tags) AS tag GROUP BY tag
-       ) tag_counts ON TRUE
-       WHERE review.captain_user_id=$1 AND review.created_at >= now()-interval '12 months'`, [captainId],
+         FROM review_sample
+         CROSS JOIN LATERAL unnest(review_sample.captain_tags) AS tags(tag)
+         GROUP BY tag
+       )
+       SELECT (SELECT count(*)::integer FROM review_sample) AS sample_count,
+              COALESCE((SELECT array_agg(tag ORDER BY tag) FROM tag_aggregates), '{}') AS tags,
+              COALESCE((SELECT array_agg(tag_count ORDER BY tag) FROM tag_aggregates), '{}') AS tag_counts`,
+      [captainId],
     ),
     pool.query(
       `SELECT count(*)::integer AS sample_count,
@@ -399,7 +403,7 @@ export function registerStep5Routes(app, { pool, config, requireUser }) {
       if (validation) return sendError(reply, 400, validation);
       try {
         const result = await transaction(pool, async (client) => {
-          const participant = await authorizeParticipant(client, departureId, request.user, security);
+          const participant = await authorizeParticipant(client, departureId, request.user, security, null, true);
           if (participant.error) return participant;
           if (participant.role !== 'captain') return { error: [403, '只有本船船长可提交航次渔获'] };
           const inserted = await client.query(
@@ -460,7 +464,7 @@ export function registerStep5Routes(app, { pool, config, requireUser }) {
       }
       try {
         const result = await transaction(pool, async (client) => {
-          const participant = await authorizeParticipant(client, departureId, request.user, security);
+          const participant = await authorizeParticipant(client, departureId, request.user, security, null, true);
           if (participant.error) return participant;
           if (participant.role !== 'passenger') return { error: [403, '该操作仅限实际出航乘客'] };
           let passengerReportId = null;

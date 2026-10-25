@@ -46,6 +46,31 @@ async function scalar(sql, values = []) {
   return (await pool.query(sql, values)).rows[0];
 }
 
+async function waitForStep5DepartureLockWaiters(expectedCount = 2) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const result = await scalar(
+      `SELECT count(*)::integer AS count FROM pg_stat_activity
+       WHERE datname=current_database() AND wait_event_type='Lock' AND state='active'
+         AND query ILIKE '%FROM departures d WHERE d.id=$1 FOR UPDATE OF d%'`,
+    );
+    if (result.count >= expectedCount) return result.count;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return Number((await scalar(
+    `SELECT count(*)::integer AS count FROM pg_stat_activity
+     WHERE datname=current_database() AND wait_event_type='Lock' AND state='active'
+       AND query ILIKE '%FROM departures d WHERE d.id=$1 FOR UPDATE OF d%'`,
+  )).count);
+}
+
+async function holdDepartureRow(departureId) {
+  const client = await pool.connect();
+  await client.query('BEGIN');
+  await client.query('SELECT id FROM departures WHERE id=$1 FOR UPDATE', [departureId]);
+  return client;
+}
+
 async function createUser({ captain = false, identity = null } = {}) {
   sequence += 1;
   const id = randomUUID();
@@ -153,6 +178,9 @@ try {
   const boatId = await createBoat(captain.id);
   const anglerA = { user: await createUser() };
   const anglerB = { user: await createUser() };
+  const youngAngler = { user: await createUser() };
+  const supplementAngler = { user: await createUser() };
+  const raceAngler = { user: await createUser() };
   const blockedAngler = { user: await createUser(), gate: 'blocked' };
   const outsider = await createUser();
   const firstTrip = await createTrip({
@@ -163,7 +191,18 @@ try {
     captain, boatId, dateDaysAgo: 120,
     passengers: [anglerA],
   });
-  await createTrip({ captain, boatId, dateDaysAgo: 20, passengers: [] });
+  const youngTrip = await createTrip({
+    captain, boatId, dateDaysAgo: 20, passengers: [youngAngler],
+  });
+  const supplementTrip = await createTrip({
+    captain, boatId, dateDaysAgo: 89, passengers: [supplementAngler],
+  });
+  const raceTrip = await createTrip({
+    captain, boatId, dateDaysAgo: 90.25, passengers: [raceAngler],
+  });
+  const unreportedTrip = await createTrip({
+    captain, boatId, dateDaysAgo: 30, passengers: [],
+  });
   const unfinished = await createTrip({
     captain, boatId, dateDaysAgo: 1, status: 'in_progress', returned: false, passengers: [],
   });
@@ -212,14 +251,42 @@ try {
 
   const passengerA = firstTrip.orderIds.find((row) => row.user.id === anglerA.user.id);
   const passengerB = firstTrip.orderIds.find((row) => row.user.id === anglerB.user.id);
+  const secondTripPassengerA = secondTrip.orderIds.find((row) => row.user.id === anglerA.user.id);
+  const review = await request('POST', `/step5/orders/${passengerA.orderId}/review`, anglerA.user.token, {
+    captainTags: ['clear_guidance'], boatTags: ['clean_deck'], body: '行程信息清楚，甲板整洁。',
+  });
+  check(review.status, 201, 'completed passenger order can submit structured, text-only review');
+  check((await request('POST', `/step5/orders/${passengerA.orderId}/review`, anglerA.user.token, {
+    captainTags: ['clear_guidance'], boatTags: [], body: '',
+  })).status, 409, 'review is append-only and one per order');
+  const reviewB = await request('POST', `/step5/orders/${passengerB.orderId}/review`, anglerB.user.token, {
+    captainTags: ['clear_guidance', 'on_time'], boatTags: ['facilities_match'], body: '',
+  });
+  check(reviewB.status, 201, 'a second passenger can submit multiple service tags');
+  const secondTripReview = await request(
+    'POST', `/step5/orders/${secondTripPassengerA.orderId}/review`, anglerA.user.token,
+    { captainTags: [], boatTags: ['comfortable_space'], body: '' },
+  );
+  check(secondTripReview.status, 201, 'a boat-only review is accepted without a captain service tag');
+  const taggedCaptainFacts = await request('GET', '/step5/me/captain-facts', captain.token);
+  check(taggedCaptainFacts.body.serviceReviews.sampleCount, 3,
+    'service sample count includes a review containing only boat-condition tags');
+  check(taggedCaptainFacts.body.serviceReviews.tagCounts, [
+    { tag: 'clear_guidance', count: 2 },
+    { tag: 'on_time', count: 1 },
+  ], 'captain service tags aggregate counts across passengers and exclude boat-only tags');
+
+  const lowerPassengerCatch = await request(
+    'POST', `/step5/departures/${firstTrip.departureId}/passenger-catch`, anglerA.user.token,
+    { catchReport: { outcome: 'caught', items: [{ fishCode: 'yellow_croaker', quantity: 1, maxLengthMm: 280 }] } },
+  );
+  check(lowerPassengerCatch.status, 201, 'passenger can submit a lower quantity without creating a mismatch');
+  check(lowerPassengerCatch.body.reconciliation.conflict, false,
+    'a passenger quantity below the vessel total is not an automatic mismatch');
   check((await request(
     'POST', `/step5/departures/${firstTrip.departureId}/passenger-catch`, anglerA.user.token,
     { captainResponse: { action: 'confirm' } },
-  )).status, 201, 'allowed passenger can confirm a captain report');
-  check((await request(
-    'POST', `/step5/departures/${firstTrip.departureId}/passenger-catch`, anglerA.user.token,
-    { catchReport: { outcome: 'caught', items: [{ fishCode: 'yellow_croaker', quantity: 1, maxLengthMm: 280 }] } },
-  )).status, 201, 'passenger can later add their independent catch without replacing that confirmation');
+  )).status, 201, 'passenger can confirm the captain record after submitting their own catch');
   const stateA = await request('GET', `/step5/departures/${firstTrip.departureId}/me`, anglerA.user.token);
   check(stateA.body.reconciliation, 'confirmed', 'consistent passenger report is reconciled as confirmed');
   const atlasA = await request('GET', '/step5/me/fish-atlas', anglerA.user.token);
@@ -227,19 +294,98 @@ try {
 
   check((await request(
     'POST', `/step5/departures/${firstTrip.departureId}/passenger-catch`, anglerB.user.token,
-    { catchReport: { outcome: 'caught', items: [{ fishCode: 'sea_bass', quantity: 1 }] } },
+    { catchReport: { outcome: 'caught', items: [{ fishCode: 'yellow_croaker', quantity: 3 }] } },
   )).status, 201, 'allowed passenger can submit own independent source');
   const stateB = await request('GET', `/step5/departures/${firstTrip.departureId}/me`, anglerB.user.token);
-  check(stateB.body.reconciliation, 'pending_review', 'species absent from the vessel report is marked for review');
+  check(stateB.body.reconciliation, 'pending_review', 'a passenger quantity above the vessel total is marked for review');
   check((await request('GET', '/step5/me/fish-atlas', anglerB.user.token)).body.items.map((row) => row.fishCode),
-    ['sea_bass'], 'a passenger own report lights their personal atlas even when pending review');
-  check((await request(
-    'POST', `/step5/departures/${firstTrip.departureId}/passenger-catch`, anglerB.user.token,
-    { captainResponse: { action: 'confirm' } },
-  )).status, 201, 'passenger can separately confirm a captain report after submitting own catch');
+    ['yellow_croaker'], 'a passenger own report lights their personal atlas even when pending review');
   const atlasB = await request('GET', '/step5/me/fish-atlas', anglerB.user.token);
-  check(atlasB.body.items.map((row) => row.fishCode), ['sea_bass', 'yellow_croaker'],
-    'the atlas combines personal reports and explicit captain-record confirmations');
+  check(atlasB.body.items.map((row) => row.fishCode), ['yellow_croaker'],
+    'a passenger own report lights their atlas while the cross-source result is pending');
+
+  const youngCaptainReport = await request(
+    'POST', `/step5/departures/${youngTrip.departureId}/captain-catch`, captain.token,
+    { outcome: 'caught', items: [{ fishCode: 'yellow_croaker', quantity: 2 }] },
+  );
+  check(youngCaptainReport.status, 201, 'captain can record a trip with a recent first-time passenger');
+  const youngDispute = await request(
+    'POST', `/step5/departures/${youngTrip.departureId}/passenger-catch`, youngAngler.user.token,
+    { captainResponse: { action: 'dispute' } },
+  );
+  check(youngDispute.status, 201, 'a passenger with a recent first trip can dispute the captain source');
+  check((await request(
+    'GET', `/step5/departures/${youngTrip.departureId}/me`, youngAngler.user.token,
+  )).body.captainReport.items[0].quantity, 2, 'dispute leaves the captain source unchanged');
+  check((await request('GET', '/step5/me/fish-atlas', youngAngler.user.token)).body.items, [],
+    'a dispute alone does not light a captain-only fish in the personal atlas');
+  const lateOwnCatch = await request(
+    'POST', `/step5/departures/${youngTrip.departureId}/passenger-catch`, youngAngler.user.token,
+    { catchReport: { outcome: 'caught', items: [{ fishCode: 'sea_bass', quantity: 1 }] } },
+  );
+  check(lateOwnCatch.status, 201, 'passenger can add their own source after a separate captain response');
+  check(lateOwnCatch.body.reconciliation.conflict, true,
+    'a passenger species missing from the captain list is marked as a discrepancy');
+  const lateOwnState = await request(
+    'GET', `/step5/departures/${youngTrip.departureId}/me`, youngAngler.user.token,
+  );
+  check(lateOwnState.body.captainResponse.action, 'dispute',
+    'adding a passenger source preserves the already-submitted dispute');
+  check(lateOwnState.body.captainReport.items[0].quantity, 2,
+    'adding a passenger source does not overwrite the captain original');
+  check((await request('GET', '/step5/me/fish-atlas', youngAngler.user.token)).body.items.map((row) => row.fishCode),
+    ['sea_bass'], 'an independent passenger report lights their own species after a captain dispute');
+
+  const supplementCaptainReport = await request(
+    'POST', `/step5/departures/${supplementTrip.departureId}/captain-catch`, captain.token,
+    { outcome: 'caught', items: [{ fishCode: 'yellow_croaker', quantity: 2 }] },
+  );
+  check(supplementCaptainReport.status, 201, 'captain can submit source for supplement review');
+  const passengerSupplement = await request(
+    'POST', `/step5/departures/${supplementTrip.departureId}/passenger-catch`, supplementAngler.user.token,
+    { captainResponse: { action: 'supplement', items: [{ fishCode: 'sea_bass', quantity: 1 }] } },
+  );
+  check(passengerSupplement.status, 201, 'passenger can submit an explicit supplement');
+  check(passengerSupplement.body.reconciliation.status, 'pending_review',
+    'a supplemental species absent from the vessel record is marked for review');
+  const supplementState = await request(
+    'GET', `/step5/departures/${supplementTrip.departureId}/me`, supplementAngler.user.token,
+  );
+  check(supplementState.body.captainReport.items.map((row) => row.fishCode), ['yellow_croaker'],
+    'the supplement preserves the original captain source');
+  check(supplementState.body.captainResponse.items.map((row) => row.fishCode), ['sea_bass'],
+    'the supplement is preserved as a separate response source');
+  check((await request('GET', '/step5/me/fish-atlas', supplementAngler.user.token)).body.items.map((row) => row.fishCode),
+    ['sea_bass'], 'a passenger supplement lights only that passenger atlas');
+
+  const departureLock = await holdDepartureRow(raceTrip.departureId);
+  let raceWaiterCount = 0;
+  let raceResponses;
+  const captainRaceRequest = request(
+    'POST', `/step5/departures/${raceTrip.departureId}/captain-catch`, captain.token,
+    { outcome: 'caught', items: [{ fishCode: 'yellow_croaker', quantity: 1 }] },
+  );
+  const passengerRaceRequest = request(
+    'POST', `/step5/departures/${raceTrip.departureId}/passenger-catch`, raceAngler.user.token,
+    { catchReport: { outcome: 'caught', items: [{ fishCode: 'yellow_croaker', quantity: 2 }] } },
+  );
+  try {
+    raceWaiterCount = await waitForStep5DepartureLockWaiters(2);
+  } finally {
+    await departureLock.query('COMMIT');
+    departureLock.release();
+  }
+  raceResponses = await Promise.all([captainRaceRequest, passengerRaceRequest]);
+  check(raceWaiterCount, 2, 'both concurrent source submissions wait on the shared departure lock');
+  check(raceResponses.map((response) => response.status), [201, 201],
+    'concurrent captain and passenger reports both commit after serialization');
+  const raceState = await request('GET', `/step5/departures/${raceTrip.departureId}/me`, raceAngler.user.token);
+  check(raceState.body.reconciliation, 'pending_review',
+    'serialized cross-source writes leave reconciliation aware of both committed reports');
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM step5_catch_reports WHERE departure_id=$1',
+    [raceTrip.departureId],
+  )).count, 2, 'both append-only source reports survive concurrent submission');
 
   const zeroTrip = await request(
     'POST', `/step5/departures/${secondTrip.departureId}/captain-catch`, captain.token,
@@ -250,32 +396,47 @@ try {
   check(zeroState.body.captainReport.outcome, 'zero_catch', 'zero catch is distinguishable from missing report');
   check((await request('GET', `/step5/departures/${secondTrip.departureId}/me`, anglerA.user.token)).body.captainReport.outcome,
     'zero_catch', 'passenger sees the explicit zero-catch report');
+  const explicitDispute = await request(
+    'POST', `/step5/departures/${secondTrip.departureId}/passenger-catch`, anglerA.user.token,
+    { captainResponse: { action: 'dispute' } },
+  );
+  check(explicitDispute.status, 201, 'passenger can explicitly dispute the captain report');
+  check(explicitDispute.body.reconciliation.status, 'pending_review', 'an explicit dispute is marked for review');
+  const disputeState = await request(
+    'GET', `/step5/departures/${secondTrip.departureId}/me`, anglerA.user.token,
+  );
+  check(disputeState.body.captainResponse.action, 'dispute', 'the passenger dispute is preserved as a separate response');
+  check(disputeState.body.captainReport.outcome, 'zero_catch', 'the dispute does not alter the captain original record');
 
-  const review = await request('POST', `/step5/orders/${passengerA.orderId}/review`, anglerA.user.token, {
-    captainTags: ['clear_guidance'], boatTags: ['clean_deck'], body: '行程信息清楚，甲板整洁。',
-  });
-  check(review.status, 201, 'completed passenger order can submit structured, text-only review');
-  check((await request('POST', `/step5/orders/${passengerA.orderId}/review`, anglerA.user.token, {
-    captainTags: ['clear_guidance'], boatTags: [], body: '',
-  })).status, 409, 'review is append-only and one per order');
   const boatFacts = await request('GET', `/step5/boats/${boatId}/facts`);
   check(boatFacts.body.conditionTagCounts,
-    [{ tag: 'clean_deck', count: 1 }], 'boat condition tags are reported separately from captain ability');
-  check(boatFacts.body.crossSourceChecks.pendingReviewCount, 1, 'boat facts keep passenger disputes separate from captain facts');
+    [
+      { tag: 'clean_deck', count: 1 },
+      { tag: 'comfortable_space', count: 1 },
+      { tag: 'facilities_match', count: 1 },
+    ], 'boat condition tags are aggregated separately from captain ability');
+  check(boatFacts.body.crossSourceChecks.pendingReviewCount, 5,
+    'boat facts keep passenger disputes separate from captain facts');
+  check(boatFacts.body.crossSourceChecks.sampleCount, 6,
+    'cross-source facts include the trip passengers with source reports');
 
   const facts = await request('GET', '/step5/me/captain-facts', captain.token);
   check(facts.status, 200, 'captain facts are available to the captain');
+  check(facts.body.completedTripCount, 6, 'completed facts count returned trips with passengers and without reports');
   check(facts.body.catchReports, {
-    reportedTripCount: 2, missingReportCount: 1, zeroCatchTripCount: 1, zeroCatchRatePercent: 50,
+    reportedTripCount: 5, missingReportCount: 1, zeroCatchTripCount: 1, zeroCatchRatePercent: 20,
   }, 'zero-catch rate excludes unreported completed departures from its denominator');
-  check(facts.body.repeatBookings.cohortPassengerCount, 2, 'only mature passengers enter the repeat cohort');
+  check(facts.body.repeatBookings.cohortPassengerCount, 3,
+    'mature passengers enter the repeat cohort while first trips under 90 days old do not');
   check(facts.body.repeatBookings.repeatPassengerCount, 1, 'repeat fact counts a second completed sailing by the same identity');
   check(facts.body.crossSourceChecks, {
-    sampleWindowMonths: 12, sampleCount: 3, pendingReviewCount: 1, pendingReviewRatePercent: 33.3,
+    sampleWindowMonths: 12, sampleCount: 6, pendingReviewCount: 5, pendingReviewRatePercent: 83.3,
   }, 'pending cross-source review is surfaced with its sample denominator');
-  check(facts.body.serviceReviews.sampleCount, 1, 'captain service tags retain their own review sample count');
-  check(facts.body.serviceReviews.tagCounts, [{ tag: 'clear_guidance', count: 1 }],
-    'service tags are returned separately from boat-condition tags');
+  check(facts.body.serviceReviews.sampleCount, 3, 'captain service sample count includes reviews without service tags');
+  check(facts.body.serviceReviews.tagCounts, [
+    { tag: 'clear_guidance', count: 2 },
+    { tag: 'on_time', count: 1 },
+  ], 'service tags aggregate counts across reviews and exclude boat-only tags');
 
   await assert.rejects(
     pool.query('UPDATE step5_catch_reports SET outcome=$1 WHERE id=$2', ['zero_catch', captainReport.body.reportId]),

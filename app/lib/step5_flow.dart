@@ -418,13 +418,15 @@ class _Step5AnglerReportPageState extends State<Step5AnglerReportPage> {
     });
     try {
       final payload = <String, dynamic>{};
-      if (_reportOwnCatch) {
+      final ownReportExists = _map(_trip['ownReport']).isNotEmpty;
+      final captainResponseExists = _map(_trip['captainResponse']).isNotEmpty;
+      if (_reportOwnCatch && !ownReportExists) {
         payload['catchReport'] = {
           'outcome': _zeroCatch ? 'zero_catch' : 'caught',
           'items': _zeroCatch ? <Map<String, dynamic>>[] : _ownItems,
         };
       }
-      if (_response != 'none') {
+      if (_response != 'none' && !captainResponseExists) {
         payload['captainResponse'] = {
           'action': _response,
           'items': _response == 'supplement'

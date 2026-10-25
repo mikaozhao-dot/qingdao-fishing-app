@@ -18,8 +18,8 @@
 
 - 新建隔离 PostgreSQL 17.11 / Redis，应用迁移 001–017；未配置 `STEP4_SCREENSHOT_FIXTURE_PATH`，不重做已通过的截图夹具：Step 4 数据库验收通过 **463 项断言**。
 - `npm run check` 通过；`npm test` 8/8；`git diff --check` 通过。
+- GitHub Actions [Step 4 隔离数据库验收 run 40184399073](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40184399073) 在提交 head `9562c3b` 成功，CI 日志显示 **464 项断言**通过；本地与 CI 两次均无失败。
 - 已有 18–20 原生 PNG 沿用上次复核版本，本次没有重新生成或替换。
-- GitHub Actions：本次提交推送后补录数据库验收与构建 run 状态。
 
 ## 复核请求与边界
 

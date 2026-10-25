@@ -217,6 +217,29 @@ async function makePaidOrder(userId, departureId, seat) {
   }
 }
 
+async function makeOpenCancellationFixture(captain, boatId, label, hoursUntilDeparture) {
+  const departureAt = new Date(Date.now() + hoursUntilDeparture * 3_600_000);
+  const departureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',$3::timestamptz,$3::timestamptz-interval '30 minutes',
+        $3::timestamptz+interval '7 hours','qd_coast','xiaogang',10000,50000,
+        $3::timestamptz-interval '30 minutes','open',12,12,0,false)
+     RETURNING id`, [boatId, captain.id, departureAt.toISOString()],
+  )).rows[0].id;
+  const seat = (await pool.query(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel)
+     VALUES ($1,1,50000,'port','mid','booked','platform') RETURNING id,seat_number,price_fen`,
+    [departureId],
+  )).rows[0];
+  const user = await makeUser(label);
+  const orderId = await makePaidOrder(user.id, departureId, seat);
+  return { departureId, orderId, seatId: seat.id, user };
+}
+
 async function makeSupplementFixture(captain, boatId, label) {
   const departureAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
   const bookingDeadline = new Date(departureAt.getTime() - 30 * 60 * 1000);
@@ -1180,6 +1203,95 @@ async function main() {
   await expect('GET', '/captain/departures/' + departure.id + '/fulfillment', otherCaptain.token, undefined, 404);
   await expect('GET', '/captain/departures/' + departure.id + '/manifest.csv?format=full', otherCaptain.token, undefined, 404);
 
+  // Four approved cancellation bands: verify API amounts, same-departure pool,
+  // refund obligation, seat release, captain view, and idempotent retry.
+  const cancellationBandCases = [
+    { label: '退改四档·72小时外', hours: 80, penaltyFen: 0, refundFen: 50000 },
+    { label: '退改四档·30%档', hours: 48, penaltyFen: 15000, refundFen: 35000 },
+    { label: '退改四档·60%档', hours: 12, penaltyFen: 30000, refundFen: 20000 },
+    { label: '退改四档·6小时内', hours: 4, penaltyFen: 50000, refundFen: 0 },
+  ];
+  for (const band of cancellationBandCases) {
+    const fixture = await makeOpenCancellationFixture(captain, quotaBoatId, band.label, band.hours);
+    const cancellationPath = `/orders/${fixture.orderId}/cancel`;
+    const cancellation = await expect('POST', cancellationPath, fixture.user.token, {});
+    check(cancellation.penaltyFen, band.penaltyFen,
+      `${band.label}: API computes the penalty in fen from the departure time`);
+    check(cancellation.refundFen, band.refundFen,
+      `${band.label}: API returns the remaining ticket amount in fen`);
+    check(cancellation.refundStatus, band.refundFen > 0 ? 'sandbox_succeeded' : 'not_required',
+      `${band.label}: sandbox refund state matches the amount due`);
+
+    const order = await scalar(
+      'SELECT status,cancelled_refund_fen,cancellation_penalty_fen FROM booking_orders WHERE id=$1',
+      [fixture.orderId],
+    );
+    check(order.status, 'cancelled', `${band.label}: paid order is cancelled`);
+    check(Number(order.cancelled_refund_fen), band.refundFen,
+      `${band.label}: stored refund is fen-denominated`);
+    check(Number(order.cancellation_penalty_fen), band.penaltyFen,
+      `${band.label}: stored penalty is fen-denominated`);
+    check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [fixture.seatId])).status,
+      'available', `${band.label}: cancellation releases the booked seat`);
+
+    const poolEntry = await scalar(
+      `SELECT COALESCE(SUM(amount_fen),0)::bigint AS amount
+       FROM departure_formation_adjustments
+       WHERE departure_id=$1 AND adjustment_type='penalty_pool'
+         AND source_reference=$2`,
+      [fixture.departureId, `customer-cancel:${fixture.orderId}`],
+    );
+    check(Number(poolEntry.amount), band.penaltyFen,
+      `${band.label}: the full penalty is recorded once in this departure's pool`);
+    const captainAccounts = await expect(
+      'GET', `/captain/departures/${fixture.departureId}/formation-accounts`, captain.token,
+    );
+    check(captainAccounts.accounts.platform.penaltyPoolFen, band.penaltyFen,
+      `${band.label}: captain's formation ledger exposes the departure penalty pool`);
+
+    const refund = await scalar(
+      `SELECT amount_fen,reason,status FROM refund_obligations
+       WHERE order_id=$1 AND reason='customer_cancellation'`,
+      [fixture.orderId],
+    );
+    check(Number(refund?.amount_fen ?? 0), band.refundFen,
+      `${band.label}: only the refundable amount creates a sandbox refund obligation`);
+    if (refund) {
+      check(refund.reason, 'customer_cancellation', `${band.label}: refund reason is customer cancellation`);
+      check(refund.status, 'sandbox_succeeded', `${band.label}: refund obligation is sandbox-settled`);
+    }
+
+    const replay = await expect('POST', cancellationPath, fixture.user.token, {});
+    check(replay.idempotentReplay, true, `${band.label}: cancellation retry is idempotent`);
+    check(replay.penaltyFen, band.penaltyFen, `${band.label}: retry returns the stored penalty`);
+    const poolAfterReplay = await scalar(
+      `SELECT COALESCE(SUM(amount_fen),0)::bigint AS amount
+       FROM departure_formation_adjustments
+       WHERE departure_id=$1 AND adjustment_type='penalty_pool'`, [fixture.departureId],
+    );
+    check(Number(poolAfterReplay.amount), band.penaltyFen,
+      `${band.label}: retry does not duplicate the penalty pool entry`);
+  }
+
+  const missedDeparture = await makeOpenCancellationFixture(
+    captain, quotaBoatId, '已过出航时刻·不得退款', -1,
+  );
+  await expect('POST', `/orders/${missedDeparture.orderId}/cancel`, missedDeparture.user.token, {}, 409);
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [missedDeparture.orderId])).status,
+    'paid', 'post-departure cancellation is rejected and does not mark a no-show order as refunded');
+  check(Number((await scalar(
+    'SELECT COALESCE(cancelled_refund_fen,0) AS amount FROM booking_orders WHERE id=$1',
+    [missedDeparture.orderId],
+  )).amount), 0, 'post-departure cancellation creates no refund amount');
+  check(Number((await scalar(
+    `SELECT COALESCE(SUM(amount_fen),0)::bigint AS amount FROM refund_obligations
+     WHERE order_id=$1 AND reason='customer_cancellation'`, [missedDeparture.orderId],
+  )).amount), 0, 'post-departure cancellation creates no refund obligation');
+  check(Number((await scalar(
+    `SELECT COALESCE(SUM(amount_fen),0)::bigint AS amount FROM departure_formation_adjustments
+     WHERE departure_id=$1 AND adjustment_type='penalty_pool'`, [missedDeparture.departureId],
+  )).amount), 0, 'post-departure cancellation creates no penalty-pool entry');
+
   // Founder-approved amount example, exercised through cancellation, waitlist,
   // order, sandbox payment, formation closeout, and the one supplement round.
   const exampleDepartureId = (await pool.query(
@@ -1187,8 +1299,8 @@ async function main() {
        (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
         minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
         seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
-     VALUES ($1,$2,'pro_fishing',now()+interval '48 hours',now()+interval '47 hours 30 minutes',
-        now()+interval '56 hours','qd_coast','xiaogang',500000,50000,now()+interval '47 hours','open',12,12,0,false)
+     VALUES ($1,$2,'pro_fishing',now()+interval '30 hours',now()+interval '29 hours 30 minutes',
+        now()+interval '37 hours','qd_coast','xiaogang',500000,50000,now()+interval '29 hours','open',12,12,0,false)
      RETURNING id`, [quotaBoatId, captain.id],
   )).rows[0].id;
   const exampleSeats = await pool.query(

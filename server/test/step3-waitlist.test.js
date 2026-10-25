@@ -65,16 +65,22 @@ test('late payment only counts when the provider timestamp is at or before autho
 });
 
 test('cancellation penalty uses the approved left-open, right-closed bands', () => {
-  assert.deepEqual(cancellationAmounts(50000, '2026-10-25T10:00:00.000Z', '2026-10-22T09:00:00.000Z'), {
-    penaltyFen: 0, refundFen: 50000, penaltyRate: 0,
-  });
-  assert.deepEqual(cancellationAmounts(50000, '2026-10-25T10:00:00.000Z', '2026-10-24T04:00:00.000Z'), {
-    penaltyFen: 15000, refundFen: 35000, penaltyRate: 0.3,
-  });
-  assert.deepEqual(cancellationAmounts(50000, '2026-10-25T10:00:00.000Z', '2026-10-24T10:00:00.000Z'), {
-    penaltyFen: 30000, refundFen: 20000, penaltyRate: 0.6,
-  });
-  assert.deepEqual(cancellationAmounts(50000, '2026-10-25T10:00:00.000Z', '2026-10-25T04:00:00.000Z'), {
-    penaltyFen: 50000, refundFen: 0, penaltyRate: 1,
-  });
+  const departureAt = Date.parse('2026-10-25T10:00:00.000Z');
+  const cases = [
+    { hoursBefore: 73, penaltyFen: 0, penaltyRate: 0 },
+    { hoursBefore: 72, penaltyFen: 15000, penaltyRate: 0.3 },
+    { hoursBefore: 24 + 1 / 3_600_000, penaltyFen: 15000, penaltyRate: 0.3 },
+    { hoursBefore: 24, penaltyFen: 30000, penaltyRate: 0.6 },
+    { hoursBefore: 6 + 1 / 3_600_000, penaltyFen: 30000, penaltyRate: 0.6 },
+    { hoursBefore: 6, penaltyFen: 50000, penaltyRate: 1 },
+  ];
+
+  for (const { hoursBefore, penaltyFen, penaltyRate } of cases) {
+    const cancelledAt = new Date(departureAt - hoursBefore * 3_600_000).toISOString();
+    assert.deepEqual(cancellationAmounts(50000, new Date(departureAt).toISOString(), cancelledAt), {
+      penaltyFen,
+      refundFen: 50000 - penaltyFen,
+      penaltyRate,
+    }, `${hoursBefore} hours before departure`);
+  }
 });

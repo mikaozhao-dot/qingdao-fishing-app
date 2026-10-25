@@ -69,3 +69,11 @@
 - 详细复核清单：`docs/step4-slice1-r1-r6-followup-review-request-2026-10-25.md`。代码与证据提交 head `f16c248` 的 [隔离数据库验收 run 40180869625](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40180869625) 和 [双平台构建 run 40180869639](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40180869639) 均成功；后者包含 Flutter 分析、iOS 模拟器构建和 Android debug APK 构建。未做 Android 真机交互。
 
 **状态：R1–R6 本地修复与证据已完成，待 Muse/Dot 对本次提交独立复核；没有新验收结论。** 未连接真实支付、真实退款或生产服务。
+
+## Dot / Muse M1、M2 补充修复（2026-10-25）
+
+- 对应最新巡检指出的剩余两项：18:10 普通过期待支付单仍阻塞成团，以及候补派发本身跨 18:10 行锁等待缺少独立用例。
+- 代码提交 `74f1740`：收尾仅关闭已过期普通订单，超时交易、取消订单并释放座位/锁位；迟到成功进入全额沙盒退款路径，不恢复名单、座位或冻结状态。新增迁移 017。
+- 新增 PostgreSQL 锁竞争测试：派发从 18:09:59 等到 18:10:01，验证没有发出授权、hold 或 Redis TTL；复用验收脚本统一注入时钟。
+- 本地隔离数据库应用迁移 001–017，数据库验收 463 项通过；`npm run check` 通过，`npm test` 8/8。截图沿用已复核版本，本轮未重新生成。
+- **状态：M1/M2 修复证据待 Dot 复核；切片 1 仍未验收。** 本地沙盒测试不表示真实资金或退款。

@@ -121,3 +121,10 @@
 
 状态仍为待 Muse/Dot 复核，不表示已验收。代码与证据提交 head `f16c248` 的 [隔离数据库验收 run 40180869625](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40180869625) 和 [双平台构建 run 40180869639](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40180869639) 均成功；双平台 run 中 Flutter 分析、iOS 模拟器构建和 Android debug APK 构建均通过。没有 Android 真机交互、生产部署、真实支付或真实退款证据。
 
+#### Dot / Muse M1、M2 补充复核（2026-10-25，代码提交 `74f1740`）
+
+- M1 / R3：18:10 closeout 现直接取消已过期普通待支付订单并超时其 pending 交易，释放订单座位和锁位；成团检查不再因该过期单 deferred。有效锁位和已支付订单不受影响。迟到成功只记账并产生 `late_booking_payment` 退款义务，订单、座位及冻结快照不恢复。新增迁移 `017_late_booking_refund_reason.sql`。
+- M2 / R2：新增 PostgreSQL 行锁竞争用例，直接让候补派发在 18:09:59 开始、等待至 18:10:01 后继续；断言无候补授权、活动锁位或 Redis key，并用同一注入时钟收尾。验收位置见 `docs/step4-slice1-r2-r3-followup-review-request-2026-10-25.md`。
+- 新建 PostgreSQL 17.11 / Redis 隔离环境，应用迁移 001–017；不生成此前已通过的截图夹具，`server/scripts/step4-acceptance.mjs` 通过 **463 项断言**。`npm run check`、`npm test`（8/8）和 `git diff --check` 通过。
+- CI 需在本次提交推送后复核并回写。状态仍是待 Dot 对 M1/M2 复核；既有 R1/R4/R5/R6 结论按 dot 的巡检记录，不表示切片 1 已验收。沿用已经目检的 18–20 PNG，本次没有重做截图，也没有扩到其他切片。
+

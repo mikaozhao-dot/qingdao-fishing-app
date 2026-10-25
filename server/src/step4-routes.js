@@ -1033,7 +1033,8 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
             [departure.id],
           ),
           client.query(
-            `SELECT s.seat_number,c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,c.verified_at
+            `SELECT op.id AS passenger_id,s.seat_number,c.status,c.failure_reason,
+                    c.coverage_start_at,c.coverage_end_at,c.verified_at
              FROM booking_orders o
              JOIN departures d ON d.id=o.departure_id
              JOIN order_passengers op ON op.order_id=o.id
@@ -1051,6 +1052,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
         const passengers = passengerResult.rows.map((row) => {
           const status = row.status ?? 'not_insured';
           return {
+            passengerId: row.passenger_id,
             seatNumber: row.seat_number === null ? null : Number(row.seat_number),
             status,
             failureReason: row.failure_reason,
@@ -1164,6 +1166,12 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
     if (!validUuid(request.params.id)) return sendError(reply, 400, '班次编号无效');
     const event = String(request.body?.event ?? '');
     if (!['departed', 'returned'].includes(event)) return sendError(reply, 400, '打卡类型无效');
+    const passengerIds = request.body?.passengerIds;
+    if (event === 'departed' && (!Array.isArray(passengerIds) || passengerIds.length === 0
+      || passengerIds.some((id) => !validUuid(id))
+      || new Set(passengerIds).size !== passengerIds.length)) {
+      return sendError(reply, 400, '请提供完整且不重复的已支付乘客名单');
+    }
     const result = await withTransaction(pool, async (client) => {
       const departure = await requireCaptainOwnership(client, request.params.id, request.user.id, true);
       if (!departure) return { error: [404, '班次不存在'] };
@@ -1173,6 +1181,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       if (event === 'returned' && departure.status !== 'in_progress') {
         return { error: [409, '请先完成出航打卡'] };
       }
+      let passengerCoverages = [];
       if (event === 'departed') {
         const requiredCoverage = await client.query(
           'SELECT status FROM departure_required_insurance WHERE departure_id=$1 FOR UPDATE',
@@ -1182,20 +1191,17 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
           return { error: [409, '航次必需保障未生效，暂不能出航'] };
         }
         await client.query(
-          `SELECT c.id
-           FROM passenger_insurance_coverages c
+          `SELECT c.id FROM passenger_insurance_coverages c
            JOIN booking_orders o ON o.id=c.order_id
            JOIN order_passengers op ON op.id=c.passenger_id AND op.order_id=o.id
-           JOIN departures d ON d.id=o.departure_id
            WHERE o.departure_id=$1 AND o.status='paid'
-             AND c.departure_id=d.id
-             AND c.coverage_start_at=d.departure_at
-             AND c.coverage_end_at=d.return_at
+           ORDER BY op.id,c.id
            FOR UPDATE OF c`,
           [departure.id],
         );
-        const passengerCoverages = await client.query(
-          `SELECT op.id,c.status
+        const passengerCoverageResult = await client.query(
+          `SELECT op.id AS passenger_id,c.id AS coverage_id,
+                  COALESCE(c.status,'not_insured') AS coverage_status
            FROM booking_orders o
            JOIN departures d ON d.id=o.departure_id
            JOIN order_passengers op ON op.order_id=o.id
@@ -1207,8 +1213,35 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
            ORDER BY op.id`,
           [departure.id],
         );
-        if (passengerCoverages.rows.some((passenger) => passenger.status !== 'effective')) {
-          return { error: [409, '乘客保障未全部生效，暂不能出航'] };
+        passengerCoverages = passengerCoverageResult.rows;
+        const paidPassengerIds = passengerCoverages.map((passenger) => passenger.passenger_id);
+        if (paidPassengerIds.length !== passengerIds.length
+          || paidPassengerIds.some((id) => !passengerIds.includes(id))) {
+          return { error: [409, '乘船名单已变化，请刷新后重试'] };
+        }
+        // withTransaction commits error responses too. Keep the passenger-level
+        // denial rows, while leaving departure_checkins and departure status untouched
+        // when nobody has effective coverage.
+        for (const passenger of passengerCoverages) {
+          const allowed = passenger.coverage_status === 'effective';
+          await client.query(
+            `INSERT INTO departure_passenger_gate_decisions
+               (departure_id,passenger_id,coverage_id,captain_user_id,decision,coverage_status,block_reason)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT (departure_id,passenger_id) DO UPDATE SET
+               coverage_id=EXCLUDED.coverage_id,captain_user_id=EXCLUDED.captain_user_id,
+               decision=EXCLUDED.decision,coverage_status=EXCLUDED.coverage_status,
+               block_reason=EXCLUDED.block_reason,decided_at=now()`,
+            [departure.id, passenger.passenger_id, passenger.coverage_id, request.user.id,
+              allowed ? 'allowed' : 'blocked', passenger.coverage_status,
+              allowed ? null : 'passenger_coverage_not_effective'],
+          );
+        }
+        const allowedPassengerCount = passengerCoverages.filter(
+          (passenger) => passenger.coverage_status === 'effective',
+        ).length;
+        if (allowedPassengerCount === 0) {
+          return { error: [409, '没有保障已生效的乘客可登船'] };
         }
       }
       const inserted = await client.query(
@@ -1219,7 +1252,19 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       if (!inserted.rowCount) return { error: [409, '该打卡已记录'] };
       const nextStatus = event === 'departed' ? 'in_progress' : 'completed';
       await client.query('UPDATE departures SET status=$2,updated_at=now() WHERE id=$1', [departure.id, nextStatus]);
-      return { ok: true, status: nextStatus, checkedAt: inserted.rows[0].checked_at };
+      return {
+        ok: true,
+        status: nextStatus,
+        checkedAt: inserted.rows[0].checked_at,
+        ...(event === 'departed' ? {
+          boardedPassengerCount: passengerCoverages.filter(
+            (passenger) => passenger.coverage_status === 'effective',
+          ).length,
+          blockedPassengerCount: passengerCoverages.filter(
+            (passenger) => passenger.coverage_status !== 'effective',
+          ).length,
+        } : {}),
+      };
     });
     if (result.error) return sendError(reply, result.error[0], result.error[1]);
     return result;
@@ -1238,7 +1283,12 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
         const passengers = await client.query(
           "SELECT op.full_name_ciphertext,op.identity_number_ciphertext " +
           "FROM booking_orders o JOIN order_passengers op ON op.order_id=o.id " +
+          "JOIN departures d ON d.id=o.departure_id " +
+          "LEFT JOIN departure_checkins dc ON dc.departure_id=d.id AND dc.event='departed' " +
+          "LEFT JOIN departure_passenger_gate_decisions pg ON pg.departure_id=d.id " +
+            "AND pg.passenger_id=op.id AND pg.decision='allowed' " +
           "WHERE o.departure_id=$1 AND o.status='paid' " +
+          "AND (dc.id IS NULL OR pg.passenger_id IS NOT NULL) " +
           'ORDER BY o.created_at,op.id',
           [departure.id],
         );

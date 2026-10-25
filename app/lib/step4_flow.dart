@@ -128,7 +128,15 @@ class _Step4CaptainWorkspaceState extends State<Step4CaptainWorkspace> {
         context: context,
         showDragHandle: true,
         isScrollControlled: true,
-        builder: (context) => _InsuranceGateSheet(gate: result),
+        builder: (context) => Step4InsuranceGateSheet(
+          gate: result,
+          onDepart: (passengerIds) => _run(
+            () => Step1Api.post('/captain/departures/${item['id']}/checkin', {
+              'event': 'departed',
+              'passengerIds': passengerIds,
+            }, token: widget.token),
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) return;
@@ -207,7 +215,9 @@ class _Step4CaptainWorkspaceState extends State<Step4CaptainWorkspace> {
               child: _CaptainTripCard(
                 key: ValueKey('captain-trip-${item['id']}'),
                 item: item,
-                onCheckin: (event) => _checkin(item, event),
+                onCheckin: (event) => event == 'departed'
+                    ? _showInsuranceGate(item)
+                    : _checkin(item, event),
                 onManifest: (format) => _shareManifest(item, format),
                 onChecklist: () => _showChecklist(item),
                 onInsuranceGate: () => _showInsuranceGate(item),
@@ -878,15 +888,28 @@ class _ChecklistSheet extends StatelessWidget {
   }
 }
 
-class _InsuranceGateSheet extends StatelessWidget {
-  const _InsuranceGateSheet({required this.gate});
+class Step4InsuranceGateSheet extends StatelessWidget {
+  const Step4InsuranceGateSheet({
+    super.key,
+    required this.gate,
+    required this.onDepart,
+  });
   final Map<String, dynamic> gate;
+  final ValueChanged<List<String>> onDepart;
 
   @override
   Widget build(BuildContext context) {
     final required = _map(gate['requiredCoverage']);
     final passengers = _maps(gate['passengers']);
     final tripReady = gate['canDepartureProceed'] == true;
+    final departurePassengerIds = passengers
+        .map((passenger) => passenger['passengerId'])
+        .whereType<String>()
+        .toList(growable: false);
+    final boardablePassengerCount = passengers
+        .where((passenger) => passenger['canBoard'] == true)
+        .length;
+    final blockedPassengerCount = passengers.length - boardablePassengerCount;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
@@ -987,11 +1010,30 @@ class _InsuranceGateSheet extends StatelessWidget {
                   ),
                 );
               }),
+            if (tripReady && blockedPassengerCount > 0) ...[
+              const SizedBox(height: 4),
+              const _NoticeCard(message: '保障未生效的乘客不能登船；其他保障已生效的乘客可继续出航。'),
+            ],
+            if (tripReady && boardablePassengerCount == 0) ...[
+              const SizedBox(height: 4),
+              const _NoticeCard(message: '当前没有保障已生效的乘客可登船。'),
+            ],
             const SizedBox(height: 8),
             const Text(
               '仅依据保险机构回查的有效状态放行；单个乘客问题不自动拦停其他乘客，也不能人工跳过门禁。',
               style: _smallNote,
             ),
+            if (tripReady && boardablePassengerCount > 0) ...[
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  onDepart(departurePassengerIds);
+                },
+                icon: const Icon(Icons.sailing_outlined),
+                label: Text('确认 $boardablePassengerCount 位可登船乘客出航'),
+              ),
+            ],
           ],
         ),
       ),

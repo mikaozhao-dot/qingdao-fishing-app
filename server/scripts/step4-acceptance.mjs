@@ -68,7 +68,7 @@ async function signedPaymentCallback(event) {
   return { status: response.statusCode, body: response.json() };
 }
 
-async function waitForLockedQuery(prefix) {
+async function waitForLockedQuery(prefix, minimumCount = 1) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const result = await scalar(
@@ -76,10 +76,17 @@ async function waitForLockedQuery(prefix) {
        WHERE datname=current_database() AND wait_event_type='Lock' AND state='active' AND query LIKE $1`,
       [`${prefix}%`],
     );
-    if (result.count > 0) return true;
+    if (result.count >= minimumCount) return true;
     await wait(20);
   }
   return false;
+}
+
+async function holdDepartureRow(departureId) {
+  const client = await pool.connect();
+  await client.query('BEGIN');
+  await client.query('SELECT id FROM departures WHERE id=$1 FOR UPDATE', [departureId]);
+  return client;
 }
 
 async function expect(method, path, token, payload, status = 200) {
@@ -88,9 +95,12 @@ async function expect(method, path, token, payload, status = 200) {
   return response.body;
 }
 
-async function expectDepartedInsuranceBlocked(departureId, captainToken, expectedMessage, label) {
+async function expectDepartedInsuranceBlocked(
+  departureId, captainToken, expectedMessage, label, passengerIds = [], blockedPassengerDecisions = [],
+) {
   const response = await request(
-    'POST', `/captain/departures/${departureId}/checkin`, captainToken, { event: 'departed' },
+    'POST', `/captain/departures/${departureId}/checkin`, captainToken,
+    { event: 'departed', passengerIds },
   );
   check(response.status, 409, `${label}: departed check-in returns a conflict`);
   check(response.body.error, expectedMessage, `${label}: departed check-in explains the insurance block`);
@@ -100,6 +110,18 @@ async function expectDepartedInsuranceBlocked(departureId, captainToken, expecte
     `SELECT count(*)::integer AS count FROM departure_checkins
      WHERE departure_id=$1 AND event='departed'`, [departureId],
   )).count, 0, `${label}: rejected check-in records no departed event`);
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM departure_passenger_gate_decisions WHERE departure_id=$1',
+    [departureId],
+  )).count, blockedPassengerDecisions.length, `${label}: records only the passenger-level gate decisions`);
+  for (const blockedPassenger of blockedPassengerDecisions) {
+    const decision = await scalar(
+      `SELECT decision,coverage_status FROM departure_passenger_gate_decisions
+       WHERE departure_id=$1 AND passenger_id=$2`, [departureId, blockedPassenger.id],
+    );
+    check(decision, { decision: 'blocked', coverage_status: blockedPassenger.status },
+      `${label}: records the passenger's server-verified block reason`);
+  }
 }
 
 async function makeUser(name, captain = false) {
@@ -1257,6 +1279,7 @@ async function main() {
 
   const gateDeparture = await makeConfirmedDeparture(captain.id, boatId);
   const gateOrderOne = await makePaidOrder(angler.id, gateDeparture.id, gateDeparture.seat);
+  const passengerOne = await scalar('SELECT id FROM order_passengers WHERE order_id=$1', [gateOrderOne]);
   const gateSeatTwo = (await pool.query(
     `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
      VALUES ($1,2,5000,'port','mid','booked') RETURNING id,seat_number,price_fen`,
@@ -1264,8 +1287,15 @@ async function main() {
   )).rows[0];
   const gateOrderTwo = await makePaidOrder(secondAngler.id, gateDeparture.id, gateSeatTwo);
   const passengerTwo = await scalar('SELECT id FROM order_passengers WHERE order_id=$1', [gateOrderTwo]);
+  const missingPassengerList = await request(
+    'POST', `/captain/departures/${gateDeparture.id}/checkin`, captain.token, { event: 'departed' },
+  );
+  check(missingPassengerList.status, 400, 'departure check-in requires an explicit passenger list');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [gateDeparture.id])).status, 'confirmed',
+    'missing passenger list leaves departure status unchanged');
   await expectDepartedInsuranceBlocked(
     gateDeparture.id, captain.token, '航次必需保障未生效，暂不能出航', 'missing vessel coverage record',
+    [passengerOne.id, passengerTwo.id],
   );
   const missingTripCoverage = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);
   check(missingTripCoverage.requiredCoverage.status, 'not_verified',
@@ -1278,6 +1308,7 @@ async function main() {
     'captain cannot manually bypass the insurance gate');
   await expectDepartedInsuranceBlocked(
     gateDeparture.id, captain.token, '航次必需保障未生效，暂不能出航', 'missing vessel coverage',
+    [passengerOne.id, passengerTwo.id],
   );
   const effectiveTripCoverage = await expect('POST',
     `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
@@ -1288,6 +1319,15 @@ async function main() {
   check(readyTripCoverage.canDepartureProceed, true, 'verified voyage-level coverage permits the remaining trip gate');
   check(readyTripCoverage.passengers.map((passenger) => passenger.canBoard), [true, true],
     'each paid passenger with effective individual coverage can board');
+  const incompletePassengerRoster = await request(
+    'POST', `/captain/departures/${gateDeparture.id}/checkin`, captain.token,
+    { event: 'departed', passengerIds: [passengerOne.id] },
+  );
+  check(incompletePassengerRoster.status, 409, 'a partial client roster is rejected');
+  check(incompletePassengerRoster.body.error, '乘船名单已变化，请刷新后重试',
+    'the server requires a complete paid-passenger roster');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [gateDeparture.id])).status, 'confirmed',
+    'a stale roster leaves departure unchanged');
   for (const passengerStatus of ['pending_verification', 'not_insured']) {
     await expect('POST', `/orders/${gateOrderTwo}/passengers/${passengerTwo.id}/insurance/sandbox`, secondAngler.token,
       { status: passengerStatus });
@@ -1300,9 +1340,6 @@ async function main() {
       `${passengerStatus} blocks only the affected passenger`);
     check(notEffectivePassengerGate.passengers[1].status, passengerStatus,
       `${passengerStatus} remains visible in the captain's gate result`);
-    await expectDepartedInsuranceBlocked(
-      gateDeparture.id, captain.token, '乘客保障未全部生效，暂不能出航', `${passengerStatus} passenger coverage`,
-    );
   }
   await expect('POST', `/orders/${gateOrderTwo}/passengers/${passengerTwo.id}/insurance/sandbox`, secondAngler.token,
     { status: 'failed', failureReason: 'insurer_rejected' });
@@ -1313,9 +1350,6 @@ async function main() {
     'individual insurance failure blocks only the affected passenger');
   check(onePassengerBlocked.passengers[1].failureReason, 'insurer_rejected',
     'passenger-specific failure reason remains visible to the captain');
-  await expectDepartedInsuranceBlocked(
-    gateDeparture.id, captain.token, '乘客保障未全部生效，暂不能出航', 'failed passenger coverage',
-  );
   const orderInsurance = await expect('GET', `/orders/${gateOrderTwo}/insurance/status`, secondAngler.token);
   check(orderInsurance.insurance.passengerCoverages[0].status, 'failed',
     'order insurance status reports the server-verified passenger result');
@@ -1332,6 +1366,7 @@ async function main() {
     'pending voyage-level coverage prevents every passenger from boarding');
   await expectDepartedInsuranceBlocked(
     gateDeparture.id, captain.token, '航次必需保障未生效，暂不能出航', 'pending vessel coverage',
+    [passengerOne.id, passengerTwo.id],
   );
   await expect('POST', `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
     { status: 'failed', failureReason: 'platform_supplier_fault' });
@@ -1342,23 +1377,207 @@ async function main() {
     'whole-departure insurance block supersedes individual passenger readiness');
   await expectDepartedInsuranceBlocked(
     gateDeparture.id, captain.token, '航次必需保障未生效，暂不能出航', 'failed vessel coverage',
+    [passengerOne.id, passengerTwo.id],
   );
   await expect('POST', `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
     { status: 'effective' });
-  await expect('POST', `/orders/${gateOrderTwo}/passengers/${passengerTwo.id}/insurance/sandbox`, secondAngler.token,
-    { status: 'effective' });
-  const allInsuranceReady = await expect(
+  const partialInsuranceReady = await expect(
     'GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token,
   );
-  check(allInsuranceReady.passengers.map((passenger) => passenger.canBoard), [true, true],
-    'all current passenger coverages are effective before departure');
-  await expect('POST', `/captain/departures/${gateDeparture.id}/checkin`, captain.token, { event: 'departed' });
+  check(partialInsuranceReady.passengers.map((passenger) => passenger.canBoard), [true, false],
+    'one failed passenger remains blocked while another passenger is ready');
+  const partialDeparture = await expect('POST', `/captain/departures/${gateDeparture.id}/checkin`, captain.token,
+    { event: 'departed', passengerIds: [passengerOne.id, passengerTwo.id] });
+  check(partialDeparture.status, 'in_progress',
+    'an eligible passenger can depart while an ineligible passenger stays ashore');
+  check(partialDeparture.boardedPassengerCount, 1,
+    'departure response reports only the effective passenger as boarded');
+  check(partialDeparture.blockedPassengerCount, 1,
+    'departure response reports the failed passenger as blocked');
   check((await scalar('SELECT status FROM departures WHERE id=$1', [gateDeparture.id])).status, 'in_progress',
-    'the departed check-in advances only after all required and passenger coverage is effective');
+    'the departed check-in advances after required coverage and selected passengers are effective');
   check((await scalar(
     `SELECT count(*)::integer AS count FROM departure_checkins
      WHERE departure_id=$1 AND event='departed'`, [gateDeparture.id],
   )).count, 1, 'a valid insurance-gated departure records one check-in');
+  check((await scalar(
+    `SELECT decision,coverage_status FROM departure_passenger_gate_decisions
+     WHERE departure_id=$1 AND passenger_id=$2`, [gateDeparture.id, passengerOne.id],
+  )), { decision: 'allowed', coverage_status: 'effective' },
+  'the effective passenger is recorded on the permitted boarding list');
+  check((await scalar(
+    `SELECT decision,coverage_status FROM departure_passenger_gate_decisions
+     WHERE departure_id=$1 AND passenger_id=$2`, [gateDeparture.id, passengerTwo.id],
+  )), { decision: 'blocked', coverage_status: 'failed' },
+  'the failed passenger receives an auditable block and is not on the permitted list');
+  const blockedIdentity = security.decrypt((await scalar(
+    'SELECT identity_number_ciphertext FROM order_passengers WHERE id=$1', [passengerTwo.id],
+  )).identity_number_ciphertext);
+  const allowedIdentity = security.decrypt((await scalar(
+    'SELECT identity_number_ciphertext FROM order_passengers WHERE id=$1', [passengerOne.id],
+  )).identity_number_ciphertext);
+  const partialManifest = await request(
+    'GET', `/captain/departures/${gateDeparture.id}/manifest.csv?format=full`, captain.token,
+  );
+  check(partialManifest.body.includes(allowedIdentity), true,
+    'post-departure manifest contains the passenger who was allowed to board');
+  check(partialManifest.body.includes(blockedIdentity), false,
+    'post-departure manifest excludes the passenger who was blocked');
+
+  const allReadyDeparture = await makeConfirmedDeparture(captain.id, boatId);
+  await makePaidOrder(angler.id, allReadyDeparture.id, allReadyDeparture.seat);
+  const allReadySeatTwo = (await pool.query(
+    `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
+     VALUES ($1,2,5000,'starboard','mid','booked') RETURNING id,seat_number,price_fen`,
+    [allReadyDeparture.id],
+  )).rows[0];
+  await makePaidOrder(secondAngler.id, allReadyDeparture.id, allReadySeatTwo);
+  const allReadyPassengerIds = (await pool.query(
+    `SELECT op.id FROM order_passengers op JOIN booking_orders o ON o.id=op.order_id
+     WHERE o.departure_id=$1 AND o.status='paid' ORDER BY op.id`, [allReadyDeparture.id],
+  )).rows.map((row) => row.id);
+  check(allReadyPassengerIds.length, 2, 'all-effective case includes both paid passengers');
+  await expect('POST', `/captain/departures/${allReadyDeparture.id}/required-insurance/sandbox`, captain.token,
+    { status: 'effective' });
+  const allInsuranceReady = await expect(
+    'GET', `/captain/departures/${allReadyDeparture.id}/insurance-gate`, captain.token,
+  );
+  check(allInsuranceReady.passengers.map((passenger) => passenger.canBoard), [true, true],
+    'all current passenger coverages are effective before departure');
+  await pool.query("UPDATE departures SET status='captain_confirmed' WHERE id=$1", [allReadyDeparture.id]);
+  await expect('POST', `/captain/departures/${allReadyDeparture.id}/checkin`, captain.token,
+    { event: 'departed', passengerIds: allReadyPassengerIds });
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departure_passenger_gate_decisions
+     WHERE departure_id=$1 AND decision='allowed'`,
+    [allReadyDeparture.id],
+  )).count, 2, 'all current effective passengers are recorded as allowed to board');
+
+  const blockedDeparture = await makeConfirmedDeparture(captain.id, boatId);
+  const blockedOrder = await makePaidOrder(angler.id, blockedDeparture.id, blockedDeparture.seat);
+  const blockedPassenger = await scalar('SELECT id FROM order_passengers WHERE order_id=$1', [blockedOrder]);
+  await expect('POST', `/captain/departures/${blockedDeparture.id}/required-insurance/sandbox`, captain.token,
+    { status: 'effective' });
+  for (const status of ['pending_verification', 'not_insured', 'failed']) {
+    await expect('POST', `/orders/${blockedOrder}/passengers/${blockedPassenger.id}/insurance/sandbox`, angler.token,
+      status === 'failed' ? { status, failureReason: 'insurer_rejected' } : { status });
+    await expectDepartedInsuranceBlocked(
+      blockedDeparture.id, captain.token, '没有保障已生效的乘客可登船',
+      `${status} passenger cannot board`, [blockedPassenger.id],
+      [{ id: blockedPassenger.id, status }],
+    );
+  }
+  const forgedPassengerStatus = await request(
+    'POST', `/captain/departures/${blockedDeparture.id}/checkin`, captain.token,
+    { event: 'departed', passengerIds: [blockedPassenger.id], status: 'effective' },
+  );
+  check(forgedPassengerStatus.status, 409,
+    'client-supplied insurance status cannot override the server verification');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [blockedDeparture.id])).status, 'confirmed',
+    'forged passenger status leaves departure unchanged');
+  await expect('POST', `/orders/${blockedOrder}/passengers/${blockedPassenger.id}/insurance/sandbox`, angler.token,
+    { status: 'effective' });
+  await expect('POST', `/captain/departures/${blockedDeparture.id}/checkin`, captain.token,
+    { event: 'departed', passengerIds: [blockedPassenger.id] });
+  check((await scalar(
+    `SELECT decision,coverage_status FROM departure_passenger_gate_decisions
+     WHERE departure_id=$1 AND passenger_id=$2`, [blockedDeparture.id, blockedPassenger.id],
+  )), { decision: 'allowed', coverage_status: 'effective' },
+  'a later valid verification updates the blocked passenger to allowed before departure');
+
+  const updateFirstDeparture = await makeConfirmedDeparture(captain.id, boatId);
+  const updateFirstOrderOne = await makePaidOrder(angler.id, updateFirstDeparture.id, updateFirstDeparture.seat);
+  const updateFirstSeatTwo = (await pool.query(
+    `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
+     VALUES ($1,2,5000,'starboard','mid','booked') RETURNING id,seat_number,price_fen`,
+    [updateFirstDeparture.id],
+  )).rows[0];
+  const updateFirstOrderTwo = await makePaidOrder(secondAngler.id, updateFirstDeparture.id, updateFirstSeatTwo);
+  const updateFirstPassenger = await scalar(
+    'SELECT id FROM order_passengers WHERE order_id=$1', [updateFirstOrderTwo],
+  );
+  const updateFirstPassengerIds = (await pool.query(
+    `SELECT op.id FROM order_passengers op JOIN booking_orders o ON o.id=op.order_id
+     WHERE o.departure_id=$1 AND o.status='paid' ORDER BY op.id`, [updateFirstDeparture.id],
+  )).rows.map((row) => row.id);
+  await expect('POST', `/captain/departures/${updateFirstDeparture.id}/required-insurance/sandbox`, captain.token,
+    { status: 'effective' });
+  await expect('POST', `/orders/${updateFirstOrderTwo}/passengers/${updateFirstPassenger.id}/insurance/sandbox`,
+    secondAngler.token, { status: 'pending_verification' });
+  const updateFirstLock = await holdDepartureRow(updateFirstDeparture.id);
+  const insuranceUpdateFirst = request(
+    'POST', `/orders/${updateFirstOrderTwo}/passengers/${updateFirstPassenger.id}/insurance/sandbox`,
+    secondAngler.token, { status: 'effective' },
+  );
+  check(await waitForLockedQuery('SELECT status FROM departures WHERE id=$1 FOR UPDATE'), true,
+    'passenger insurance update waits behind the departure row lock');
+  const departureAfterUpdateFirst = request(
+    'POST', `/captain/departures/${updateFirstDeparture.id}/checkin`, captain.token,
+    { event: 'departed', passengerIds: updateFirstPassengerIds },
+  );
+  check(await waitForLockedQuery('SELECT d.id,d.captain_user_id,d.status,d.departure_at'), true,
+    'departure waits behind the queued passenger insurance update');
+  await updateFirstLock.query('COMMIT');
+  updateFirstLock.release();
+  const [updatedFirst, departedAfterUpdate] = await Promise.all([
+    insuranceUpdateFirst, departureAfterUpdateFirst,
+  ]);
+  check(updatedFirst.status, 200, 'coverage update commits first in the first race order');
+  check(departedAfterUpdate.status, 200, 'departure reads the newly effective coverage');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departure_passenger_gate_decisions
+     WHERE departure_id=$1 AND decision='allowed'`, [updateFirstDeparture.id],
+  )).count, 2, 'first race order admits only rows that are effective at the departure check');
+
+  const departureFirst = await makeConfirmedDeparture(captain.id, boatId);
+  const departureFirstOrderOne = await makePaidOrder(angler.id, departureFirst.id, departureFirst.seat);
+  const departureFirstSeatTwo = (await pool.query(
+    `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
+     VALUES ($1,2,5000,'starboard','mid','booked') RETURNING id,seat_number,price_fen`,
+    [departureFirst.id],
+  )).rows[0];
+  const departureFirstOrderTwo = await makePaidOrder(secondAngler.id, departureFirst.id, departureFirstSeatTwo);
+  const departureFirstPassenger = await scalar(
+    'SELECT id FROM order_passengers WHERE order_id=$1', [departureFirstOrderTwo],
+  );
+  const departureFirstPassengerIds = (await pool.query(
+    `SELECT op.id FROM order_passengers op JOIN booking_orders o ON o.id=op.order_id
+     WHERE o.departure_id=$1 AND o.status='paid' ORDER BY op.id`, [departureFirst.id],
+  )).rows.map((row) => row.id);
+  await expect('POST', `/captain/departures/${departureFirst.id}/required-insurance/sandbox`, captain.token,
+    { status: 'effective' });
+  await expect('POST', `/orders/${departureFirstOrderTwo}/passengers/${departureFirstPassenger.id}/insurance/sandbox`,
+    secondAngler.token, { status: 'failed', failureReason: 'insurer_rejected' });
+  const departureFirstLock = await holdDepartureRow(departureFirst.id);
+  const departedFirst = request(
+    'POST', `/captain/departures/${departureFirst.id}/checkin`, captain.token,
+    { event: 'departed', passengerIds: departureFirstPassengerIds },
+  );
+  check(await waitForLockedQuery('SELECT d.id,d.captain_user_id,d.status,d.departure_at'), true,
+    'departure obtains the row lock before a later passenger verification update');
+  const insuranceUpdateAfterDeparture = request(
+    'POST', `/orders/${departureFirstOrderTwo}/passengers/${departureFirstPassenger.id}/insurance/sandbox`,
+    secondAngler.token, { status: 'effective' },
+  );
+  check(await waitForLockedQuery('SELECT status FROM departures WHERE id=$1 FOR UPDATE'), true,
+    'later insurance update waits for the departure gate to finish');
+  await departureFirstLock.query('COMMIT');
+  departureFirstLock.release();
+  const [departedBeforeUpdate, updatedAfterDeparture] = await Promise.all([
+    departedFirst, insuranceUpdateAfterDeparture,
+  ]);
+  check(departedBeforeUpdate.status, 200, 'departure records the server-verified passenger decisions first');
+  check(updatedAfterDeparture.status, 409, 'post-departure coverage update is rejected');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [departureFirst.id])).status, 'in_progress',
+    'departure-first race finishes with the verified departure status');
+  check((await scalar(
+    `SELECT decision,coverage_status FROM departure_passenger_gate_decisions
+     WHERE departure_id=$1 AND passenger_id=$2`, [departureFirst.id, departureFirstPassenger.id],
+  )), { decision: 'blocked', coverage_status: 'failed' },
+  'departure-first race preserves the blocked passenger decision');
+  check((await scalar(
+    'SELECT status FROM passenger_insurance_coverages WHERE passenger_id=$1', [departureFirstPassenger.id],
+  )).status, 'failed', 'a queued verification update cannot alter the departed coverage snapshot');
 
   const shiftedWindowDeparture = await makeConfirmedDeparture(captain.id, boatId);
   const shiftedWindowOrder = await makePaidOrder(angler.id, shiftedWindowDeparture.id, shiftedWindowDeparture.seat);
@@ -1383,15 +1602,23 @@ async function main() {
     'a passenger without coverage for the current sailing window cannot board');
   await expectDepartedInsuranceBlocked(
     shiftedWindowDeparture.id, captain.token,
-    '乘客保障未全部生效，暂不能出航', 'old policy does not satisfy the current sailing window',
+    '没有保障已生效的乘客可登船', 'old policy does not satisfy the current sailing window',
+    [shiftedWindowGate.passengers[0].passengerId],
+    [{ id: shiftedWindowGate.passengers[0].passengerId, status: 'not_insured' }],
   );
 
   await expect('POST', `/captain/departures/${departure.id}/required-insurance/sandbox`, captain.token,
     { status: 'effective' });
-  await expect('POST', '/captain/departures/' + departure.id + '/checkin', captain.token, { event: 'departed' });
+  const departurePassengerIds = (await pool.query(
+    `SELECT op.id FROM order_passengers op JOIN booking_orders o ON o.id=op.order_id
+     WHERE o.departure_id=$1 AND o.status='paid' ORDER BY op.id`, [departure.id],
+  )).rows.map((row) => row.id);
+  await expect('POST', '/captain/departures/' + departure.id + '/checkin', captain.token,
+    { event: 'departed', passengerIds: departurePassengerIds });
   check((await scalar('SELECT status FROM departures WHERE id=$1', [departure.id])).status, 'in_progress',
     'departure check-in advances status');
-  await expect('POST', '/captain/departures/' + departure.id + '/checkin', captain.token, { event: 'departed' }, 409);
+  await expect('POST', '/captain/departures/' + departure.id + '/checkin', captain.token,
+    { event: 'departed', passengerIds: departurePassengerIds }, 409);
   await expect('POST', '/captain/departures/' + departure.id + '/checkin', captain.token, { event: 'returned' });
   check((await scalar('SELECT status FROM departures WHERE id=$1', [departure.id])).status, 'completed',
     'return check-in completes trip');

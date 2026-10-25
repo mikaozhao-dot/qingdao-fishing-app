@@ -28,6 +28,32 @@ function validUuid(value) {
   return typeof value === 'string' && UUID_PATTERN.test(value);
 }
 
+async function withTransaction(pool, operation) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await operation(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function lockDepartureForInsuranceChange(client, departureId) {
+  const result = await client.query(
+    'SELECT status FROM departures WHERE id=$1 FOR UPDATE', [departureId],
+  );
+  if (!result.rowCount) return { error: [404, '班次不存在'] };
+  if (['in_progress', 'completed', 'cancelled', 'weather_cancelled'].includes(result.rows[0].status)) {
+    return { error: [409, '出航后不能修改乘客保障状态'] };
+  }
+  return { status: result.rows[0].status };
+}
+
 function bookingWindowOpen(departure, now) {
   return departure?.status === 'open'
     && new Date(departure.departure_at) > new Date(now)
@@ -1231,29 +1257,53 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     if (config.nodeEnv === 'production') return sendError(reply, 404, '沙盒保险入口未开放');
     if (!validUuid(request.params.id)) return sendError(reply, 400, '订单编号无效');
     try {
-      const result = await pool.query(
-        `SELECT o.order_number,o.status,ip.id AS policy_id,ip.status AS insurance_status
-         FROM booking_orders o JOIN insurance_policies ip ON ip.order_id=o.id
-         WHERE o.id=$1 AND o.buyer_user_id=$2`,
-        [request.params.id, request.user.id],
-      );
-      if (!result.rowCount) return sendError(reply, 404, '订单不存在');
-      if (result.rows[0].status !== 'paid') return sendError(reply, 409, '订单支付后才能打开投保入口');
-      if (result.rows[0].insurance_status === 'issued') return sendError(reply, 409, '该订单已记录沙盒投保状态');
-      const url = insuranceAdapter.createCheckout({ policyId: result.rows[0].policy_id, orderNumber: result.rows[0].order_number });
-      await pool.query(
-        `UPDATE insurance_policies SET status='checkout_started',provider_code='sandbox',checkout_url=$2,
-          provider_policy_reference=COALESCE(provider_policy_reference,$3),updated_at=now()
-         WHERE id=$1`,
-        [result.rows[0].policy_id, url, `sandbox_policy_${result.rows[0].policy_id}`],
-      );
-      await pool.query(
-        `UPDATE passenger_insurance_coverages SET status='pending_verification',failure_reason=NULL,
-           updated_at=now()
-         WHERE order_id=$1 AND status <> 'effective'`,
-        [request.params.id],
-      );
-      return { adapter: 'sandbox', checkoutUrl: url, status: 'checkout_started', premiumCollectedByPlatform: false };
+      const result = await withTransaction(pool, async (client) => {
+        const order = await client.query(
+          `SELECT o.id,o.departure_id,o.order_number,o.status,ip.id AS policy_id,
+                  ip.status AS insurance_status
+           FROM booking_orders o JOIN insurance_policies ip ON ip.order_id=o.id
+           WHERE o.id=$1 AND o.buyer_user_id=$2`,
+          [request.params.id, request.user.id],
+        );
+        if (!order.rowCount) return { error: [404, '订单不存在'] };
+        if (order.rows[0].status !== 'paid') {
+          return { error: [409, '订单支付后才能打开投保入口'] };
+        }
+        const departure = await lockDepartureForInsuranceChange(client, order.rows[0].departure_id);
+        if (departure.error) return departure;
+        if (order.rows[0].insurance_status === 'issued') {
+          return { error: [409, '该订单已记录沙盒投保状态'] };
+        }
+        await client.query(
+          `SELECT c.id FROM passenger_insurance_coverages c
+           WHERE c.order_id=$1 ORDER BY c.passenger_id,c.id FOR UPDATE`,
+          [request.params.id],
+        );
+        const url = insuranceAdapter.createCheckout({
+          policyId: order.rows[0].policy_id,
+          orderNumber: order.rows[0].order_number,
+        });
+        await client.query(
+          `UPDATE insurance_policies SET status='checkout_started',provider_code='sandbox',checkout_url=$2,
+            provider_policy_reference=COALESCE(provider_policy_reference,$3),updated_at=now()
+           WHERE id=$1`,
+          [order.rows[0].policy_id, url, `sandbox_policy_${order.rows[0].policy_id}`],
+        );
+        await client.query(
+          `UPDATE passenger_insurance_coverages SET status='pending_verification',failure_reason=NULL,
+             updated_at=now()
+           WHERE order_id=$1 AND status <> 'effective'`,
+          [request.params.id],
+        );
+        return {
+          adapter: 'sandbox',
+          checkoutUrl: url,
+          status: 'checkout_started',
+          premiumCollectedByPlatform: false,
+        };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return result;
     } catch (error) {
       request.log.warn({ err: error }, 'Sandbox insurance adapter is not configured');
       return sendError(reply, error.statusCode ?? 503, error.message);
@@ -1310,33 +1360,49 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     if (!validUuid(request.params.id) || !['issued', 'not_started'].includes(request.body?.status)) {
       return sendError(reply, 400, '沙盒保险状态无效');
     }
-    const policy = await pool.query(
-      `SELECT ip.id,ip.status,o.status AS order_status
-       FROM insurance_policies ip JOIN booking_orders o ON o.id=ip.order_id
-       WHERE o.id=$1 AND o.buyer_user_id=$2`,
-      [request.params.id, request.user.id],
-    );
-    if (!policy.rowCount) return sendError(reply, 404, '订单投保记录不存在');
-    if (policy.rows[0].order_status !== 'paid') return sendError(reply, 409, '订单支付后才能模拟投保');
     const issued = request.body.status === 'issued';
-    const result = await pool.query(
-      `UPDATE insurance_policies SET status=$2,provider_code='sandbox',
-         provider_policy_reference=CASE WHEN $3 THEN COALESCE(provider_policy_reference,$4) ELSE NULL END,
-         issued_at=CASE WHEN $3 THEN now() ELSE NULL END,updated_at=now()
-       WHERE id=$1 RETURNING status,provider_policy_reference,issued_at`,
-      [policy.rows[0].id, issued ? 'issued' : 'not_started', issued, `sandbox_policy_${policy.rows[0].id}`],
-    );
-    await pool.query(
-      `UPDATE passenger_insurance_coverages SET status=$2,failure_reason=NULL,
-         provider_code='sandbox',provider_policy_reference=$3,
-         verified_at=CASE WHEN $2::varchar(24)='effective' THEN now() ELSE NULL END,updated_at=now()
-       WHERE order_id=$1`,
-      [request.params.id, issued ? 'effective' : 'not_insured',
-        issued ? result.rows[0].provider_policy_reference : null],
-    );
+    const result = await withTransaction(pool, async (client) => {
+      const policy = await client.query(
+        `SELECT ip.id,o.departure_id,o.status AS order_status
+         FROM insurance_policies ip JOIN booking_orders o ON o.id=ip.order_id
+         WHERE o.id=$1 AND o.buyer_user_id=$2`,
+        [request.params.id, request.user.id],
+      );
+      if (!policy.rowCount) return { error: [404, '订单投保记录不存在'] };
+      if (policy.rows[0].order_status !== 'paid') {
+        return { error: [409, '订单支付后才能模拟投保'] };
+      }
+      const departure = await lockDepartureForInsuranceChange(client, policy.rows[0].departure_id);
+      if (departure.error) return departure;
+      await client.query(
+        `SELECT id FROM passenger_insurance_coverages
+         WHERE order_id=$1 ORDER BY passenger_id,id FOR UPDATE`,
+        [request.params.id],
+      );
+      const updatedPolicy = await client.query(
+        `UPDATE insurance_policies SET status=$2,provider_code='sandbox',
+           provider_policy_reference=CASE WHEN $3 THEN COALESCE(provider_policy_reference,$4) ELSE NULL END,
+           issued_at=CASE WHEN $3 THEN now() ELSE NULL END,updated_at=now()
+         WHERE id=$1 RETURNING status,provider_policy_reference,issued_at`,
+        [policy.rows[0].id, issued ? 'issued' : 'not_started', issued,
+          `sandbox_policy_${policy.rows[0].id}`],
+      );
+      await client.query(
+        `UPDATE passenger_insurance_coverages SET status=$2,failure_reason=NULL,
+           provider_code='sandbox',provider_policy_reference=$3,
+           verified_at=CASE WHEN $2::varchar(24)='effective' THEN now() ELSE NULL END,updated_at=now()
+         WHERE order_id=$1`,
+        [request.params.id, issued ? 'effective' : 'not_insured',
+          issued ? updatedPolicy.rows[0].provider_policy_reference : null],
+      );
+      return { insurance: updatedPolicy.rows[0] };
+    });
+    if (result.error) return sendError(reply, result.error[0], result.error[1]);
     return { insurance: {
-      status: result.rows[0].status, policyReference: result.rows[0].provider_policy_reference,
-      issuedAt: result.rows[0].issued_at, premiumCollectedByPlatform: false,
+      status: result.insurance.status,
+      policyReference: result.insurance.provider_policy_reference,
+      issuedAt: result.insurance.issued_at,
+      premiumCollectedByPlatform: false,
     } };
   });
 
@@ -1355,25 +1421,43 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
           || (status !== 'failed' && failureReason !== null)) {
         return sendError(reply, 400, '沙盒保险状态或失败原因无效');
       }
-      const result = await pool.query(
-        `UPDATE passenger_insurance_coverages c
-         SET status=$3,failure_reason=$4,provider_code='sandbox',
-             provider_policy_reference=CASE WHEN $3::varchar(24)='effective' THEN COALESCE(c.provider_policy_reference,
-               'sandbox_passenger_' || c.passenger_id::text) ELSE c.provider_policy_reference END,
-             verified_at=CASE WHEN $3::varchar(24)='effective' THEN now() ELSE NULL END,updated_at=now()
-         FROM booking_orders o
-         WHERE c.order_id=o.id AND o.id=$1 AND o.buyer_user_id=$2
-           AND o.status='paid' AND c.passenger_id=$5
-         RETURNING c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,c.verified_at`,
-        [request.params.id, request.user.id, status, failureReason, request.params.passengerId],
-      );
-      if (!result.rowCount) return sendError(reply, 404, '已支付订单中的乘客投保记录不存在');
+      const result = await withTransaction(pool, async (client) => {
+        const order = await client.query(
+          `SELECT departure_id,status FROM booking_orders
+           WHERE id=$1 AND buyer_user_id=$2`,
+          [request.params.id, request.user.id],
+        );
+        if (!order.rowCount || order.rows[0].status !== 'paid') {
+          return { error: [404, '已支付订单中的乘客投保记录不存在'] };
+        }
+        const departure = await lockDepartureForInsuranceChange(client, order.rows[0].departure_id);
+        if (departure.error) return departure;
+        const coverage = await client.query(
+          `SELECT id FROM passenger_insurance_coverages
+           WHERE order_id=$1 AND passenger_id=$2 FOR UPDATE`,
+          [request.params.id, request.params.passengerId],
+        );
+        if (!coverage.rowCount) {
+          return { error: [404, '已支付订单中的乘客投保记录不存在'] };
+        }
+        const updated = await client.query(
+          `UPDATE passenger_insurance_coverages SET status=$2,failure_reason=$3,provider_code='sandbox',
+             provider_policy_reference=CASE WHEN $2::varchar(24)='effective' THEN COALESCE(provider_policy_reference,
+               'sandbox_passenger_' || passenger_id::text) ELSE provider_policy_reference END,
+             verified_at=CASE WHEN $2::varchar(24)='effective' THEN now() ELSE NULL END,updated_at=now()
+           WHERE id=$1
+           RETURNING status,failure_reason,coverage_start_at,coverage_end_at,verified_at`,
+          [coverage.rows[0].id, status, failureReason],
+        );
+        return { insurance: updated.rows[0] };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
       return { insurance: {
-        status: result.rows[0].status,
-        failureReason: result.rows[0].failure_reason,
-        coverageStartAt: result.rows[0].coverage_start_at,
-        coverageEndAt: result.rows[0].coverage_end_at,
-        verifiedAt: result.rows[0].verified_at,
+        status: result.insurance.status,
+        failureReason: result.insurance.failure_reason,
+        coverageStartAt: result.insurance.coverage_start_at,
+        coverageEndAt: result.insurance.coverage_end_at,
+        verifiedAt: result.insurance.verified_at,
         premiumCollectedByPlatform: false,
       } };
     });

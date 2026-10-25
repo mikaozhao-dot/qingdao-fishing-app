@@ -2,6 +2,8 @@
 
 截至：2026-10-25 14:05:08（中国标准时间）。
 
+> 以下原始记录是 14:05 的开发中快照；当前进展以文末「交付更新（16:05 CST）」为准。
+
 ## 认领与工作区
 
 - 已认领切片 1「成团与补差端到端」。
@@ -30,6 +32,15 @@
 
 - `server/migrations/013_four_stern_premium_seats.sql` 已在主仓存在，迁移后的新模板将 5、6、7、8 号标为 `premium=true`；当前切片工作没有修改它。
 - 证据位置：`docs/step3-build-notes.md`（迁移 013 核验记录）及 `server/scripts/step4-acceptance.mjs`（旧班次价格不追溯、新模板/新班次计价回归）。本轮隔离接受测试应用了 001–016 全部迁移。
+
+## 交付更新（2026-10-25 16:05 CST）
+
+- 切片 1 代码已提交并推送到 main：`f830d23b182787ff9e4202fd6d0707de6d8b8a34`（`feat: deliver step4 supplement and F01 closeout`）。后续修复数据库验收工作流的演示支付环境并推送：`533a95a0a74075764227f3be75fdff7cbc8a5fcd`（`ci: enable payment sandbox for step4 acceptance`）。
+- 本地新建隔离 PostgreSQL 17.11 数据库、连接 Redis 8.10.2，应用迁移 001–016 后通过 **365 项断言**。另外 `npm test` 8/8、`npm run check`、Flutter analyze、Dart 格式检查及 iOS 模拟器集成走查均通过。
+- GitHub Actions 空库复跑 [run 40175115167](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40175115167) 已通过，应用迁移并完成 **365 项断言**。首次运行 [run 40174877606](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40174877606) 因工作流没有启用演示支付沙盒而在模拟支付请求处返回 503；`533a95a` 为 CI 加入仅测试用沙盒开关和密钥后复跑成功。
+- Flutter 原生 PNG 已放入 `design/step4-review-photos/18-step4-supplement-consent.png`、`19-step4-supplement-payment.png`、`20-step4-supplement-complete.png`，各自小于 1 MB，供 Muse/Dot 直接目检。
+- **当前状态：代码和证据已交付，等待 Muse/Dot 独立评审；仓库尚无本片验收结论。** 未提供 Android 构建或真机结果；没有连接真实支付、真实退款或生产服务。
+- 下一步：请 Muse/Dot 复核迁移、F01 18:00/18:10 窗口及并发/迟到回调、补差全员状态机和截图；在独立评审回注前，不把本片标记为已验收。其他第 4 步 v2 切片继续开放。
 
 ## 阻塞与下一份交付
 

@@ -95,3 +95,14 @@
 - 原生截图：`design/step4-review-photos/step4-03-seat-selection.png`（304,400 字节）、`step4-04-captain-formation-status.png`（305,910 字节）、`step4-05-insurance-gate.png`（345,640 字节），均小于 1 MB。临时集成走查的三个页面断言均通过；未做 Android 或真机走查。
 - 本记录只证明本地沙盒中这条路径和该门禁状态的模拟器显示。完整 D 的其余保险例、补差界面、真实保险回查以及 Muse/Dot 对本轮截图的独立评审仍待完成；不构成产品验收或真实保险出单授权。
 
+### 切片 1：成团补差与 F01 候补窗口（2026-10-25 本地交付，待 Muse/Dot 复核）
+
+- 新增迁移 `015_waitlist_closeout.sql` 与 `016_supplement_rounds.sql`，实现 F01 候补登记/授权、18:10 收尾冻结、退款义务，以及航次最多一轮补差的快照、全员确认、支付和服务端复验。全额退款及补差支付目前只运行在沙盒，不接真实资金通道。
+- 钓友行程页新增补差卡片，可确认/拒绝本轮，并通过沙盒支付面板模拟成功、失败或超时；明确显示演示不会扣款，不会自动开第二轮。
+- 交易验收通过 365 项断言：创始人 12×¥500 算例（4 人 T−30h 取消、补偿池 ¥600、候补补 1 人、缺口 ¥350、全员成功后服务端复核达到 ¥5,000）；补差全成功、拒绝全退且不扣违约金、单人付款失败、超时后迟到成功退款、重复回调只记一次、退款三次失败转人工；F01 18:00/18:10 边界、剩余窗口限时、18:00 后释放席位拒绝进入候补、18:10 冻结、迟到成功退款后下一位候补接续，以及支付回调与收尾并发。
+- 验收运行于新建隔离 PostgreSQL 17.11 数据库，依序应用迁移 001–016；连接 Redis 8.10.2。`npm test` 为 8/8 通过，`npm run check` 通过。Flutter 3.47.8/Dart 3.13.7 的 `flutter analyze --no-pub` 无问题，Dart 格式检查无改动。
+- iPhone Duo（iOS 模拟器）Flutter 集成走查通过，依次操作确认、沙盒支付与完成页。原生截图：`design/step4-review-photos/18-step4-supplement-consent.png`（352,365 字节）、`19-step4-supplement-payment.png`（338,483 字节）、`20-step4-supplement-complete.png`（328,123 字节），均为原始 PNG 且小于 1 MB。
+- GitHub Actions 空库复跑 [run 40175115167](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40175115167) 已通过，应用迁移并完成 **365 项断言**。首次运行 [run 40174877606](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40174877606) 因工作流缺少演示支付沙盒开关而在模拟支付接口返回 503；提交 `533a95a` 加入 CI 专用演示开关和测试密钥后复跑成功。
+- 本地 iOS 模拟器原生截图已入仓：`design/step4-review-photos/18-step4-supplement-consent.png`、`19-step4-supplement-payment.png`、`20-step4-supplement-complete.png`，均为未压缩 PNG 且小于 1 MB。
+- **状态：代码和证据已提交，待 Muse/Dot 独立评审。** 本记录不是 Muse/Dot 验收结论。尚无 Android 构建或真机结果，也未连接真实支付、真实退款或生产服务；第 4 步 v2 其他切片仍开放。完整回执见 `docs/luna-step4-slice1-status-receipt-2026-10-25.md`。
+

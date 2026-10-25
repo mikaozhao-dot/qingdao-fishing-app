@@ -528,6 +528,7 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
     final departure = _map(_flow['departure']);
     final checklist = _map(_flow['checklist']);
     final status = (departure['status'] ?? '').toString();
+    final formationShortfallFen = departure['formationShortfallFen'];
     return Scaffold(
       appBar: AppBar(title: const Text('行程详情')),
       body: _loading
@@ -577,6 +578,14 @@ class _AnglerOrderPageState extends State<_AnglerOrderPage> {
                     ],
                   ),
                 ),
+                if (status == 'handling_shortfall' &&
+                    formationShortfallFen is num) ...[
+                  const SizedBox(height: 10),
+                  _NoticeCard(
+                    message:
+                        '平台可核验金额尚差 ¥${_yuan(formationShortfallFen.round())}，班次待处置。',
+                  ),
+                ],
                 if (_supplementRound.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   _SupplementRoundCard(

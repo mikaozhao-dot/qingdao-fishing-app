@@ -58,6 +58,12 @@ void main() {
 
       expect(find.text('成团补差'), findsOneWidget);
       expect(find.text('待确认'), findsOneWidget);
+      expect(find.text('待处置 · 未达成行门槛'), findsOneWidget);
+      expect(find.text('平台可核验金额尚差 ¥0.01，班次待处置。'), findsOneWidget);
+      expect(
+        await binding.takeScreenshot('21-step4-formation-shortfall'),
+        isNotEmpty,
+      );
       await tester.ensureVisible(find.text('同意本轮补差'));
       await tester.pumpAndSettle();
       expect(find.text('¥0.01'), findsNWidgets(2));

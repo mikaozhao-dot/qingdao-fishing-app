@@ -1231,8 +1231,11 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
     if (!validUuid(request.params.id)) return sendError(reply, 400, '订单编号无效');
     const result = await pool.query(
       'SELECT o.id,o.status,d.id AS departure_id,d.status AS departure_status,d.departure_at,d.meeting_at,' +
-      'd.marina_code,d.trip_type,c.checklist ' +
+      'd.marina_code,d.trip_type,c.checklist,' +
+      "CASE WHEN d.status='handling_shortfall' AND s.outcome='shortfall' " +
+      'THEN GREATEST(s.threshold_fen-s.platform_verifiable_fen,0) ELSE NULL END AS formation_shortfall_fen ' +
       'FROM booking_orders o JOIN departures d ON d.id=o.departure_id ' +
+      'LEFT JOIN departure_formation_snapshots s ON s.departure_id=d.id ' +
       'LEFT JOIN departure_pretrip_checklists c ON c.departure_id=d.id ' +
       'WHERE o.id=$1 AND o.buyer_user_id=$2',
       [request.params.id, request.user.id],
@@ -1248,6 +1251,8 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
         meetingAt: row.meeting_at,
         marinaCode: row.marina_code,
         tripType: row.trip_type,
+        formationShortfallFen: row.formation_shortfall_fen === null
+          ? null : Number(row.formation_shortfall_fen),
       },
       checklist: row.checklist,
     };

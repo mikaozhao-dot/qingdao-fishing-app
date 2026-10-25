@@ -821,16 +821,25 @@ async function main() {
         now()+interval '20 hours','open',8,8,0,false) RETURNING id`,
     [boatId, captain.id],
   )).rows[0].id;
-  const formationSeat = (await pool.query(
+  const formationSeats = (await pool.query(
     `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
-     VALUES ($1,1,5000,'port','mid','booked') RETURNING id,seat_number,price_fen`,
+     SELECT $1,n,500,'port','mid','booked' FROM generate_series(1,8) AS n
+     RETURNING id,seat_number,price_fen`,
     [formationDepartureId],
-  )).rows[0];
-  await makePaidOrder(angler.id, formationDepartureId, formationSeat);
+  )).rows.sort((left, right) => left.seat_number - right.seat_number);
+  const formationOrderIds = [];
+  for (const seat of formationSeats) {
+    formationOrderIds.push(await makePaidOrder(angler.id, formationDepartureId, seat));
+  }
+  const formationOrderId = formationOrderIds[0];
+  const formationBeforeCutoff = await expect('GET', `/orders/${formationOrderId}/fulfillment`, angler.token);
+  check(formationBeforeCutoff.departure.status, 'open', 'the paid trip remains awaiting the server checkpoint before local 18:00');
+  check(formationBeforeCutoff.departure.formationShortfallFen, null,
+    'no shortfall amount is exposed before the server freezes a shortfall snapshot');
   const initialAccounts = await expect('GET',
     '/captain/departures/' + formationDepartureId + '/formation-accounts', captain.token);
-  check(initialAccounts.accounts.platform.ticketNetFen, 4500,
-    'formation preview applies the approved 90 percent ticket net');
+  check(initialAccounts.accounts.platform.ticketNetFen, 3600,
+    'full eight-seat departure calculates its approved 90 percent ticket net');
   check(initialAccounts.accounts.platform.meetsThreshold, false,
     'offline declarations never make the platform ledger automatically meet threshold');
   check(initialAccounts.accounts.captainOffline.supportsCaptainConfirmation, false,
@@ -841,21 +850,21 @@ async function main() {
     undefined, 404);
   const offlineEntry = await expect('POST',
     '/captain/departures/' + formationDepartureId + '/offline-ledger', captain.token,
-    { amountDeltaFen: 500, note: '验收模拟线下收入', requestKey: 'formation-offline-001' }, 201);
-  check(offlineEntry.accounts.captainOffline.declaredFen, 500,
+    { amountDeltaFen: 1400, note: '验收模拟线下收入', requestKey: 'formation-offline-001' }, 201);
+  check(offlineEntry.accounts.captainOffline.declaredFen, 1400,
     'captain-reported offline amount remains on its separate ledger');
-  check(offlineEntry.accounts.platform.verifiableTotalFen, 4500,
+  check(offlineEntry.accounts.platform.verifiableTotalFen, 3600,
     'offline entry does not alter platform-verifiable total');
   check(offlineEntry.accounts.captainOffline.supportsCaptainConfirmation, true,
     'offline amount can support only the captain confirmation path');
   const replayedOfflineEntry = await expect('POST',
     '/captain/departures/' + formationDepartureId + '/offline-ledger', captain.token,
-    { amountDeltaFen: 500, note: '验收模拟线下收入', requestKey: 'formation-offline-001' });
+    { amountDeltaFen: 1400, note: '验收模拟线下收入', requestKey: 'formation-offline-001' });
   check(replayedOfflineEntry.idempotentReplay, true, 'offline ledger request key is idempotent');
   check((await scalar('SELECT count(*)::integer AS count FROM departure_offline_ledger_entries WHERE departure_id=$1',
     [formationDepartureId])).count, 1, 'idempotent replay does not duplicate an offline entry');
   await expect('POST', '/captain/departures/' + formationDepartureId + '/offline-ledger', captain.token,
-    { amountDeltaFen: -501, note: '超额冲减', requestKey: 'formation-offline-002' }, 409);
+    { amountDeltaFen: -1401, note: '超额冲减', requestKey: 'formation-offline-002' }, 409);
   await expect('POST', '/captain/departures/' + formationDepartureId + '/offline-ledger', captain.token,
     { amountDeltaFen: 600, note: '重用请求编号', requestKey: 'formation-offline-001' }, 409);
   const shortfallCheckpoint = await processFormationChecksAt(
@@ -865,6 +874,11 @@ async function main() {
     'handling_shortfall', 'platform-only shortfall enters server-managed handling');
   check((await scalar('SELECT outcome FROM departure_formation_snapshots WHERE departure_id=$1',
     [formationDepartureId])).outcome, 'shortfall', 'shortfall snapshot records the automatic ledger outcome');
+  const shortfallFlow = await expect('GET', `/orders/${formationOrderId}/fulfillment`, angler.token);
+  check(shortfallFlow.departure.status, 'handling_shortfall',
+    'the full but below-threshold departure remains in its server-calculated shortfall state');
+  check(shortfallFlow.departure.formationShortfallFen, 1400,
+    'angler receives the frozen server-calculated ¥14.00 shortfall');
   const captainDecision = await expect('POST',
     '/captain/departures/' + formationDepartureId + '/formation/decision', captain.token,
     { action: 'captain_confirmed', basisNote: '线下账本与平台账核对一致' });
@@ -872,6 +886,11 @@ async function main() {
   check(captainDecision.platformGuarantee, false, 'captain confirmation does not imply a platform guarantee');
   check((await scalar('SELECT count(*)::integer AS count FROM departure_captain_formation_decisions WHERE departure_id=$1',
     [formationDepartureId])).count, 1, 'captain confirmation saves its basis and both ledger values');
+  const captainConfirmedFlow = await expect('GET', `/orders/${formationOrderId}/fulfillment`, angler.token);
+  check(captainConfirmedFlow.departure.status, 'captain_confirmed',
+    'the trip page distinguishes a captain-confirmed departure from platform confirmation');
+  check(captainConfirmedFlow.departure.formationShortfallFen, null,
+    'captain confirmation clears the displayed shortfall without changing the recorded snapshot');
   await expect('POST', '/captain/departures/' + formationDepartureId + '/formation/decision', captain.token,
     { action: 'captain_confirmed', basisNote: '重复确认' }, 409);
 
@@ -993,7 +1012,7 @@ async function main() {
      VALUES ($1,1,5000,'port','mid','booked') RETURNING id,seat_number,price_fen`,
     [autoDepartureId],
   )).rows[0];
-  await makePaidOrder(angler.id, autoDepartureId, autoSeat);
+  const autoOrderId = await makePaidOrder(angler.id, autoDepartureId, autoSeat);
   await pool.query(
     `INSERT INTO departure_formation_adjustments (departure_id,adjustment_type,amount_fen,source_reference)
      VALUES ($1,'penalty_pool',600,'acceptance-penalty-001')`, [autoDepartureId]);
@@ -1008,6 +1027,10 @@ async function main() {
     'confirmed', 'platform ledger meeting the threshold automatically confirms the departure');
   check((await scalar('SELECT outcome FROM departure_formation_snapshots WHERE departure_id=$1',
     [autoDepartureId])).outcome, 'automatic_confirmed', 'automatic confirmation preserves its calculation snapshot');
+  const autoFlow = await expect('GET', `/orders/${autoOrderId}/fulfillment`, angler.token);
+  check(autoFlow.departure.status, 'confirmed', 'the trip page shows server-confirmed automatic formation');
+  check(autoFlow.departure.formationShortfallFen, null,
+    'an automatically confirmed trip does not display a shortfall');
 
   const pendingSchedule = departureAfterPassedFormationCutoff();
   const pendingDepartureId = (await pool.query(
@@ -1092,6 +1115,25 @@ async function main() {
   const orderFlow = await expect('GET', '/orders/' + orderId + '/fulfillment', angler.token);
   check(orderFlow.departure.status, 'confirmed', 'angler sees confirmed trip status');
   check(Boolean(orderFlow.checklist), true, 'angler can read the generated checklist');
+
+  const preWeatherSnapshot = await scalar(
+    `SELECT outcome,threshold_fen,platform_verifiable_fen FROM departure_formation_snapshots
+     WHERE departure_id=$1`, [autoDepartureId],
+  );
+  await pool.query("UPDATE departures SET status='weather_cancelled',updated_at=now() WHERE id=$1", [autoDepartureId]);
+  const weatherCancelledFlow = await expect('GET', `/orders/${autoOrderId}/fulfillment`, angler.token);
+  check(weatherCancelledFlow.departure.status, 'weather_cancelled',
+    'a weather-cancelled trip remains a distinct server-owned state after formation');
+  check(weatherCancelledFlow.departure.formationShortfallFen, null,
+    'weather cancellation does not show an obsolete shortfall');
+  const postWeatherSnapshot = await scalar(
+    `SELECT outcome,threshold_fen,platform_verifiable_fen FROM departure_formation_snapshots
+     WHERE departure_id=$1`, [autoDepartureId],
+  );
+  check(postWeatherSnapshot, preWeatherSnapshot,
+    'weather cancellation preserves the original automatic formation snapshot');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [autoOrderId])).status, 'paid',
+    'the status fixture does not invent a weather refund or rewrite the paid order');
 
   const gateDeparture = await makeConfirmedDeparture(captain.id, boatId);
   const gateOrderOne = await makePaidOrder(angler.id, gateDeparture.id, gateDeparture.seat);

@@ -1,6 +1,6 @@
 # 第 4 步构建记录
 
-状态：v1 非金额履约子集已实现；Muse 于 2026-10-24 有条件通过。第 4 步 v2 已开始，首单冻结、配额隔离、B1 确认时点及保险门禁均有代码切片。Muse 的 F02/Q01–Q03 独立复跑报告（145/146/145 项零失败）已交 Dot 核验，汇总仍待更新。切片 1 已由 Dot 在其审查的沙盒范围内通过；退改四档验收正在交 Dot 复核。保险门禁后端首片修复已由 Dot 定点复核通过并通过数据库 CI；完整 D 四例与其余 A–E 切片仍开放。本文不表示第 4 步 v2 全量验收或真实交易获准。
+状态：v1 非金额履约子集已实现；Muse 于 2026-10-24 有条件通过。第 4 步 v2 已开始，首单冻结、配额隔离、B1 确认时点及保险门禁均有代码切片。Muse 的 F02/Q01–Q03 独立复跑报告（145/146/145 项零失败）已交 Dot 核验，汇总仍待更新。切片 1 已由 Dot 在其审查的沙盒范围内通过；退改四档和保险门禁补充状态用例已交付，等待 Dot 复核。保险门禁后端首片修复已由 Dot 定点复核通过并通过数据库 CI；完整 D 四例与其余 A–E 切片仍开放。本文不表示第 4 步 v2 全量验收或真实交易获准。
 
 ## 范围
 
@@ -141,4 +141,11 @@
 - 修正创始人 12 人算例，让四笔 T−30h 取消从距出航约 30h 的班次发起，再经候补 API 补位、沙盒付款、18:10 成团核算及补差 API；现有算例仍逐项核对 ¥600 罚金池、¥4,500 净票款、¥4,650 可核验金额及 ¥350 缺口。
 - 本地隔离 PostgreSQL 17.11 / Redis 8.10.2 应用迁移 001–017，`server/scripts/step4-acceptance.mjs` **539 项断言通过**；`npm test` 8/8、`npm run check`、`git diff --check` 通过。GitHub Actions [run 40186183656](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40186183656) 对 `8a881f6` 成功，日志确认 539 项断言通过。
 - 本片只验证退改 API 与沙盒账目，无 App 页面变化，因此未生成截图。罚金池记录不等于已向船长实际结算；未连接真实支付或真实退款。当前状态为待 Dot 复核，不能记为 Muse 验收或第 4 步全量验收。
+
+#### 退改四档后的保险门禁补充状态（代码提交 `f28e9e9`，待 Dot 复核）
+
+- 按 D 口径补齐航次必需保障 `pending_verification` 阻断整船、乘客保障 `pending_verification` 和 `not_insured` 在航次保障有效时仅阻断该乘客的隔离数据库 API 用例；原有 `not_verified`、`failed`、有效、出返航时段变化后旧 `issued` 不构成新保障、不得人工绕过等断言保留。
+- 未改生产实现、业务规则或 UI。继续使用此前 Dot 已目检的门禁截图 `design/step4-review-photos/step4-05-insurance-gate.png`；本片没有重做截图。
+- 本地隔离 PostgreSQL 17.11 / Redis 8.10.2 应用迁移 001–017，验收脚本通过 **554 项断言**；`npm test` 8/8、`npm run check` 与 `git diff --check` 通过。GitHub Actions [run 40186663165](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40186663165) 的 `acceptance` job `121148792529` 成功，输出 554 项断言通过。
+- 状态：待 Dot 对补充状态矩阵独立复核。本记录不是 Muse 验收、真实保单核验或第 4 步 v2 全量通过；未接真实保险服务。
 

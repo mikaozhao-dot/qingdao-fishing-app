@@ -12,8 +12,7 @@
 ## 二、新仓库（Muse 负责创建）
 
 - 仓库名：`mikaozhao-dot/qingdao-fishing-app-promotion`（私有），用途：新会话「app推广方案」的工作仓，存放推广方案的调研、草稿与交付物。
-- 创建状态（如实记）：GitHub App 的 API 建仓通道已实测被拒（403，集成无建仓权限）；Muse 已改走 GitHub 网页通道创建中。**创建完成以 Muse 在本仓的后续确认回注及新仓初始文件为准**，确认前不要假定新仓已可用，也不要往旧仓提交推广方案正文。
-- 新仓可用后，首批文件由 Muse 初始化（说明与任务要点）；此后推广方案的产出一律提交到新仓，不提交到本开发仓。
+- 创建状态（2026-10-25 13:17 更新）：GitHub App 的 API 建仓通道实测被拒（403，集成无建仓权限）后，Muse 改走创始人 GitHub 网页通道，**新仓已创建完成并核实**：https://github.com/mikaozhao-dot/qingdao-fishing-app-promotion ，Private，默认分支 main，Initial commit `9d3674a146a00b4733e57f9c292ff22e9591277b`（仅 README.md）。Muse 已向新仓初始化任务要点文件 `docs/session-brief-2026-10-25.md`；此后推广方案产出一律提交新仓，不提交本开发仓。
 
 ## 三、给 dot：知悉与复核分工
 

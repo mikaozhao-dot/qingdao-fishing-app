@@ -88,6 +88,20 @@ async function expect(method, path, token, payload, status = 200) {
   return response.body;
 }
 
+async function expectDepartedInsuranceBlocked(departureId, captainToken, expectedMessage, label) {
+  const response = await request(
+    'POST', `/captain/departures/${departureId}/checkin`, captainToken, { event: 'departed' },
+  );
+  check(response.status, 409, `${label}: departed check-in returns a conflict`);
+  check(response.body.error, expectedMessage, `${label}: departed check-in explains the insurance block`);
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [departureId])).status, 'confirmed',
+    `${label}: rejected check-in leaves the departure status unchanged`);
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departure_checkins
+     WHERE departure_id=$1 AND event='departed'`, [departureId],
+  )).count, 0, `${label}: rejected check-in records no departed event`);
+}
+
 async function makeUser(name, captain = false) {
   sequence += 1;
   const phone = '138' + String(sequence).padStart(8, '0');
@@ -1250,6 +1264,9 @@ async function main() {
   )).rows[0];
   const gateOrderTwo = await makePaidOrder(secondAngler.id, gateDeparture.id, gateSeatTwo);
   const passengerTwo = await scalar('SELECT id FROM order_passengers WHERE order_id=$1', [gateOrderTwo]);
+  await expectDepartedInsuranceBlocked(
+    gateDeparture.id, captain.token, '航次必需保障未生效，暂不能出航', 'missing vessel coverage record',
+  );
   const missingTripCoverage = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);
   check(missingTripCoverage.requiredCoverage.status, 'not_verified',
     'missing voyage-level required coverage fails closed');
@@ -1259,6 +1276,9 @@ async function main() {
     'voyage-level block prevents every passenger from boarding');
   check(missingTripCoverage.manualBypassAllowed, false,
     'captain cannot manually bypass the insurance gate');
+  await expectDepartedInsuranceBlocked(
+    gateDeparture.id, captain.token, '航次必需保障未生效，暂不能出航', 'missing vessel coverage',
+  );
   const effectiveTripCoverage = await expect('POST',
     `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
     { status: 'effective' });
@@ -1280,6 +1300,9 @@ async function main() {
       `${passengerStatus} blocks only the affected passenger`);
     check(notEffectivePassengerGate.passengers[1].status, passengerStatus,
       `${passengerStatus} remains visible in the captain's gate result`);
+    await expectDepartedInsuranceBlocked(
+      gateDeparture.id, captain.token, '乘客保障未全部生效，暂不能出航', `${passengerStatus} passenger coverage`,
+    );
   }
   await expect('POST', `/orders/${gateOrderTwo}/passengers/${passengerTwo.id}/insurance/sandbox`, secondAngler.token,
     { status: 'failed', failureReason: 'insurer_rejected' });
@@ -1290,6 +1313,9 @@ async function main() {
     'individual insurance failure blocks only the affected passenger');
   check(onePassengerBlocked.passengers[1].failureReason, 'insurer_rejected',
     'passenger-specific failure reason remains visible to the captain');
+  await expectDepartedInsuranceBlocked(
+    gateDeparture.id, captain.token, '乘客保障未全部生效，暂不能出航', 'failed passenger coverage',
+  );
   const orderInsurance = await expect('GET', `/orders/${gateOrderTwo}/insurance/status`, secondAngler.token);
   check(orderInsurance.insurance.passengerCoverages[0].status, 'failed',
     'order insurance status reports the server-verified passenger result');
@@ -1304,6 +1330,9 @@ async function main() {
     'pending voyage-level required coverage blocks the whole departure');
   check(pendingTripCoverage.passengers.every((passenger) => !passenger.canBoard), true,
     'pending voyage-level coverage prevents every passenger from boarding');
+  await expectDepartedInsuranceBlocked(
+    gateDeparture.id, captain.token, '航次必需保障未生效，暂不能出航', 'pending vessel coverage',
+  );
   await expect('POST', `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
     { status: 'failed', failureReason: 'platform_supplier_fault' });
   const missingRequiredCoverage = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);
@@ -1311,6 +1340,25 @@ async function main() {
     'missing vessel-level required coverage blocks the whole departure');
   check(missingRequiredCoverage.passengers.every((passenger) => !passenger.canBoard), true,
     'whole-departure insurance block supersedes individual passenger readiness');
+  await expectDepartedInsuranceBlocked(
+    gateDeparture.id, captain.token, '航次必需保障未生效，暂不能出航', 'failed vessel coverage',
+  );
+  await expect('POST', `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
+    { status: 'effective' });
+  await expect('POST', `/orders/${gateOrderTwo}/passengers/${passengerTwo.id}/insurance/sandbox`, secondAngler.token,
+    { status: 'effective' });
+  const allInsuranceReady = await expect(
+    'GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token,
+  );
+  check(allInsuranceReady.passengers.map((passenger) => passenger.canBoard), [true, true],
+    'all current passenger coverages are effective before departure');
+  await expect('POST', `/captain/departures/${gateDeparture.id}/checkin`, captain.token, { event: 'departed' });
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [gateDeparture.id])).status, 'in_progress',
+    'the departed check-in advances only after all required and passenger coverage is effective');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departure_checkins
+     WHERE departure_id=$1 AND event='departed'`, [gateDeparture.id],
+  )).count, 1, 'a valid insurance-gated departure records one check-in');
 
   const shiftedWindowDeparture = await makeConfirmedDeparture(captain.id, boatId);
   const shiftedWindowOrder = await makePaidOrder(angler.id, shiftedWindowDeparture.id, shiftedWindowDeparture.seat);
@@ -1333,7 +1381,13 @@ async function main() {
     'an old issued policy does not create effective coverage for a changed sailing window');
   check(shiftedWindowGate.passengers[0].canBoard, false,
     'a passenger without coverage for the current sailing window cannot board');
+  await expectDepartedInsuranceBlocked(
+    shiftedWindowDeparture.id, captain.token,
+    '乘客保障未全部生效，暂不能出航', 'old policy does not satisfy the current sailing window',
+  );
 
+  await expect('POST', `/captain/departures/${departure.id}/required-insurance/sandbox`, captain.token,
+    { status: 'effective' });
   await expect('POST', '/captain/departures/' + departure.id + '/checkin', captain.token, { event: 'departed' });
   check((await scalar('SELECT status FROM departures WHERE id=$1', [departure.id])).status, 'in_progress',
     'departure check-in advances status');

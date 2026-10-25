@@ -1173,6 +1173,44 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       if (event === 'returned' && departure.status !== 'in_progress') {
         return { error: [409, '请先完成出航打卡'] };
       }
+      if (event === 'departed') {
+        const requiredCoverage = await client.query(
+          'SELECT status FROM departure_required_insurance WHERE departure_id=$1 FOR UPDATE',
+          [departure.id],
+        );
+        if (requiredCoverage.rows[0]?.status !== 'effective') {
+          return { error: [409, '航次必需保障未生效，暂不能出航'] };
+        }
+        await client.query(
+          `SELECT c.id
+           FROM passenger_insurance_coverages c
+           JOIN booking_orders o ON o.id=c.order_id
+           JOIN order_passengers op ON op.id=c.passenger_id AND op.order_id=o.id
+           JOIN departures d ON d.id=o.departure_id
+           WHERE o.departure_id=$1 AND o.status='paid'
+             AND c.departure_id=d.id
+             AND c.coverage_start_at=d.departure_at
+             AND c.coverage_end_at=d.return_at
+           FOR UPDATE OF c`,
+          [departure.id],
+        );
+        const passengerCoverages = await client.query(
+          `SELECT op.id,c.status
+           FROM booking_orders o
+           JOIN departures d ON d.id=o.departure_id
+           JOIN order_passengers op ON op.order_id=o.id
+           LEFT JOIN passenger_insurance_coverages c ON c.passenger_id=op.id
+             AND c.departure_id=d.id
+             AND c.coverage_start_at=d.departure_at
+             AND c.coverage_end_at=d.return_at
+           WHERE o.departure_id=$1 AND o.status='paid'
+           ORDER BY op.id`,
+          [departure.id],
+        );
+        if (passengerCoverages.rows.some((passenger) => passenger.status !== 'effective')) {
+          return { error: [409, '乘客保障未全部生效，暂不能出航'] };
+        }
+      }
       const inserted = await client.query(
         'INSERT INTO departure_checkins (departure_id,captain_user_id,event) ' +
         'VALUES ($1,$2,$3) ON CONFLICT (departure_id,event) DO NOTHING RETURNING checked_at',

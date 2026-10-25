@@ -106,3 +106,18 @@
 - 本地 iOS 模拟器原生截图已入仓：`design/step4-review-photos/18-step4-supplement-consent.png`、`19-step4-supplement-payment.png`、`20-step4-supplement-complete.png`，均为未压缩 PNG 且小于 1 MB。
 - **状态：代码和证据已提交，待 Muse/Dot 独立评审。** 本记录不是 Muse/Dot 验收结论。尚无 Android 构建或真机结果，也未连接真实支付、真实退款或生产服务；第 4 步 v2 其他切片仍开放。完整回执见 `docs/luna-step4-slice1-status-receipt-2026-10-25.md`。
 
+#### Dot R1–R6 定点修复跟进（2026-10-25，本地验证完成，待复核）
+
+本段记录针对 `docs/dot-step4-slice1-review-2026-10-25.md` 的 R1–R6 修复；365 项是原提交基线。本次核心验收 426 项加 API 截图夹具 4 项，共 **430 项断言**。
+
+- R1：补差支付已标记失败后收到合法成功回调时，记录实际到账、保持轮次失效、建立一次退款义务并排除成团账；覆盖失败后成功、新事件号重复成功和退款三次失败转人工。
+- R2：候补派发、候补登记、普通座位锁定和建单均在取得班次行锁后读取当前时钟。验收让每条请求在行锁上等待并跨过 18:00，确认截止后的请求不创建候补、锁位或订单；候补派发跨过 18:10 后不发出过期授权。
+- R3：18:10 收尾取得班次锁后复查时间；直接关闭待支付候补订单、支付交易、座位锁和候补项，不依赖 hold reaper。验收覆盖支付回调先于收尾，以及收尾在锁等待后先完成、随后成功回调走退款且不复活订单。
+- R4：参与者已支付后，在其他参与者仍待支付时刷新/重试支付意向，返回原成功交易而不重复创建。
+- R5：mock 集成截图已改名为 `mock-18` 至 `mock-20`。另用本地运行的沙盒 API 和 PostgreSQL/Redis 执行原生 iOS 集成流程，成功完成同意、支付、成行复核；完成截图显示“平台已成行”。数据库复核为 departure=`confirmed`、round/payment=`succeeded`，成功补差账只有一条。三张图通过 `flutter drive` 原生驱动重新采集，1398×2034 PNG，分别 359,788、347,169、353,926 字节，均小于 1 MB。
+- R6：首位拒绝使多人补差轮次失效后，其他参与者仍可主动退出。服务端创建每单独立的全额票款退款义务、取消订单且不收退改违约金；多人用例覆盖两个参与者和重复退出请求。
+
+验证环境为新建隔离 PostgreSQL 17.11 和 Redis 8.10.2，应用迁移 001–016，并为本地沙盒配置一次性测试密钥；`server/scripts/step4-acceptance.mjs` 在生成 API 截图夹具的运行中通过 **430 项断言**。`npm test` 8/8、`npm run check`、`flutter analyze`、`flutter test`、Dart 格式检查和 iPhone Duo iOS 27.1 原生 API 集成驱动均通过。集成驱动命令与逐项证据见 `docs/step4-slice1-r1-r6-followup-review-request-2026-10-25.md`。
+
+状态仍为待 Muse/Dot 复核，不表示已验收。既有 CI run `40174877597` 已由 Dot 核验过首版 Android APK 与 iOS 模拟器构建；本次更新包含新的 App 和服务端提交，新的 CI 状态需在提交推送后单独核实。没有 Android 真机交互、生产部署、真实支付或真实退款证据。
+

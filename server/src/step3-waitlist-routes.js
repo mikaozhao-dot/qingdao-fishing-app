@@ -269,18 +269,18 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
           penaltyFen: Number(order.cancellation_penalty_fen ?? 0),
         };
       }
+      const now = await readStep3Clock(client, clockNow);
       if (order.status !== 'paid' || !['open', 'confirmed', 'captain_confirmed'].includes(order.departure_status)
-          || new Date(order.departure_at) <= new Date()) {
+          || new Date(order.departure_at) <= now) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '当前订单不能取消');
       }
-      const nowResult = await client.query('SELECT clock_timestamp() AS now');
       const amounts = cancellationAmounts(
         Number(order.seat_fee_fen) - Number(order.discount_fen),
         order.departure_at,
-        nowResult.rows[0].now,
+        now,
       );
-      const releaseEligible = new Date(nowResult.rows[0].now) < new Date(order.confirmation_at);
+      const releaseEligible = new Date(now) < new Date(order.confirmation_at);
       const seats = await client.query(
         `SELECT os.seat_inventory_id FROM booking_order_seats os
          JOIN seat_inventory s ON s.id=os.seat_inventory_id
@@ -292,7 +292,7 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
         `UPDATE booking_orders SET status='cancelled',cancelled_at=$2,updated_at=now(),
           cancelled_refund_fen=$3,cancellation_penalty_fen=$4
          WHERE id=$1`,
-        [order.id, nowResult.rows[0].now, amounts.refundFen + Number(order.platform_fee_fen), amounts.penaltyFen],
+        [order.id, now, amounts.refundFen + Number(order.platform_fee_fen), amounts.penaltyFen],
       );
       await client.query(
         `UPDATE booking_order_seats SET status='released' WHERE order_id=$1 AND status='paid'`, [order.id],
@@ -302,7 +302,7 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
           `UPDATE seat_inventory SET status='available',hold_id=NULL,hold_expires_at=NULL,
             waitlist_released_at=CASE WHEN $2 THEN $3::timestamptz ELSE NULL::timestamptz END,updated_at=now()
            WHERE id=ANY($1::uuid[])`,
-          [seats.rows.map((row) => row.seat_inventory_id), releaseEligible, nowResult.rows[0].now],
+          [seats.rows.map((row) => row.seat_inventory_id), releaseEligible, now],
         );
       }
       if (amounts.penaltyFen > 0) {
@@ -319,7 +319,7 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
             (order_id,amount_fen,reason,status,attempt_count,request_key,settled_at)
            VALUES ($1,$2,'customer_cancellation','sandbox_succeeded',1,$3,$4)
            ON CONFLICT (request_key) DO NOTHING`,
-          [order.id, refundFen, `customer-cancel:${order.id}`, nowResult.rows[0].now],
+          [order.id, refundFen, `customer-cancel:${order.id}`, now],
         );
       }
       await client.query('COMMIT');

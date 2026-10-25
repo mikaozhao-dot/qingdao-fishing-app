@@ -240,8 +240,8 @@ async function makeOpenCancellationFixture(captain, boatId, label, hoursUntilDep
   return { departureId, orderId, seatId: seat.id, user };
 }
 
-async function makeConfirmedCancellationFixture(captain, boatId, label, hoursUntilDeparture, status) {
-  const departureAt = new Date(Date.now() + hoursUntilDeparture * 3_600_000);
+async function makeConfirmedCancellationFixture(captain, boatId, label, now, hoursUntilDeparture, status) {
+  const departureAt = new Date(now.getTime() + hoursUntilDeparture * 3_600_000);
   const thresholdFen = status === 'captain_confirmed' ? 100000 : 90000;
   const departureId = (await pool.query(
     `INSERT INTO departures
@@ -291,7 +291,10 @@ async function makeConfirmedCancellationFixture(captain, boatId, label, hoursUnt
       [departureId, captain.id, thresholdFen, captainOfflineFen],
     );
   }
-  return { departureId, orderId, remainingOrderId, seatId: seats[0].id, remainingSeatId: seats[1].id, user: firstUser };
+  return {
+    departureId, orderId, remainingOrderId, seatId: seats[0].id, remainingSeatId: seats[1].id,
+    confirmationAt, departureAt, user: firstUser,
+  };
 }
 
 async function makeSupplementFixture(captain, boatId, label) {
@@ -1461,56 +1464,72 @@ async function main() {
 
   // A paid participant may still cancel after either confirmation route. Keep the
   // confirmed roster snapshot as historical evidence and never reopen F01 inventory.
-  for (const postConfirmation of [
-    { status: 'confirmed', hours: 12, penaltyFen: 30000, refundFen: 20000 },
-    { status: 'captain_confirmed', hours: 4, penaltyFen: 50000, refundFen: 0 },
-  ]) {
-    const fixture = await makeConfirmedCancellationFixture(
-      captain, quotaBoatId, `确认后退改-${postConfirmation.status}`, postConfirmation.hours, postConfirmation.status,
-    );
-    const frozenSnapshot = await scalar(
-      'SELECT * FROM departure_formation_snapshots WHERE departure_id=$1', [fixture.departureId],
-    );
-    const cancellation = await expect('POST', `/orders/${fixture.orderId}/cancel`, fixture.user.token, {});
-    check(cancellation.penaltyFen, postConfirmation.penaltyFen,
-      `${postConfirmation.status}: post-confirmation cancellation keeps the approved time-tier penalty`);
-    check(cancellation.refundFen, postConfirmation.refundFen,
-      `${postConfirmation.status}: post-confirmation cancellation keeps the approved time-tier refund`);
-    check(cancellation.waitlistEligible, false,
-      `${postConfirmation.status}: cancellation after the cutoff does not reopen waitlist inventory`);
-    check(cancellation.waitlistAuthorizations, [],
-      `${postConfirmation.status}: cancellation sends no post-cutoff waitlist authorization`);
-    check((await scalar('SELECT status FROM departures WHERE id=$1', [fixture.departureId])).status,
-      postConfirmation.status, `${postConfirmation.status}: one participant leaving does not rewrite departure state`);
-    check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [fixture.remainingOrderId])).status,
-      'paid', `${postConfirmation.status}: the other paid participant remains on the confirmed departure`);
-    check((await scalar('SELECT status,waitlist_released_at FROM seat_inventory WHERE id=$1', [fixture.seatId])).status,
-      'available', `${postConfirmation.status}: cancelled seat is released from the platform quota`);
-    check((await scalar('SELECT waitlist_released_at FROM seat_inventory WHERE id=$1', [fixture.seatId])).waitlist_released_at,
-      null, `${postConfirmation.status}: released seat receives no waitlist window marker`);
-    const liveAccounts = await expect(
-      'GET', `/captain/departures/${fixture.departureId}/formation-accounts`, captain.token,
-    );
-    check(liveAccounts.accounts.platform.ticketNetFen, 45000,
-      `${postConfirmation.status}: current ticket ledger reflects the remaining paid order`);
-    check(liveAccounts.accounts.platform.penaltyPoolFen, postConfirmation.penaltyFen,
-      `${postConfirmation.status}: penalty enters the live ledger once`);
-    check(await scalar('SELECT * FROM departure_formation_snapshots WHERE departure_id=$1', [fixture.departureId]),
-      frozenSnapshot, `${postConfirmation.status}: cancellation preserves the historical confirmation snapshot`);
-    if (postConfirmation.status === 'captain_confirmed') {
+  const shanghaiDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+  const [year, month, day] = shanghaiDate.split('-').map(Number);
+  // Tomorrow at 06:00 CST is safely after today's 18:00 confirmation cutoff.
+  const cancellationNow = new Date(Date.UTC(year, month - 1, day, 22, 0, 0));
+  simulatedStep3Time = cancellationNow;
+  try {
+    for (const postConfirmation of [
+      { status: 'confirmed', hours: 12, penaltyFen: 30000, refundFen: 20000 },
+      { status: 'captain_confirmed', hours: 4, penaltyFen: 50000, refundFen: 0 },
+    ]) {
+      const fixture = await makeConfirmedCancellationFixture(
+        captain, quotaBoatId, `确认后退改-${postConfirmation.status}`,
+        cancellationNow, postConfirmation.hours, postConfirmation.status,
+      );
+      check(fixture.confirmationAt <= cancellationNow, true,
+        `${postConfirmation.status}: cancellation fixture is at or after the confirmation cutoff`);
+      check(cancellationNow < fixture.departureAt, true,
+        `${postConfirmation.status}: cancellation fixture remains before departure`);
+      const frozenSnapshot = await scalar(
+        'SELECT * FROM departure_formation_snapshots WHERE departure_id=$1', [fixture.departureId],
+      );
+      const cancellation = await expect('POST', `/orders/${fixture.orderId}/cancel`, fixture.user.token, {});
+      check(cancellation.penaltyFen, postConfirmation.penaltyFen,
+        `${postConfirmation.status}: post-confirmation cancellation keeps the approved time-tier penalty`);
+      check(cancellation.refundFen, postConfirmation.refundFen,
+        `${postConfirmation.status}: post-confirmation cancellation keeps the approved time-tier refund`);
+      check(cancellation.waitlistEligible, false,
+        `${postConfirmation.status}: cancellation after the cutoff does not reopen waitlist inventory`);
+      check(cancellation.waitlistAuthorizations, [],
+        `${postConfirmation.status}: cancellation sends no post-cutoff waitlist authorization`);
+      check((await scalar('SELECT status FROM departures WHERE id=$1', [fixture.departureId])).status,
+        postConfirmation.status, `${postConfirmation.status}: one participant leaving does not rewrite departure state`);
+      check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [fixture.remainingOrderId])).status,
+        'paid', `${postConfirmation.status}: the other paid participant remains on the confirmed departure`);
+      check((await scalar('SELECT status,waitlist_released_at FROM seat_inventory WHERE id=$1', [fixture.seatId])).status,
+        'available', `${postConfirmation.status}: cancelled seat is released from the platform quota`);
+      check((await scalar('SELECT waitlist_released_at FROM seat_inventory WHERE id=$1', [fixture.seatId])).waitlist_released_at,
+        null, `${postConfirmation.status}: released seat receives no waitlist window marker`);
+      const liveAccounts = await expect(
+        'GET', `/captain/departures/${fixture.departureId}/formation-accounts`, captain.token,
+      );
+      check(liveAccounts.accounts.platform.ticketNetFen, 45000,
+        `${postConfirmation.status}: current ticket ledger reflects the remaining paid order`);
+      check(liveAccounts.accounts.platform.penaltyPoolFen, postConfirmation.penaltyFen,
+        `${postConfirmation.status}: penalty enters the live ledger once`);
+      check(await scalar('SELECT * FROM departure_formation_snapshots WHERE departure_id=$1', [fixture.departureId]),
+        frozenSnapshot, `${postConfirmation.status}: cancellation preserves the historical confirmation snapshot`);
+      if (postConfirmation.status === 'captain_confirmed') {
+        check((await scalar(
+          'SELECT count(*)::integer AS count FROM departure_captain_formation_decisions WHERE departure_id=$1',
+          [fixture.departureId],
+        )).count, 1, 'captain-confirmed cancellation preserves the original captain decision');
+      }
+      const replay = await expect('POST', `/orders/${fixture.orderId}/cancel`, fixture.user.token, {});
+      check(replay.idempotentReplay, true,
+        `${postConfirmation.status}: post-confirmation cancellation retry remains idempotent`);
       check((await scalar(
-        'SELECT count(*)::integer AS count FROM departure_captain_formation_decisions WHERE departure_id=$1',
-        [fixture.departureId],
-      )).count, 1, 'captain-confirmed cancellation preserves the original captain decision');
+        `SELECT COALESCE(SUM(amount_fen),0)::bigint AS amount FROM departure_formation_adjustments
+         WHERE departure_id=$1 AND adjustment_type='penalty_pool'`, [fixture.departureId],
+      )).amount, String(postConfirmation.penaltyFen),
+      `${postConfirmation.status}: retry does not duplicate the penalty-pool entry`);
     }
-    const replay = await expect('POST', `/orders/${fixture.orderId}/cancel`, fixture.user.token, {});
-    check(replay.idempotentReplay, true,
-      `${postConfirmation.status}: post-confirmation cancellation retry remains idempotent`);
-    check((await scalar(
-      `SELECT COALESCE(SUM(amount_fen),0)::bigint AS amount FROM departure_formation_adjustments
-       WHERE departure_id=$1 AND adjustment_type='penalty_pool'`, [fixture.departureId],
-    )).amount, String(postConfirmation.penaltyFen),
-    `${postConfirmation.status}: retry does not duplicate the penalty-pool entry`);
+  } finally {
+    simulatedStep3Time = null;
   }
 
   // Founder-approved amount example, exercised through cancellation, waitlist,

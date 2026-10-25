@@ -34,7 +34,7 @@
   - [`20-step4-supplement-complete.png`](../design/step4-review-photos/20-step4-supplement-complete.png)（353,926 字节）
 
   均为从 iPhone Duo（iOS 27.1 模拟器）原生 App 采集的 1398×2034 PNG，未压缩，均小于 1 MB。完成页已目检成行状态。
-- CI：本次代码提交推送后再核实新 run。Dot 已核过的旧基线 `40174877597` 只证明首版 Flutter 分析、iOS 模拟器构建和 Android debug APK 构建成功，不能代替本次提交 CI。没有 Android 真机交互或真机截图。
+- CI（代码与证据提交 head `f16c248`）：[Step 4 隔离数据库验收 run 40180869625](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40180869625) 成功；[Step 0 双平台构建 run 40180869639](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40180869639) 成功，其中 Flutter 分析、iOS 模拟器构建和 Android debug APK 构建均通过。Dot 已核过的旧基线 `40174877597` 仅是历史记录，不代替本次运行。没有 Android 真机交互或真机截图。
 
 ## 请求复核
 

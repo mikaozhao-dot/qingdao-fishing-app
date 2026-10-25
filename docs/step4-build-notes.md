@@ -119,5 +119,5 @@
 
 验证环境为新建隔离 PostgreSQL 17.11 和 Redis 8.10.2，应用迁移 001–016，并为本地沙盒配置一次性测试密钥；`server/scripts/step4-acceptance.mjs` 在生成 API 截图夹具的运行中通过 **430 项断言**。`npm test` 8/8、`npm run check`、`flutter analyze`、`flutter test`、Dart 格式检查和 iPhone Duo iOS 27.1 原生 API 集成驱动均通过。集成驱动命令与逐项证据见 `docs/step4-slice1-r1-r6-followup-review-request-2026-10-25.md`。
 
-状态仍为待 Muse/Dot 复核，不表示已验收。既有 CI run `40174877597` 已由 Dot 核验过首版 Android APK 与 iOS 模拟器构建；本次更新包含新的 App 和服务端提交，新的 CI 状态需在提交推送后单独核实。没有 Android 真机交互、生产部署、真实支付或真实退款证据。
+状态仍为待 Muse/Dot 复核，不表示已验收。代码与证据提交 head `f16c248` 的 [隔离数据库验收 run 40180869625](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40180869625) 和 [双平台构建 run 40180869639](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40180869639) 均成功；双平台 run 中 Flutter 分析、iOS 模拟器构建和 Android debug APK 构建均通过。没有 Android 真机交互、生产部署、真实支付或真实退款证据。
 

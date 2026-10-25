@@ -66,6 +66,6 @@
 - iPhone Duo（iOS 27.1 模拟器）通过本地沙盒 API 原生集成走查：
   `flutter drive --no-pub --driver=test_driver/step4_supplement_screenshots_driver.dart --target=integration_test/step4_supplement_api_e2e_test.dart -d 48A68998-36B2-45B6-B142-9D66A80884BA --dart-define-from-file=/tmp/qingdao-step4-dart-defines.json`
 - 已用原生 Flutter 截图驱动刷新 `design/step4-review-photos/18-step4-supplement-consent.png`、`19-step4-supplement-payment.png`、`20-step4-supplement-complete.png`。三张均为 1398×2034 原始 PNG，文件大小分别 359,788、347,169、353,926 字节。
-- 详细复核清单：`docs/step4-slice1-r1-r6-followup-review-request-2026-10-25.md`。GitHub CI 需待本次提交推送后核实；既有 Android/iOS CI 运行属于首版提交，不能替代本次新提交的 CI。未做 Android 真机交互。
+- 详细复核清单：`docs/step4-slice1-r1-r6-followup-review-request-2026-10-25.md`。代码与证据提交 head `f16c248` 的 [隔离数据库验收 run 40180869625](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40180869625) 和 [双平台构建 run 40180869639](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40180869639) 均成功；后者包含 Flutter 分析、iOS 模拟器构建和 Android debug APK 构建。未做 Android 真机交互。
 
 **状态：R1–R6 本地修复与证据已完成，待 Muse/Dot 对本次提交独立复核；没有新验收结论。** 未连接真实支付、真实退款或生产服务。

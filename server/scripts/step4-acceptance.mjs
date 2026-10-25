@@ -1120,6 +1120,19 @@ async function main() {
   check(readyTripCoverage.canDepartureProceed, true, 'verified voyage-level coverage permits the remaining trip gate');
   check(readyTripCoverage.passengers.map((passenger) => passenger.canBoard), [true, true],
     'each paid passenger with effective individual coverage can board');
+  for (const passengerStatus of ['pending_verification', 'not_insured']) {
+    await expect('POST', `/orders/${gateOrderTwo}/passengers/${passengerTwo.id}/insurance/sandbox`, secondAngler.token,
+      { status: passengerStatus });
+    const notEffectivePassengerGate = await expect(
+      'GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token,
+    );
+    check(notEffectivePassengerGate.canDepartureProceed, true,
+      `${passengerStatus} for one passenger does not unconditionally stop the whole departure`);
+    check(notEffectivePassengerGate.passengers.map((passenger) => passenger.canBoard), [true, false],
+      `${passengerStatus} blocks only the affected passenger`);
+    check(notEffectivePassengerGate.passengers[1].status, passengerStatus,
+      `${passengerStatus} remains visible in the captain's gate result`);
+  }
   await expect('POST', `/orders/${gateOrderTwo}/passengers/${passengerTwo.id}/insurance/sandbox`, secondAngler.token,
     { status: 'failed', failureReason: 'insurer_rejected' });
   const onePassengerBlocked = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);
@@ -1134,6 +1147,15 @@ async function main() {
     'order insurance status reports the server-verified passenger result');
   check((await scalar('SELECT status FROM insurance_policies WHERE order_id=$1', [gateOrderTwo])).status,
     'issued', 'a previous order-level success does not override a failed passenger-specific verification');
+  await expect('POST', `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
+    { status: 'pending_verification' });
+  const pendingTripCoverage = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);
+  check(pendingTripCoverage.requiredCoverage.status, 'pending_verification',
+    'pending voyage-level coverage remains explicitly unverified');
+  check(pendingTripCoverage.canDepartureProceed, false,
+    'pending voyage-level required coverage blocks the whole departure');
+  check(pendingTripCoverage.passengers.every((passenger) => !passenger.canBoard), true,
+    'pending voyage-level coverage prevents every passenger from boarding');
   await expect('POST', `/captain/departures/${gateDeparture.id}/required-insurance/sandbox`, captain.token,
     { status: 'failed', failureReason: 'platform_supplier_fault' });
   const missingRequiredCoverage = await expect('GET', `/captain/departures/${gateDeparture.id}/insurance-gate`, captain.token);

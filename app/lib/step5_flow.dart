@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api_client.dart';
 import 'fishing_tokens.dart';
+import 'live_status.dart';
 
 const _fishNames = <String, String>{
   'yellow_croaker': '小黄鱼',
@@ -777,24 +778,48 @@ class _Step5CaptainFactsCardState extends State<Step5CaptainFactsCard> {
     final repeat = _map(_facts['repeatBookings']);
     final service = _map(_facts['serviceReviews']);
     final checks = _map(_facts['crossSourceChecks']);
+    final activeLive = _map(_facts['activeLive']);
+    final liveBadgeFacts = _maps(_facts['liveBadgeFacts']);
     final serviceTags = _maps(service['tagCounts'])
         .map(
           (row) =>
               '${_captainTagLabels['${row['tag']}'] ?? row['tag']} · ${row['count']} 次',
         )
         .join('、');
-    return _Step5Card(
-      title: '船长口碑事实 · 最近 12 个月',
-      body:
-          '累计完成 ${_facts['completedTripCount'] ?? 0} 航次\n'
-          '渔获回填 ${catchFacts['reportedTripCount'] ?? 0} 航；未回填 ${catchFacts['missingReportCount'] ?? 0} 航\n'
-          '已回填航次零渔获率 ${catchFacts['zeroCatchRatePercent'] == null ? '暂无样本' : '${catchFacts['zeroCatchRatePercent']}%'}\n'
-          '复订事实 ${repeat['repeatPassengerCount'] ?? 0}/${repeat['cohortPassengerCount'] ?? 0} 位成熟观察乘客\n'
-          '船长服务评价 ${service['sampleCount'] ?? 0} 条${serviceTags.isEmpty ? '' : ' · $serviceTags'}\n'
-          '待核对 ${checks['pendingReviewCount'] ?? 0}/${checks['sampleCount'] ?? 0} 条乘客交叉记录',
-      footnote:
-          '复订率 ${repeat['repeatRatePercent'] == null ? '暂无成熟样本' : '${repeat['repeatRatePercent']}%'}；'
-          '渔获、评价和交叉核对按最近 12 个月统计；复订率仅纳入首次完成航次满 90 天的乘客。未回填航次不进入零渔获率分母。',
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Step5Card(
+          title: '船长口碑事实 · 最近 12 个月',
+          body:
+              '累计完成 ${_facts['completedTripCount'] ?? 0} 航次\n'
+              '渔获回填 ${catchFacts['reportedTripCount'] ?? 0} 航；未回填 ${catchFacts['missingReportCount'] ?? 0} 航\n'
+              '已回填航次零渔获率 ${catchFacts['zeroCatchRatePercent'] == null ? '暂无样本' : '${catchFacts['zeroCatchRatePercent']}%'}\n'
+              '复订事实 ${repeat['repeatPassengerCount'] ?? 0}/${repeat['cohortPassengerCount'] ?? 0} 位成熟观察乘客\n'
+              '船长服务评价 ${service['sampleCount'] ?? 0} 条${serviceTags.isEmpty ? '' : ' · $serviceTags'}\n'
+              '待核对 ${checks['pendingReviewCount'] ?? 0}/${checks['sampleCount'] ?? 0} 条乘客交叉记录',
+          footnote:
+              '复订率 ${repeat['repeatRatePercent'] == null ? '暂无成熟样本' : '${repeat['repeatRatePercent']}%'}；'
+              '渔获、评价和交叉核对按最近 12 个月统计；复订率仅纳入首次完成航次满 90 天的乘客。未回填航次不进入零渔获率分母。',
+        ),
+        if (activeLive['active'] == true) ...[
+          const SizedBox(height: 8),
+          LiveStatusLinkButton(profileUrl: activeLive['profileUrl'] as String?),
+        ],
+        if (liveBadgeFacts.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          _Step5Card(
+            title: '直播标记核实记录',
+            body: liveBadgeFacts
+                .map(
+                  (fact) =>
+                      '${fact['date']} · 航次 ${fact['departureId']} · 平台核实直播标记不实',
+                )
+                .join('\n'),
+            footnote: '只展示日期、航次与核实结果；不生成评分或排名。',
+          ),
+        ],
+      ],
     );
   }
 }

@@ -1253,6 +1253,13 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       if (!inserted.rowCount) return { error: [409, '该打卡已记录'] };
       const nextStatus = event === 'departed' ? 'in_progress' : 'completed';
       await client.query('UPDATE departures SET status=$2,updated_at=now() WHERE id=$1', [departure.id, nextStatus]);
+      if (event === 'returned') {
+        await client.query(
+          `UPDATE step5_live_sessions SET ended_at=now(),end_reason='trip_returned'
+           WHERE departure_id=$1 AND ended_at IS NULL`,
+          [departure.id],
+        );
+      }
       return {
         ok: true,
         status: nextStatus,

@@ -239,11 +239,31 @@ class _Step1WorkspaceState extends State<Step1Workspace> {
         ),
       );
     }
-    if (_application == null || _application!['status'] == 'rejected') {
+    if (_application == null) {
       return _CaptainApplicationForm(
         token: widget.token!,
-        rejectionReason: _application?['rejectionReason'] as String?,
+        rejectionReason: null,
         onSubmitted: _refresh,
+      );
+    }
+    final douyinProfile = _application!['douyinProfile'] is Map<String, dynamic>
+        ? _application!['douyinProfile'] as Map<String, dynamic>
+        : <String, dynamic>{};
+    if (_application!['status'] == 'rejected') {
+      return Column(
+        children: [
+          _CaptainApplicationForm(
+            token: widget.token!,
+            rejectionReason: _application?['rejectionReason'] as String?,
+            onSubmitted: _refresh,
+          ),
+          const SizedBox(height: 12),
+          _CaptainDouyinProfileEditor(
+            token: widget.token!,
+            initialProfile: douyinProfile,
+            onSaved: _refresh,
+          ),
+        ],
       );
     }
     final boat = _application!['boat'] as Map<String, dynamic>? ?? {};
@@ -254,6 +274,12 @@ class _Step1WorkspaceState extends State<Step1Workspace> {
           application: _application!,
           onRefresh: _refresh,
           isRefreshing: _loading,
+        ),
+        const SizedBox(height: 12),
+        _CaptainDouyinProfileEditor(
+          token: widget.token!,
+          initialProfile: douyinProfile,
+          onSaved: _refresh,
         ),
         if (_application!['status'] == 'approved' && boat['id'] != null) ...[
           const SizedBox(height: 10),
@@ -270,6 +296,138 @@ class _Step1WorkspaceState extends State<Step1Workspace> {
       ],
     );
   }
+}
+
+class _CaptainDouyinProfileEditor extends StatefulWidget {
+  const _CaptainDouyinProfileEditor({
+    required this.token,
+    required this.initialProfile,
+    required this.onSaved,
+  });
+
+  final String token;
+  final Map<String, dynamic> initialProfile;
+  final VoidCallback onSaved;
+
+  @override
+  State<_CaptainDouyinProfileEditor> createState() =>
+      _CaptainDouyinProfileEditorState();
+}
+
+class _CaptainDouyinProfileEditorState
+    extends State<_CaptainDouyinProfileEditor> {
+  late final TextEditingController _handle;
+  late final TextEditingController _profileUrl;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _handle = TextEditingController(
+      text: '${widget.initialProfile['handle'] ?? ''}',
+    );
+    _profileUrl = TextEditingController(
+      text: '${widget.initialProfile['profileUrl'] ?? ''}',
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _CaptainDouyinProfileEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialProfile['handle'] != widget.initialProfile['handle']) {
+      _handle.text = '${widget.initialProfile['handle'] ?? ''}';
+    }
+    if (oldWidget.initialProfile['profileUrl'] !=
+        widget.initialProfile['profileUrl']) {
+      _profileUrl.text = '${widget.initialProfile['profileUrl'] ?? ''}';
+    }
+  }
+
+  @override
+  void dispose() {
+    _handle.dispose();
+    _profileUrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await Step1Api.post('/captain/douyin-profile', {
+        'handle': _handle.text.trim(),
+        'profileUrl': _profileUrl.text.trim(),
+      }, token: widget.token);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('抖音主页已保存')));
+      widget.onSaved();
+    } catch (error) {
+      if (mounted) {
+        setState(
+          () => _error = error.toString().replaceFirst('Exception: ', ''),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            '抖音直播主页',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 5),
+          const Text('绑定抖音号和 HTTPS 个人主页。开播状态只展示链接，不播放或采集直播。'),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _handle,
+            enabled: !_saving,
+            decoration: const InputDecoration(labelText: '抖音号'),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _profileUrl,
+            enabled: !_saving,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(labelText: '抖音个人主页 HTTPS 链接'),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(_error!, style: const TextStyle(color: Color(0xFFE17E70))),
+          ],
+          const SizedBox(height: 10),
+          FilledButton.icon(
+            onPressed: _saving ? null : _save,
+            icon: const Icon(Icons.link),
+            label: Text(_saving ? '保存中…' : '保存主页'),
+          ),
+          const SizedBox(height: 4),
+          TextButton(
+            onPressed: _saving
+                ? null
+                : () {
+                    _handle.clear();
+                    _profileUrl.clear();
+                    _save();
+                  },
+            child: const Text('解除绑定'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _LoginCard extends StatefulWidget {

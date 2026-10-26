@@ -219,6 +219,85 @@ export function registerStep1Routes(app, { pool, config }) {
 
   app.get('/account/me', { preHandler: requireUser }, async (request) => ({ user: publicUser(request.user) }));
 
+  app.get('/captain/douyin-profile', { preHandler: [requireUser, requirePool] }, async (request, reply) => {
+    const result = await pool.query(
+      'SELECT douyin_handle,douyin_profile_url FROM captain_profiles WHERE user_id=$1',
+      [request.user.id],
+    );
+    if (!result.rowCount) return sendError(reply, 403, '请先提交船长入驻申请');
+    return {
+      handle: result.rows[0].douyin_handle,
+      profileUrl: result.rows[0].douyin_profile_url,
+    };
+  });
+
+  app.post('/captain/douyin-profile', { preHandler: [requireUser, requirePool] }, async (request, reply) => {
+    const handleInput = String(request.body?.handle ?? '').trim().replace(/^@/, '');
+    const urlInput = String(request.body?.profileUrl ?? '').trim();
+    let handle = handleInput || null;
+    let profileUrl = null;
+    if ((handle === null) !== (urlInput.length === 0)) {
+      return sendError(reply, 400, '抖音号和主页链接需要一起填写，清空两项可解除绑定');
+    }
+    if (handle !== null) {
+      if (handle.length > 80 || /[\u0000-\u001f\u007f]/.test(handle)) {
+        return sendError(reply, 400, '抖音号长度或格式无效');
+      }
+      try {
+        const parsed = new URL(urlInput);
+        const allowedHosts = new Set(['douyin.com', 'www.douyin.com', 'v.douyin.com']);
+        if (parsed.protocol !== 'https:' || parsed.username || parsed.password
+          || !allowedHosts.has(parsed.hostname.toLowerCase()) || parsed.pathname === '/') {
+          return sendError(reply, 400, '请填写抖音个人主页的 HTTPS 链接');
+        }
+        profileUrl = parsed.toString();
+      } catch {
+        return sendError(reply, 400, '抖音主页链接格式无效');
+      }
+    } else {
+      handle = null;
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const profile = await client.query(
+        'SELECT user_id FROM captain_profiles WHERE user_id=$1 FOR UPDATE',
+        [request.user.id],
+      );
+      if (!profile.rowCount) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 403, '请先提交船长入驻申请');
+      }
+      if (handle === null) {
+        const activeLive = await client.query(
+          `SELECT 1 FROM step5_live_sessions
+           WHERE captain_user_id=$1 AND ended_at IS NULL LIMIT 1`,
+          [request.user.id],
+        );
+        if (activeLive.rowCount) {
+          await client.query('ROLLBACK');
+          return sendError(reply, 409, '直播结束后才能解除抖音主页绑定');
+        }
+      }
+      const result = await client.query(
+        `UPDATE captain_profiles SET douyin_handle=$2,douyin_profile_url=$3,updated_at=now()
+         WHERE user_id=$1 RETURNING douyin_handle,douyin_profile_url`,
+        [request.user.id, handle, profileUrl],
+      );
+      await client.query('COMMIT');
+      return {
+        handle: result.rows[0].douyin_handle,
+        profileUrl: result.rows[0].douyin_profile_url,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      request.log.error({ err: error }, 'Captain Douyin profile update failed');
+      return sendError(reply, 500, '保存抖音主页失败');
+    } finally {
+      client.release();
+    }
+  });
+
   app.post('/identity', { preHandler: requireUser }, async (request, reply) => {
     const legalName = String(request.body?.legalName ?? '').trim();
     const identityNumber = String(request.body?.identityNumber ?? '').toUpperCase().trim();
@@ -437,6 +516,7 @@ export function registerStep1Routes(app, { pool, config }) {
               b.id AS boat_id, b.name, b.length_cm, b.home_marina_code, b.facilities,
               b.seat_template_code, b.seat_count, b.template_status, b.comfort_level, b.comfort_spacing_cm,
               st.layout, cp.verification_status AS captain_status, cp.certificate_uri,
+              cp.douyin_handle, cp.douyin_profile_url,
               COALESCE(jsonb_object_agg(bp.photo_kind, bp.object_uri) FILTER (WHERE bp.photo_kind IS NOT NULL), '{}'::jsonb) AS photos
        FROM captain_applications a JOIN boats b ON b.id=a.boat_id
        JOIN captain_profiles cp ON cp.user_id=a.captain_user_id
@@ -455,6 +535,10 @@ export function registerStep1Routes(app, { pool, config }) {
         rejectionReason: row.rejection_reason,
         submittedAt: row.submitted_at,
         captainStatus: row.captain_status,
+        douyinProfile: {
+          handle: row.douyin_handle,
+          profileUrl: row.douyin_profile_url,
+        },
         boat: {
           id: row.boat_id,
           name: row.name,

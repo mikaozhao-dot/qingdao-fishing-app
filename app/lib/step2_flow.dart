@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api_client.dart';
 import 'fishing_tokens.dart';
+import 'live_status.dart';
 import 'step3_flow.dart';
 import 'step5_flow.dart';
 
@@ -229,7 +230,7 @@ class _Step2WorkspaceState extends State<Step2Workspace> {
             icon: const Icon(Icons.tune_rounded),
           ),
         ),
-        const Text('按出航时间排序 · 只展示报名中的班次', style: _bodyStyle),
+        const Text('按出航时间排序 · 展示报名班次与直播中的航次', style: _bodyStyle),
         const SizedBox(height: 12),
         if (_filters.values.any((value) => value.isNotEmpty && value != 'all'))
           Align(
@@ -1584,6 +1585,30 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
     }
   }
 
+  Future<void> _setLive(bool start) async {
+    try {
+      await Step1Api.post(
+        '/step5/departures/${widget.id}/live/${start ? 'start' : 'end'}',
+        const {},
+        token: widget.token,
+      );
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(start ? '已记录开播状态' : '已结束直播状态')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.toString().replaceFirst('Exception: ', '')),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('活动详情')),
@@ -1611,6 +1636,7 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
     final instantConfirmation =
         item['instantConfirmationAvailable'] != false &&
         item['manualSupply'] != true;
+    final liveStatus = _asMap(item['liveStatus']);
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 8, 18, 36),
       children: [
@@ -1642,7 +1668,8 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
             ),
             _StatusPill(
               label: _statusName(item['status']),
-              active: item['status'] == 'published',
+              active:
+                  item['status'] == 'published' || liveStatus['active'] == true,
             ),
           ],
         ),
@@ -1657,6 +1684,34 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
           premium: premiumPrice,
           seats: '$booked/$platformQuota',
         ),
+        if (liveStatus['active'] == true) ...[
+          const SizedBox(height: 12),
+          LiveStatusAction(
+            departureId: widget.id,
+            profileUrl: liveStatus['profileUrl'] as String?,
+            token: widget.token,
+          ),
+        ],
+        if (!widget.allowBooking && item['status'] == 'in_progress') ...[
+          const SizedBox(height: 12),
+          _NoteCard(
+            icon: Icons.sensors_outlined,
+            title: liveStatus['active'] == true ? '直播状态' : '出海直播状态',
+            body: liveStatus['active'] == true
+                ? '你已标记正在直播。该状态只展示主页链接，不接入直播画面。'
+                : '出航打卡后可自愿记录开播状态；返航打卡会自动结束。',
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () => _setLive(liveStatus['active'] != true),
+            icon: Icon(
+              liveStatus['active'] == true
+                  ? Icons.stop_circle_outlined
+                  : Icons.sensors,
+            ),
+            label: Text(liveStatus['active'] == true ? '结束直播状态' : '标记开始直播'),
+          ),
+        ],
         if (item['manualSupply'] == true)
           const Padding(
             padding: EdgeInsets.only(top: 12),
@@ -1819,8 +1874,18 @@ class _DepartureDetailPageState extends State<DepartureDetailPage> {
             ),
           ],
         ),
+        if (item['captainId'] != null) ...[
+          const SizedBox(height: 10),
+          Step5CaptainFactsCard(captainId: '${item['captainId']}'),
+        ],
         const SizedBox(height: 12),
-        if (widget.allowBooking && instantConfirmation)
+        if (item['status'] == 'in_progress')
+          const _NoteCard(
+            icon: Icons.sailing_outlined,
+            title: '航次进行中',
+            body: '该班次已经出航，当前不接受报名。',
+          )
+        else if (widget.allowBooking && instantConfirmation)
           FilledButton.icon(
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
@@ -2069,6 +2134,7 @@ class _ActivityCard extends StatelessWidget {
     final photoKinds = _asMap(boat['photoKinds']);
     final showPhoto = photoKinds['exterior'] == true && token != null;
     final fish = _mapList(item['fishTargets']);
+    final liveStatus = _asMap(item['liveStatus']);
     return Material(
       color: FishingTokens.surface,
       borderRadius: BorderRadius.circular(18),
@@ -2097,7 +2163,9 @@ class _ActivityCard extends StatelessWidget {
                   ),
                   _StatusPill(
                     label: _statusName(item['status']),
-                    active: item['status'] == 'published',
+                    active:
+                        item['status'] == 'published' ||
+                        liveStatus['active'] == true,
                   ),
                 ],
               ),
@@ -2194,6 +2262,13 @@ class _ActivityCard extends StatelessWidget {
                   if (captain) _Tag(_tripTypeName(item['tripType'])),
                 ],
               ),
+              if (liveStatus['active'] == true) ...[
+                const SizedBox(height: 8),
+                LiveStatusLinkButton(
+                  profileUrl: liveStatus['profileUrl'] as String?,
+                  compact: true,
+                ),
+              ],
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -3239,6 +3314,7 @@ String _dateAfter(int days) {
 
 String _statusName(dynamic value) => switch (value) {
   'published' => '报名中',
+  'in_progress' => '海上进行中',
   'formation_overdue' => '已过出航时间 · 待人工处理',
   'withdrawn' => '已下架',
   'ended' => '已结束',

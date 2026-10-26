@@ -263,6 +263,9 @@ function serializeDeparture(row, { seats = null, security }) {
   const captainName = row.captain_name_ciphertext
     ? security.decrypt(row.captain_name_ciphertext)
     : '船长';
+  const liveSession = typeof row.live_session === 'string'
+    ? JSON.parse(row.live_session)
+    : row.live_session;
   const boat = {
     id: row.boat_id,
     name: row.boat_name,
@@ -277,6 +280,7 @@ function serializeDeparture(row, { seats = null, security }) {
   };
   const result = {
     id: row.id,
+    captainId: row.captain_user_id,
     status: departureStatus(row.status),
     tripType: row.trip_type,
     tripTypeLabel: TRIP_TYPES[row.trip_type] ?? row.trip_type,
@@ -304,6 +308,11 @@ function serializeDeparture(row, { seats = null, security }) {
     instantConfirmationAvailable: Number(row.platform_quota_seats ?? 0) > 0 && !row.manual_supply,
     remarks: row.remarks ?? '',
     captainName,
+    liveStatus: liveSession ? {
+      active: true,
+      startedAt: liveSession.startedAt,
+      profileUrl: row.douyin_profile_url,
+    } : null,
     boat,
     createdAt: row.created_at,
   };
@@ -328,7 +337,18 @@ const DEPARTURE_SELECT = `
          d.seat_template_count, d.platform_quota_seats, d.offline_quota_seats, d.manual_supply,
          b.name AS boat_name, b.length_cm, b.seat_count AS boat_seat_count,
          b.seat_template_code, b.comfort_level, b.comfort_spacing_cm, b.facilities,
-         cp.captain_name_ciphertext, st.layout AS seat_layout,
+         cp.captain_name_ciphertext, cp.douyin_profile_url, st.layout AS seat_layout,
+         (SELECT jsonb_build_object('sessionId',live.id,'startedAt',live.started_at)
+          FROM step5_live_sessions live
+          WHERE live.departure_id=d.id AND live.ended_at IS NULL
+            AND d.status='in_progress'
+            AND EXISTS (SELECT 1 FROM departure_checkins departed
+                        WHERE departed.departure_id=d.id AND departed.event='departed'
+                          AND departed.captain_user_id=d.captain_user_id)
+            AND NOT EXISTS (SELECT 1 FROM departure_checkins returned
+                            WHERE returned.departure_id=d.id AND returned.event='returned'
+                              AND returned.captain_user_id=d.captain_user_id)
+          ORDER BY live.started_at DESC LIMIT 1) AS live_session,
          COALESCE((SELECT jsonb_agg(jsonb_build_object('code', ft.fish_code, 'sortOrder', ft.sort_order)
                                     ORDER BY ft.sort_order)
                    FROM departure_fish_targets ft WHERE ft.departure_id=d.id), '[]'::jsonb) AS fish_targets,
@@ -1068,18 +1088,43 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
     await updateEndedDepartures(pool);
     const filters = buildDepartureFilters(request.query ?? {});
     if (filters?.error) return sendError(reply, 400, filters.error);
-    const result = await pool.query(
+    const openResult = await pool.query(
       `${DEPARTURE_SELECT} WHERE ${filters.conditions.join(' AND ')}
        ORDER BY d.departure_at ASC LIMIT 100`,
       filters.values,
     );
-    return { items: result.rows.map((row) => serializeDeparture(row, { security })) };
+    const liveFilters = filters.conditions.filter((condition) =>
+      condition !== "d.status='open'" && condition !== 'd.departure_at > now()'
+    );
+    const liveWhere = [
+      "d.status='in_progress'",
+      `EXISTS (SELECT 1 FROM step5_live_sessions live
+               WHERE live.departure_id=d.id AND live.ended_at IS NULL
+                 AND EXISTS (SELECT 1 FROM departure_checkins departed
+                             WHERE departed.departure_id=d.id AND departed.event='departed'
+                               AND departed.captain_user_id=d.captain_user_id)
+                 AND NOT EXISTS (SELECT 1 FROM departure_checkins returned
+                                 WHERE returned.departure_id=d.id AND returned.event='returned'
+                                   AND returned.captain_user_id=d.captain_user_id))`,
+      ...liveFilters,
+    ].join(' AND ');
+    const liveResult = await pool.query(
+      `${DEPARTURE_SELECT} WHERE ${liveWhere}
+       ORDER BY d.departure_at ASC LIMIT 100`,
+      filters.values,
+    );
+    const rows = [...liveResult.rows, ...openResult.rows]
+      .sort((left, right) => new Date(left.departure_at) - new Date(right.departure_at))
+      .slice(0, 100);
+    return { items: rows.map((row) => serializeDeparture(row, { security })) };
   });
 
   app.get('/departures/:id', { preHandler: requireUser }, async (request, reply) => {
     await updateEndedDepartures(pool);
     const row = await loadDeparture(pool, request.params.id);
-    if (!row || row.status !== 'open' || new Date(row.departure_at) <= new Date()) {
+    const isPublished = row?.status === 'open' && new Date(row.departure_at) > new Date();
+    const isLive = row?.status === 'in_progress' && row.live_session;
+    if (!row || (!isPublished && !isLive)) {
       return sendError(reply, 404, '活动不存在或已结束');
     }
     const [seats, rig] = await Promise.all([

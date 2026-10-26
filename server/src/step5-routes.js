@@ -246,6 +246,26 @@ async function readReport(client, departureId, source, passengerId = null) {
 }
 
 async function captainFacts(pool, captainId, security) {
+  const [live, liveFacts] = await Promise.all([
+    pool.query(
+      `SELECT l.departure_id,l.started_at,cp.douyin_handle,cp.douyin_profile_url
+       FROM step5_live_sessions l JOIN departures d ON d.id=l.departure_id
+       JOIN captain_profiles cp ON cp.user_id=l.captain_user_id
+       WHERE l.captain_user_id=$1 AND l.ended_at IS NULL AND d.status='in_progress'
+         AND EXISTS (SELECT 1 FROM departure_checkins departed
+                     WHERE departed.departure_id=d.id AND departed.event='departed'
+                       AND departed.captain_user_id=d.captain_user_id)
+         AND NOT EXISTS (SELECT 1 FROM departure_checkins returned
+                         WHERE returned.departure_id=d.id AND returned.event='returned'
+                           AND returned.captain_user_id=d.captain_user_id)
+       ORDER BY l.started_at DESC LIMIT 1`, [captainId],
+    ),
+    pool.query(
+      `SELECT departure_id,to_char(verified_at AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') AS fact_date,outcome
+       FROM step5_captain_live_incident_facts
+       WHERE captain_user_id=$1 ORDER BY verified_at DESC,departure_id LIMIT 20`, [captainId],
+    ),
+  ]);
   const completed = await pool.query(
     `SELECT count(*)::integer AS count FROM departures d
      JOIN departure_checkins r ON r.departure_id=d.id AND r.event='returned'
@@ -348,6 +368,21 @@ async function captainFacts(pool, captainId, security) {
   }
   return {
     captainId,
+    douyinProfile: live.rows[0] ? {
+      handle: live.rows[0].douyin_handle,
+      profileUrl: live.rows[0].douyin_profile_url,
+    } : null,
+    activeLive: live.rows[0] ? {
+      active: true,
+      departureId: live.rows[0].departure_id,
+      startedAt: live.rows[0].started_at,
+      profileUrl: live.rows[0].douyin_profile_url,
+    } : null,
+    liveBadgeFacts: liveFacts.rows.map((fact) => ({
+      date: fact.fact_date,
+      departureId: fact.departure_id,
+      outcome: fact.outcome,
+    })),
     completedTripCount: Number(completed.rows[0].count),
     sampleWindowMonths: 12,
     catchReports: {
@@ -499,6 +534,208 @@ export function registerStep5Routes(app, { pool, config, requireUser }) {
   const requirePool = async (_request, reply) => {
     if (!pool) return sendError(reply, 503, '数据库未配置');
   };
+  const requireAdmin = async (request, reply) => {
+    if (!config.adminPassword) return sendError(reply, 503, '未配置 ADMIN_PASSWORD');
+    const provided = Buffer.from(String(request.headers['x-admin-password'] ?? ''));
+    const expected = Buffer.from(config.adminPassword);
+    if (provided.length !== expected.length || !security.safeEqual(provided, expected)) {
+      return sendError(reply, 401, '管理员口令错误');
+    }
+  };
+
+  app.post('/step5/departures/:id/live/start',
+    { preHandler: [requireUser, requirePool] }, async (request, reply) => {
+      const departureId = String(request.params.id ?? '');
+      if (!UUID.test(departureId)) return sendError(reply, 400, '班次编号无效');
+      const result = await transaction(pool, async (client) => {
+        const departureResult = await client.query(
+          `SELECT d.id,d.captain_user_id,d.status,cp.verification_status,
+                  cp.douyin_handle,cp.douyin_profile_url
+           FROM departures d JOIN captain_profiles cp ON cp.user_id=d.captain_user_id
+           WHERE d.id=$1 FOR UPDATE OF d,cp`, [departureId],
+        );
+        if (!departureResult.rowCount) return { error: [404, '班次不存在'] };
+        const departure = departureResult.rows[0];
+        if (departure.captain_user_id !== request.user.id
+          || departure.verification_status !== 'approved') {
+          return { error: [403, '仅本班次已审核船长可操作'] };
+        }
+        if (departure.status !== 'in_progress') return { error: [409, '完成出航打卡后才能开始直播'] };
+        const checkins = await client.query(
+          `SELECT EXISTS (SELECT 1 FROM departure_checkins
+                           WHERE departure_id=$1 AND captain_user_id=$2 AND event='departed') AS departed,
+                  EXISTS (SELECT 1 FROM departure_checkins
+                           WHERE departure_id=$1 AND captain_user_id=$2 AND event='returned') AS returned`,
+          [departureId, request.user.id],
+        );
+        if (!checkins.rows[0].departed || checkins.rows[0].returned) {
+          return { error: [409, '仅出航打卡后、返航打卡前可以开始直播'] };
+        }
+        if (!departure.douyin_handle || !departure.douyin_profile_url) {
+          return { error: [409, '请先绑定抖音号和主页链接，再开始直播'] };
+        }
+        const active = await client.query(
+          `SELECT id,started_at FROM step5_live_sessions
+           WHERE departure_id=$1 AND ended_at IS NULL FOR UPDATE`, [departureId],
+        );
+        if (active.rowCount) return { live: active.rows[0], created: false };
+        const inserted = await client.query(
+          `INSERT INTO step5_live_sessions (departure_id,captain_user_id)
+           VALUES ($1,$2) RETURNING id,started_at`, [departureId, request.user.id],
+        );
+        return { live: inserted.rows[0], created: true };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return reply.code(result.created ? 201 : 200).send({
+        active: true, departureId, startedAt: result.live.started_at,
+      });
+    });
+
+  app.post('/step5/departures/:id/live/end',
+    { preHandler: [requireUser, requirePool] }, async (request, reply) => {
+      const departureId = String(request.params.id ?? '');
+      if (!UUID.test(departureId)) return sendError(reply, 400, '班次编号无效');
+      const result = await transaction(pool, async (client) => {
+        const departure = await client.query(
+          'SELECT id,captain_user_id,status FROM departures WHERE id=$1 FOR UPDATE', [departureId],
+        );
+        if (!departure.rowCount) return { error: [404, '班次不存在'] };
+        if (departure.rows[0].captain_user_id !== request.user.id) {
+          return { error: [403, '仅本班次船长可结束直播'] };
+        }
+        if (departure.rows[0].status !== 'in_progress') {
+          return { error: [409, '仅出航中班次可以结束直播'] };
+        }
+        const checkins = await client.query(
+          `SELECT EXISTS (SELECT 1 FROM departure_checkins
+                           WHERE departure_id=$1 AND captain_user_id=$2 AND event='departed') AS departed,
+                  EXISTS (SELECT 1 FROM departure_checkins
+                           WHERE departure_id=$1 AND captain_user_id=$2 AND event='returned') AS returned`,
+          [departureId, request.user.id],
+        );
+        if (!checkins.rows[0].departed || checkins.rows[0].returned) {
+          return { error: [409, '仅出航打卡后、返航打卡前可以结束直播'] };
+        }
+        const ended = await client.query(
+          `UPDATE step5_live_sessions SET ended_at=now(),end_reason='captain_ended'
+           WHERE departure_id=$1 AND captain_user_id=$2 AND ended_at IS NULL
+           RETURNING id,ended_at`, [departureId, request.user.id],
+        );
+        if (!ended.rowCount) return { error: [409, '当前没有进行中的直播'] };
+        return { live: ended.rows[0] };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return { active: false, departureId, endedAt: result.live.ended_at };
+    });
+
+  app.post('/step5/departures/:id/live-reports',
+    { preHandler: [requireUser, requirePool] }, async (request, reply) => {
+      const departureId = String(request.params.id ?? '');
+      if (!UUID.test(departureId)) return sendError(reply, 400, '班次编号无效');
+      const reason = String(request.body?.reason ?? '');
+      const note = String(request.body?.note ?? '').trim();
+      if (!['not_live', 'wrong_account', 'misleading_content', 'other'].includes(reason)) {
+        return sendError(reply, 400, '请选择举报原因');
+      }
+      if (note.length > 500) return sendError(reply, 400, '补充说明不能超过 500 字');
+      const result = await transaction(pool, async (client) => {
+        const current = await client.query(
+          `SELECT d.id,d.captain_user_id,l.id AS session_id FROM departures d
+           JOIN step5_live_sessions l ON l.departure_id=d.id AND l.ended_at IS NULL
+           WHERE d.id=$1 AND d.status='in_progress'
+             AND EXISTS (SELECT 1 FROM departure_checkins c
+                         WHERE c.departure_id=d.id AND c.event='departed'
+                           AND c.captain_user_id=d.captain_user_id)
+             AND NOT EXISTS (SELECT 1 FROM departure_checkins c
+                             WHERE c.departure_id=d.id AND c.event='returned'
+                               AND c.captain_user_id=d.captain_user_id)
+           FOR UPDATE OF d,l`, [departureId],
+        );
+        if (!current.rowCount) return { error: [409, '该班次当前没有有效直播标记'] };
+        if (current.rows[0].captain_user_id === request.user.id) {
+          return { error: [403, '船长不能举报自己的直播标记'] };
+        }
+        const inserted = await client.query(
+          `INSERT INTO step5_live_reports
+             (departure_id,session_id,reporter_user_id,reason,note)
+           VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT (departure_id,reporter_user_id) DO NOTHING RETURNING id,processing_status,created_at`,
+          [departureId, current.rows[0].session_id, request.user.id, reason, note],
+        );
+        const report = inserted.rowCount ? inserted.rows[0] : (await client.query(
+          `SELECT id,processing_status,created_at FROM step5_live_reports
+           WHERE departure_id=$1 AND reporter_user_id=$2`, [departureId, request.user.id],
+        )).rows[0];
+        return { report, created: Boolean(inserted.rowCount) };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return reply.code(result.created ? 201 : 200).send({
+        id: result.report.id, processingStatus: result.report.processing_status,
+        createdAt: result.report.created_at, created: result.created,
+      });
+    });
+
+  app.get('/admin/step5/live-reports',
+    { preHandler: [requirePool, requireAdmin] }, async (request, reply) => {
+      const status = String(request.query?.status ?? 'pending');
+      if (!['pending', 'false_verified', 'not_false', 'all'].includes(status)) {
+        return sendError(reply, 400, '举报处理状态无效');
+      }
+      const result = await pool.query(
+        `SELECT r.id,r.departure_id,r.session_id,r.reporter_user_id,r.reason,r.note,
+                r.processing_status,r.created_at,l.captain_user_id,cp.douyin_handle
+         FROM step5_live_reports r JOIN step5_live_sessions l ON l.id=r.session_id
+         JOIN captain_profiles cp ON cp.user_id=l.captain_user_id
+         WHERE ($1='all' OR r.processing_status=$1)
+         ORDER BY r.created_at ASC LIMIT 200`, [status],
+      );
+      return { items: result.rows.map((row) => ({
+        id: row.id, departureId: row.departure_id, sessionId: row.session_id,
+        reporterUserId: row.reporter_user_id, reason: row.reason, note: row.note,
+        processingStatus: row.processing_status, createdAt: row.created_at,
+        captainId: row.captain_user_id, douyinHandle: row.douyin_handle,
+      })) };
+    });
+
+  app.post('/admin/step5/live-reports/:id/decision',
+    { preHandler: [requirePool, requireAdmin] }, async (request, reply) => {
+      const reportId = String(request.params.id ?? '');
+      if (!UUID.test(reportId)) return sendError(reply, 400, '举报编号无效');
+      const decision = String(request.body?.decision ?? '');
+      if (!['false_verified', 'not_false'].includes(decision)) {
+        return sendError(reply, 400, '处理结果无效');
+      }
+      const result = await transaction(pool, async (client) => {
+        const report = await client.query(
+          `SELECT r.id,r.departure_id,r.session_id,r.processing_status,l.captain_user_id
+           FROM step5_live_reports r JOIN step5_live_sessions l ON l.id=r.session_id
+           WHERE r.id=$1 FOR UPDATE OF r,l`, [reportId],
+        );
+        if (!report.rowCount) return { error: [404, '举报不存在'] };
+        const row = report.rows[0];
+        if (row.processing_status !== 'pending') return { error: [409, '该举报已处理'] };
+        if (decision === 'false_verified') {
+          await client.query(
+            `UPDATE step5_live_sessions SET ended_at=COALESCE(ended_at,now()),
+               end_reason=COALESCE(end_reason,'false_live_report_verified')
+             WHERE id=$1`, [row.session_id],
+          );
+          await client.query(
+            `INSERT INTO step5_captain_live_incident_facts (captain_user_id,departure_id)
+             VALUES ($1,$2) ON CONFLICT (departure_id) DO NOTHING`,
+            [row.captain_user_id, row.departure_id],
+          );
+        }
+        const updated = await client.query(
+          `UPDATE step5_live_reports SET processing_status=$2,processed_by='environment-admin',processed_at=now()
+           WHERE id=$1 RETURNING processing_status,processed_at`, [reportId, decision],
+        );
+        return { report: updated.rows[0], departureId: row.departure_id };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      return { id: reportId, departureId: result.departureId,
+        processingStatus: result.report.processing_status, processedAt: result.report.processed_at };
+    });
 
   app.get('/step5/fish-leaderboard', { preHandler: requirePool }, async (request, reply) => {
     const result = await fishLeaderboard(pool, request.query?.month);

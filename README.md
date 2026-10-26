@@ -1,6 +1,6 @@
 # 约钓者｜青岛海钓拼船
 
-iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；第 2 步支持发班与活动浏览；第 3 步接通选位、锁位、下单、沙盒支付和保险适配；第 5 步切片 1 提供返航后渔获、评价事实与个人鱼种图鉴。
+iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；第 2 步支持发班与活动浏览；第 3 步接通选位、锁位、下单、沙盒支付和保险适配；第 5 步切片 1 提供返航后渔获、评价事实与个人鱼种图鉴，切片 2 大鱼榜已实现并待 Dot 复核。
 
 ## 仓库结构
 
@@ -58,6 +58,7 @@ flutter run
 - `docs/data-model-step1-addendum.md`：只记录第 1 步新增字段与实体，不改数据模型 v1 正本。
 - `docs/data-model-step2-addendum.md`：只记录第 2 步新增字段与座位库存快照口径。
 - `docs/data-model-step5-slice1-addendum.md`、`docs/step5-slice1-delivery-receipt-2026-10-26.md`：第 5 步切片 1 数据模型、口径假设、验证证据与 Dot 定点复核请求。
+- `docs/muse-to-luna-step5-slice2-brief-2026-10-26.md`、`docs/step5-slice2-start-ack-2026-10-26.md`、`docs/step5-slice2-delivery-receipt-2026-10-26.md`：第 5 步切片 2 大鱼榜任务、开工回执、实现口径、验收证据与待 Dot 定点复核事项。
 - `docs/codex-seat-map-v04-rework-order-2026-10-24.md`、`docs/muse-seat-premium-scope-reply-2026-10-24.md`、`docs/codex-seat-map-implementation-order-2026-10-24.md`：V04 草图返工、船尾四位同额加价和当前执行边界；2026-10-25 创始人最新选位参考追加在 V04 返工令末尾。
 - `docs/seat-map-v04-implementation-receipt-2026-10-24.md`、`docs/seat-map-spatial-redesign-status-2026-10-24.md`、`docs/step3-build-notes.md`、`docs/step3-review-request-2026-10-24.md`：选位页历史回执、当前返工进度、构建证据与 dot 复核请求。
 - `docs/v04-targeted-repair-followup-2026-10-25.md`：V04 旧航次座位快照、部分配额船图和触控重叠定点修复，以及待 Muse / dot 复核的证据。

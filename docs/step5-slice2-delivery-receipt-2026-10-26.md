@@ -41,3 +41,50 @@
 4. 页面口径与无真机截图的限制说明。
 
 Dot 复核完成前，本回执保持“待复核”，不进入第 5 步切片 3。
+
+
+## dot 独立定点复核（2026-10-26，给 Muse / Luna）：暂不通过
+
+固定被评代码：`9a1fda5ccce7207137c74a022f5fab4d2f4192a5`；被评交付回执提交：`acdb0ff460e1513b524002a5f4984549a236cec1`。本结论依据固定源码、实际用例及 GitHub Actions 原始日志；dot 未另起隔离空库重跑，也未做真机目检。沿本切片原任务修订，不另开重复任务，不要求无关全套返工。
+
+已读取切片 1 产品验收记录 `622bcea5`、现行规则索引，以及本片任务书记载的 2026-10-26 08:50 CST 创始人五项确认；这些既有批准**不重开**。但该五项确认不能自动解释为批准“每航次每鱼种仅保留一人/一条”的新折衷。Muse 的 `57b836c9` 评审虽为有条件通过，亦明确把归并留待裁定；dot 不接受以技术复核替创始人将不同的榜单对象定版。
+
+### S5-S2-R1（主阻断）：航次/鱼种归并吞掉不同钓客，不能视为同鱼去重
+
+[`server/src/step5-routes.js:445–456`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/9a1fda5ccce7207137c74a022f5fab4d2f4192a5/server/src/step5-routes.js#L445-L456) 使用 `PARTITION BY departure_id,fish_code` 后只取最高重量来源，没有钓获人或单鱼关联键。于是同航次同鱼种甲钓 3 kg、乙钓 2 kg 时乙被消失；船长整船最大为 4 kg 时，又会挤掉甲乙的个人条目。这与[任务书第 16 行](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/acdb0ff460e1513b524002a5f4984549a236cec1/docs/muse-to-luna-step5-slice2-brief-2026-10-26.md#L16)“同一航次、同一鱼种、同一钓获人”的双源归并不同，不能把无法识别同一条鱼的问题通过合并所有钓客来掩盖。
+
+回执已主动披露模型限制，予以保留；但披露不等于通过。当前 UI 的“仅展示单次钓获”也不足以清楚表达已经改成“每航次每鱼种仅一条”。
+
+**最小修复方向优先保留原钓客语义**：不同钓客的独立合法候选不能只因同航次同鱼种而互相吞并；无法可靠关联到具体钓获人的船长整船源，不能假称与乘客源已经完成同鱼去重。简单在分组键追加 `passenger_id` 也不能解决船长源与乘客源之间的身份关联。
+
+请 Muse 沿原任务先列最小来源关联策略及影响，再给创始人有限选项：说明如何保留不同钓客、船长整船源归属不明时如何处理、去重能够保证到哪一层、是否需要字段/关联变更。**不要默认接受或先定版“航次最大个体榜”新语义；dot 不代批此变化。** 方案明确后 Luna 按选定的最小范围修订，并补同航次同鱼种至少两位钓客及船长来源的用例；不顺手扩为审核、申诉或人工榜单系统。
+
+### S5-S2-R2：补真实动态下榜和多乘客/多鱼种隔离证据
+
+[`step5-routes.js:439–443`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/9a1fda5ccce7207137c74a022f5fab4d2f4192a5/server/src/step5-routes.js#L439-L443) 的实际范围必须写清：
+
+- 本人 reconciliation 为 `pending_review` 时，排除该乘客在本航次的**全部鱼种来源**，不是只排某条鱼。
+- 任一乘客 reconciliation 为 `pending_review` 时，排除船长在本航次的**整船全部鱼种来源**。
+- 其他无争议乘客不会被此过滤条件直接排除，但仍可能被 R1 的归并压掉。
+
+[现有用例 492–517](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/9a1fda5ccce7207137c74a022f5fab4d2f4192a5/server/scripts/step5-acceptance.mjs#L492-L517) 只验证先触发待核对后查榜为空，再在隔离验收库将状态置为 `confirmed` 后恢复；它没有先验证条目已经上榜，也没有验证多个乘客之间的影响隔离。因此不宜把现有用例表述为已完整证明“上榜后被标待核对自动下榜”。
+
+最小补证：先验证已上榜，再用真实乘客异议请求触发状态、查询确认下榜，最后在隔离验收库模拟状态恢复并确认重算；加入甲有争议、乙无争议及多个鱼种，分别断言本人/船长/其他乘客的影响范围。只验证状态驱动联动，不新增异议解除产品流程。若归并方案需改变排除范围，须在方案中明示，不悄悄扩大或缩小现有范围。
+
+### S5-S2-R3：准确记录 CI 所属 SHA 与已覆盖字段，不把旧构建冒称最终构建
+
+dot 已读取原始日志：
+
+- [数据库 run 40254193213 / job 121352398148](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40254193213/job/121352398148) 检出完整 SHA `9a1fda5ccce7207137c74a022f5fab4d2f4192a5`，迁移至 `019`，Step 4 **709**、Step 5 **115** 断言通过。最终新增上海 `departureDate` 返回字段及其断言确在此运行覆盖。
+- [Flutter 测试/分析 job 121351120744](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40253778644/job/121351120744) 检出的是较早 `7dd2f54294a937d1fecfd4ad0a4455c3521c197e`，**12 tests passed**，分析无问题；[iOS job 121351120978](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40253778644/job/121351120978)和[Android job 121351121015](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40253778644/job/121351121015) 亦为该较早 SHA，构建成功。
+- 两代码提交之间仅服务端 SELECT 补出 `departure_date` 与对应数据库断言，Flutter 源码未变。因此可准确说明“最终 API 字段已测、未变客户端源码具有此前构建证据”；**不能写成最终 SHA 双端均已执行通过**。请在上方 CI 记录逐项标出对应 SHA；不把这种证据差异直接说成构建失败。后续真正修改的代码按实际影响范围重新验证。
+
+月界、同重排序、前 20、空榜、昵称字段选择已有源码及实际 CI 用例支持，无需因本轮归并问题全量重做这些功能。现有 widget 证明模拟榜单展示、月份切换及空态；无设备截图、无真机目检的限制仍保留，不冒称设备视觉验收。
+
+### 文案纠错（不要求新增尺寸榜）
+
+任务书及本回执“长度未持久化”的理由不实：[`019_step5_catch_review_facts.sql:25–57`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/9a1fda5ccce7207137c74a022f5fab4d2f4192a5/server/migrations/019_step5_catch_review_facts.sql#L25-L57) 已有渔获与补充的 `max_length_mm` 字段。请改为“本片按获批范围只做重量榜”，不要据此新增尺寸榜或重开已批准的重量单维度范围。
+
+### 给 Muse / Luna 的状态
+
+保持“**dot 暂不通过；归并语义待方案/必要决策，定点补证与回执精度待修订**”。本结论不否定既有五项批准，不重开切片 1，不新增工单，不批准切片 2 产品验收、生产接入或进入切片 3。修订后沿本回执交固定代码 SHA、相关新增用例与准确 CI 证据，再请求 dot 定点复核。

@@ -277,6 +277,14 @@ try {
     [guest.id])).identity_number_hash.toString('hex'), security.identityHash(consumedIdentity).toString('hex'),
   'identity correction does not replace the consumed identity fact');
 
+  const secondPaidTrip = await makePaidOrder(guest, captain, 96, 12_000);
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM commission_ledger WHERE promotion_attribution_id=(SELECT id FROM promotion_attributions WHERE attributed_user_id=$1)',
+    [guest.id],
+  )).count, 1, 'a normal second paid order does not create another commission ledger');
+  check((await scalar('SELECT order_id FROM promotion_attributions WHERE attributed_user_id=$1',
+    [guest.id])).order_id, paidTrip.orderId, 'the earliest eligible order remains selected after a second payment');
+
   const reusedIdentityBuyer = await makeUser('历史实名资格复用排除');
   const reusedIdentityScan = await scan(firstCode.code);
   await claim(reusedIdentityBuyer, reusedIdentityScan.visitorToken);
@@ -412,6 +420,14 @@ try {
   );
   check(afterReleaseRefund.refund_after_release, true, 'post-release refund is recorded as an exception');
   check(Number(afterReleaseRefund.amount_fen), 400, 'post-release refund does not claw back sandbox payout');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM commission_ledger l
+     WHERE l.promotion_attribution_id=(SELECT id FROM promotion_attributions WHERE attributed_user_id=$1)`,
+    [guest.id],
+  )).count, 1, 'a post-release full refund does not create a second commission for the later paid order');
+  check((await scalar('SELECT count(*)::integer AS count FROM commission_ledger WHERE booking_order_id=$1',
+    [secondPaidTrip.orderId])).count, 0,
+  'R3 post-release refund handling keeps the later order outside the commission ledger');
   await expect('GET', '/promotions/me', guest.token, undefined, 200);
   check((await scalar(`SELECT count(*)::integer AS count FROM promotion_commission_events
     WHERE commission_ledger_id=$1 AND event_type='refund_after_release_exception'`, [commission.id])).count,
@@ -465,30 +481,110 @@ try {
   check((await scalar('SELECT count(*)::integer AS count FROM commission_ledger l JOIN promotion_attributions a ON a.id=l.promotion_attribution_id WHERE a.attributed_user_id=$1',
     [existingBuyer.id])).count, 0, 'existing buyer produces no commission');
 
-  const fullRefundBuyer = await makeUser('全额退款用户');
-  await verifyIdentity(fullRefundBuyer, '104');
-  const fullRefundScan = await scan(firstCode.code);
-  await claim(fullRefundBuyer, fullRefundScan.visitorToken);
-  const fullRefundTrip = await makePaidOrder(fullRefundBuyer, captain, 96, 10_000);
-  await expect('POST', `/orders/${fullRefundTrip.orderId}/cancel`, fullRefundBuyer.token, {}, 200);
+  const fullRefundNoReorder = await makeUser('全额退款未重订用户');
+  await verifyIdentity(fullRefundNoReorder, '104');
+  const noReorderScan = await scan(firstCode.code);
+  await claim(fullRefundNoReorder, noReorderScan.visitorToken);
+  const noReorderTrip = await makePaidOrder(fullRefundNoReorder, captain, 96, 10_000);
+  await expect('POST', `/orders/${noReorderTrip.orderId}/cancel`, fullRefundNoReorder.token, {}, 200);
   const fullRefundLedger = await scalar(
-    `SELECT l.status,l.amount_fen,o.ticket_refunded_fen
+    `SELECT l.id,l.status,l.amount_fen,l.net_ticket_amount_fen,o.ticket_refunded_fen
      FROM commission_ledger l JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
-     JOIN booking_orders o ON o.id=a.order_id WHERE a.attributed_user_id=$1`, [fullRefundBuyer.id],
+     JOIN booking_orders o ON o.id=l.booking_order_id WHERE a.attributed_user_id=$1`, [fullRefundNoReorder.id],
   );
   check(fullRefundLedger.status, 'reversed', 'full cancellation refund reverses the frozen commission');
   check(Number(fullRefundLedger.amount_fen), 0, 'full cancellation refund leaves no commission balance');
   check(Number(fullRefundLedger.ticket_refunded_fen), 10_000, 'full ticket refund is recorded separately from fees');
-  await expect('GET', '/promotions/me', fullRefundBuyer.token, undefined, 200);
-  await expect('GET', '/promotions/me', fullRefundBuyer.token, undefined, 200);
-  check((await scalar(`SELECT refund_after_release FROM commission_ledger WHERE promotion_attribution_id=(
-    SELECT id FROM promotion_attributions WHERE attributed_user_id=$1)`, [fullRefundBuyer.id])).refund_after_release,
-  false, 'repeated sync after a frozen full refund does not flag a release exception');
+  check(Number(fullRefundLedger.net_ticket_amount_fen), 0, 'the historical reversed ledger records zero net ticket value');
+  const fullRefundAttribution = await scalar(
+    'SELECT order_id,qualification_status FROM promotion_attributions WHERE attributed_user_id=$1',
+    [fullRefundNoReorder.id],
+  );
+  check(fullRefundAttribution.order_id, null, 'a fully refunded order without a reorder does not remain the current eligible order');
+  check(fullRefundAttribution.qualification_status, 'refunded', 'a fully refunded buyer remains eligible for a future reorder');
+  await expect('GET', '/promotions/me', fullRefundNoReorder.token, undefined, 200);
+  await expect('GET', '/promotions/me', fullRefundNoReorder.token, undefined, 200);
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM commission_ledger
+     WHERE promotion_attribution_id=(SELECT id FROM promotion_attributions WHERE attributed_user_id=$1)
+       AND status<>'reversed'`, [fullRefundNoReorder.id],
+  )).count, 0, 'repeated sync without a reorder leaves no effective commission');
+  const unchangedRefundLedger = await scalar(
+    'SELECT id,status,amount_fen,net_ticket_amount_fen FROM commission_ledger WHERE id=$1',
+    [fullRefundLedger.id],
+  );
+  check(unchangedRefundLedger, {
+    id: fullRefundLedger.id, status: 'reversed', amount_fen: 0, net_ticket_amount_fen: 0,
+  }, 'repeated sync leaves the original zero ledger unchanged');
   check((await scalar(`SELECT count(*)::integer AS count FROM promotion_commission_events e
-    JOIN commission_ledger l ON l.id=e.commission_ledger_id
-    JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
-    WHERE a.attributed_user_id=$1 AND e.event_type='refund_after_release_exception'`, [fullRefundBuyer.id])).count,
+    WHERE e.commission_ledger_id=$1 AND e.event_type='refund_after_release_exception'`, [fullRefundLedger.id])).count,
   0, 'repeated sync after a frozen full refund does not append an exception event');
+  check((await scalar(`SELECT refund_after_release FROM commission_ledger WHERE promotion_attribution_id=(
+    SELECT id FROM promotion_attributions WHERE attributed_user_id=$1)`, [fullRefundNoReorder.id])).refund_after_release,
+  false, 'repeated sync after a frozen full refund does not flag a release exception');
+
+  const fullRefundBuyer = await makeUser('全额退款后重订用户');
+  await verifyIdentity(fullRefundBuyer, '110');
+  const fullRefundScan = await scan(firstCode.code);
+  await claim(fullRefundBuyer, fullRefundScan.visitorToken);
+  const fullRefundTrip = await makePaidOrder(fullRefundBuyer, captain, 96, 10_000);
+  await expect('POST', `/orders/${fullRefundTrip.orderId}/cancel`, fullRefundBuyer.token, {}, 200);
+  const historicRefundLedger = await scalar(
+    `SELECT id,status,amount_fen,net_ticket_amount_fen
+     FROM commission_ledger WHERE booking_order_id=$1`, [fullRefundTrip.orderId],
+  );
+  check(historicRefundLedger.status, 'reversed', 'the original full-refund ledger remains a historical reversal');
+  check(Number(historicRefundLedger.amount_fen), 0, 'the original full-refund ledger stays at zero');
+
+  await verifyIdentity(fullRefundBuyer, '111');
+  const reusedRefundIdentity = await makeUser('复用已全退实名用户');
+  const reusedRefundScan = await scan(firstCode.code);
+  await claim(reusedRefundIdentity, reusedRefundScan.visitorToken);
+  await verifyIdentity(reusedRefundIdentity, '110');
+  await makePaidOrder(reusedRefundIdentity, captain, 72, 10_000);
+  await expect('GET', '/promotions/me', reusedRefundIdentity.token, undefined, 200);
+  check((await scalar('SELECT qualification_status FROM promotion_attributions WHERE attributed_user_id=$1',
+    [reusedRefundIdentity.id])).qualification_status, 'identity_already_qualified',
+  'another account cannot reuse the first account identity even after a full-refund reorder path');
+  check((await scalar('SELECT count(*)::integer AS count FROM commission_ledger WHERE promotion_attribution_id=(SELECT id FROM promotion_attributions WHERE attributed_user_id=$1)',
+    [reusedRefundIdentity.id])).count, 0, 'the reused identity cannot create a second account ledger');
+
+  const reorderTrip = await makePaidOrder(fullRefundBuyer, captain, 72, 12_000);
+  await Promise.all([
+    expect('GET', '/promotions/me', fullRefundBuyer.token, undefined, 200),
+    expect('GET', '/promotions/me', fullRefundBuyer.token, undefined, 200),
+  ]);
+  const reorderedLedger = await scalar(
+    `SELECT id,status,amount_fen,net_ticket_amount_fen,booking_order_id
+     FROM commission_ledger WHERE booking_order_id=$1`, [reorderTrip.orderId],
+  );
+  check(reorderedLedger.status, 'frozen', 'the same buyer reorder starts a new frozen commission');
+  check(Number(reorderedLedger.amount_fen), 600, 'the reorder commission is five percent of its net ticket amount');
+  check(Number(reorderedLedger.net_ticket_amount_fen), 12_000, 'the reorder ledger records its own net ticket amount');
+  check(reorderedLedger.booking_order_id, reorderTrip.orderId, 'the new ledger stays linked to the reorder');
+  check((await scalar('SELECT order_id FROM promotion_attributions WHERE attributed_user_id=$1',
+    [fullRefundBuyer.id])).order_id, reorderTrip.orderId, 'the attribution advances to the earliest current eligible order');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM commission_ledger
+     WHERE promotion_attribution_id=(SELECT id FROM promotion_attributions WHERE attributed_user_id=$1)
+       AND status<>'reversed'`, [fullRefundBuyer.id],
+  )).count, 1, 'parallel repeated reorder sync retains exactly one effective ledger');
+  const originalAfterReorder = await scalar(
+    'SELECT id,status,amount_fen,net_ticket_amount_fen FROM commission_ledger WHERE id=$1',
+    [historicRefundLedger.id],
+  );
+  check(originalAfterReorder, {
+    id: historicRefundLedger.id, status: 'reversed', amount_fen: 0, net_ticket_amount_fen: 0,
+  }, 'reorder sync leaves the original refunded ledger unchanged');
+  const retainedIdentityFact = await scalar(
+    'SELECT identity_number_hash FROM promotion_identity_qualifications WHERE user_id=$1',
+    [fullRefundBuyer.id],
+  );
+  check(retainedIdentityFact.identity_number_hash.toString('hex'), security.identityHash(
+    makeSandboxIdentityNumber('110'),
+  ).toString('hex'), 'identity correction does not erase the first consumed identity fact');
+  check((await scalar('SELECT count(*)::integer AS count FROM promotion_commission_events WHERE commission_ledger_id=$1 AND event_type=\'commission_created\'',
+    [reorderedLedger.id])).count, 1, 'parallel reorder sync appends only one commission creation event');
 
   const secondLevelBuyer = await makeUser('二级场景测试会员');
   await verifyIdentity(secondLevelBuyer, '105');
@@ -577,7 +673,7 @@ try {
     `SELECT l.id,l.amount_fen,l.status,a.qualified_at,o.ticket_refunded_fen
      FROM commission_ledger l
      JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
-     JOIN booking_orders o ON o.id=a.order_id
+     JOIN booking_orders o ON o.id=l.booking_order_id
      WHERE a.attributed_user_id=$1`, [legacyReversedBuyer.id],
   );
   check(legacyReversedLedger.status, 'reversed',

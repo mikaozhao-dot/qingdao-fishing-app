@@ -130,7 +130,7 @@ async function loadDashboard(client, userId, baseUrl) {
      FROM commission_ledger l
      JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
      JOIN promotion_codes c ON c.id=a.promotion_code_id
-     JOIN booking_orders o ON o.id=a.order_id
+     JOIN booking_orders o ON o.id=l.booking_order_id
      JOIN departures d ON d.id=o.departure_id
      WHERE l.payee_user_id=$1
      ORDER BY l.created_at DESC,l.id DESC

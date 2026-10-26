@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { randomInt, randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { buildApp } from '../src/app.js';
 import { config } from '../src/config.js';
@@ -23,6 +26,9 @@ const testConfig = {
   promotionPublicBaseUrl: 'https://promotion.acceptance.invalid',
 };
 const security = createSecurity(testConfig);
+const execFileAsync = promisify(execFile);
+const migrationScriptPath = fileURLToPath(new URL('../src/migrate.js', import.meta.url));
+const serverWorkingDirectory = fileURLToPath(new URL('../', import.meta.url));
 const { Pool } = pg;
 const pool = new Pool({ connectionString: config.databaseUrl, max: 5 });
 const app = buildApp(testConfig);
@@ -230,11 +236,26 @@ try {
   check(Number(commission.amount_fen), 500, 'commission is five percent of the net ticket amount');
   check(Number(commission.net_ticket_amount_fen), 10_000, 'platform fee is excluded from commission basis');
   check(commission.order_id, paidTrip.orderId, 'commission traces to the first paid order');
+  await pool.query(
+    'DELETE FROM promotion_identity_qualifications WHERE user_id=$1', [guest.id],
+  );
   const concurrentIdentitySyncs = await Promise.all([
     expect('GET', '/promotions/me', guest.token, undefined, 200),
     expect('GET', '/promotions/me', guest.token, undefined, 200),
   ]);
-  check(concurrentIdentitySyncs.length, 2, 'concurrent promotion reads both complete');
+  check(concurrentIdentitySyncs.length, 2,
+    'concurrent real promotion API requests both complete qualification synchronization');
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM promotion_identity_qualifications WHERE user_id=$1',
+    [guest.id],
+  )).count, 1,
+  'concurrent API qualification synchronization creates one identity-consumption fact');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM commission_ledger l
+     JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+     WHERE a.attributed_user_id=$1`, [guest.id],
+  )).count, 1,
+  'concurrent API qualification synchronization retains one commission ledger');
   const consumedIdentity = makeSandboxIdentityNumber('101');
   const identityQualification = await scalar(
     `SELECT user_id,promotion_attribution_id,identity_number_hash
@@ -523,6 +544,121 @@ try {
   check((await scalar(`SELECT count(*)::integer AS count FROM commission_ledger
     WHERE payee_user_id=ANY($1::uuid[]) AND status='available'`, [[mutualA.id, mutualB.id]])).count,
   2, 'skip-locked release retry makes both reciprocal matured ledgers available');
+
+  const legacyPositiveBuyer = await makeUser('升级夹具：仍有正余额');
+  await verifyIdentity(legacyPositiveBuyer, '201');
+  const legacyPositiveScan = await scan(firstCode.code);
+  await claim(legacyPositiveBuyer, legacyPositiveScan.visitorToken);
+  const legacyPositiveTrip = await makePaidOrder(legacyPositiveBuyer, captain, 72, 10_000);
+  await expect('GET', '/promotions/me', legacyPositiveBuyer.token, undefined, 200);
+  const legacyPositiveLedger = await scalar(
+    `SELECT l.id,l.amount_fen,l.status,a.qualified_at
+     FROM commission_ledger l JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+     WHERE a.attributed_user_id=$1`, [legacyPositiveBuyer.id],
+  );
+  check(Number(legacyPositiveLedger.amount_fen), 500,
+    'upgrade fixture includes a historically qualified ledger with positive balance');
+  check(legacyPositiveLedger.status, 'frozen',
+    'positive-balance historical qualification remains frozen before return');
+
+  const legacyReversedBuyer = await makeUser('升级夹具：全退后余额归零');
+  const legacyIdentityX = makeSandboxIdentityNumber('202');
+  await verifyIdentity(legacyReversedBuyer, '202');
+  const legacyReversedScan = await scan(firstCode.code);
+  await claim(legacyReversedBuyer, legacyReversedScan.visitorToken);
+  const legacyReversedTrip = await makePaidOrder(legacyReversedBuyer, captain, 96, 10_000);
+  await expect('POST', `/orders/${legacyReversedTrip.orderId}/cancel`,
+    legacyReversedBuyer.token, {}, 200);
+  const legacyReversedLedger = await scalar(
+    `SELECT l.id,l.amount_fen,l.status,a.qualified_at,o.ticket_refunded_fen
+     FROM commission_ledger l
+     JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+     JOIN booking_orders o ON o.id=a.order_id
+     WHERE a.attributed_user_id=$1`, [legacyReversedBuyer.id],
+  );
+  check(legacyReversedLedger.status, 'reversed',
+    'upgrade fixture fully refunds the previously qualified commission');
+  check(Number(legacyReversedLedger.amount_fen), 0,
+    'fully reversed historical qualification has zero current balance');
+  check(Boolean(legacyReversedLedger.qualified_at), true,
+    'fully reversed historical qualification retains its qualification timestamp');
+  check(Number(legacyReversedLedger.ticket_refunded_fen), 10_000,
+    'fully reversed upgrade fixture retains the refund fact');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM promotion_commission_events e
+     WHERE e.commission_ledger_id=$1 AND e.event_type='commission_created' AND e.amount_fen>0`,
+    [legacyReversedLedger.id],
+  )).count > 0, true,
+  'fully reversed upgrade fixture retains its original positive commission event');
+
+  const neverCommissionedBuyer = await makeUser('升级夹具：实名但从未计佣');
+  await verifyIdentity(neverCommissionedBuyer, '203');
+  const neverCommissionedScan = await scan(firstCode.code);
+  await claim(neverCommissionedBuyer, neverCommissionedScan.visitorToken);
+  await expect('GET', '/promotions/me', neverCommissionedBuyer.token, undefined, 200);
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM commission_ledger l
+     JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+     WHERE a.attributed_user_id=$1`, [neverCommissionedBuyer.id],
+  )).count, 0, 'upgrade contrast has an identity and attribution but no commission ledger');
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM promotion_identity_qualifications WHERE user_id=$1',
+    [neverCommissionedBuyer.id],
+  )).count, 0, 'never-commissioned identity is not consumed before upgrade backfill');
+
+  const migration023 = '023_backfill_historic_promotion_identity_qualifications.sql';
+  await pool.query(
+    'DELETE FROM promotion_identity_qualifications WHERE user_id=$1', [legacyReversedBuyer.id],
+  );
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM promotion_identity_qualifications WHERE user_id=$1',
+    [legacyReversedBuyer.id],
+  )).count, 0,
+  '022 upgrade-state fixture reproduces the zero-balance qualification missed by its backfill');
+  await pool.query('DELETE FROM schema_migrations WHERE version=$1', [migration023]);
+  const migrationResult = await execFileAsync(process.execPath, [migrationScriptPath], {
+    cwd: serverWorkingDirectory,
+    env: process.env,
+    timeout: 30_000,
+  });
+  check(migrationResult.stdout.includes(`Applied migration ${migration023}`), true,
+    'upgrade acceptance executes the registered follow-up migration');
+  const backfilledIdentity = await scalar(
+    `SELECT identity_number_hash,consumed_at FROM promotion_identity_qualifications
+     WHERE user_id=$1`, [legacyReversedBuyer.id],
+  );
+  check(backfilledIdentity.identity_number_hash.toString('hex'),
+    security.identityHash(legacyIdentityX).toString('hex'),
+  'upgrade backfill seeds the still-present identity from a zero-balance historical qualification');
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM promotion_identity_qualifications WHERE user_id=$1',
+    [legacyPositiveBuyer.id],
+  )).count, 1,
+  'upgrade backfill preserves the already-seeded positive-balance historical qualification');
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM promotion_identity_qualifications WHERE user_id=$1',
+    [neverCommissionedBuyer.id],
+  )).count, 0,
+  'upgrade backfill does not consume identity for a buyer who never earned commission');
+
+  await verifyIdentity(legacyReversedBuyer, '204');
+  const postUpgradeReuseBuyer = await makeUser('升级后复用已消费身份');
+  const postUpgradeReuseScan = await scan(firstCode.code);
+  await claim(postUpgradeReuseBuyer, postUpgradeReuseScan.visitorToken);
+  await verifyIdentity(postUpgradeReuseBuyer, '202');
+  await makePaidOrder(postUpgradeReuseBuyer, captain, 72, 10_000);
+  await expect('GET', '/promotions/me', postUpgradeReuseBuyer.token, undefined, 200);
+  check((await scalar(
+    'SELECT qualification_status FROM promotion_attributions WHERE attributed_user_id=$1',
+    [postUpgradeReuseBuyer.id],
+  )).qualification_status, 'identity_already_qualified',
+  'after upgrade and identity correction, another account cannot reuse the historical identity');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM commission_ledger l
+     JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+     WHERE a.attributed_user_id=$1`, [postUpgradeReuseBuyer.id],
+  )).count, 0,
+  'post-upgrade identity reuse cannot create a second commission ledger');
 
   console.info(`Step 6 slice 1 promotion acceptance passed: ${assertions} assertions.`);
 } finally {

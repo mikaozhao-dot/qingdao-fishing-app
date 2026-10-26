@@ -137,3 +137,41 @@
 创始人于 2026-10-26 本轮告知：“dot 审核了”。按该直接同步，Dot 对本次最小修复的门槛视为已通过。当前仓库未见对应的 Dot 原始评审文件、评语或明确评审 SHA，因此此处只记录创始人转达，不补写未提供的评审内容；前面的 `09129e8e` 暂不通过结论仍作为历史记录保留。
 
 这不等同于创始人对切片 3 整体产品验收，也不授权真实直播内容、真实资金、真实保险或生产部署。当前仓库没有第 6 步任务书；本回执不启动第 6 步实施。
+
+
+## Dot 修复后独立定点复核（2026-10-26 18:20 CST）：限定沙盒技术通过
+
+**给 Muse / Luna：固定最终代码 `a239b2b56b911a53ec466d31090924ae3854959f` 的本轮 F1/F2 修复及随修复补证，限定沙盒技术复核通过；关闭 `56d8b2df1e49956dcc1290fe16aca01d4044ab50` 中针对旧代码的 S5-S3-R1、S5-S3-R2 两项 UI 阻断。** 此结论仅针对本轮修复及受影响回归，不重开旧切片，也不扩大直播产品范围。
+
+本次结论来自 Dot 新一轮独立实读固定源码、实际测试及 CI 原始日志，**不以“创始人转述 Dot 已审核”作为技术通过依据**。本节正式结论取代前文以转述记录的当前复核状态；前文及旧 `09129e8e` 暂不通过作为历史保留，不追溯补造任何先前 Dot 评审。写入前重新读取的 main 为 `cc7fe2d700bf139923b8f652e11b417e091731f6`。
+
+### F1 / S5-S3-R1：关闭
+
+[`live_status.dart:74–92`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a239b2b56b911a53ec466d31090924ae3854959f/app/lib/live_status.dart#L74-L92) 现在检查浏览器启动结果，只有成功才关闭弹窗；false 或异常时保留复制出口并提示失败。[测试 59–183 行](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a239b2b56b911a53ec466d31090924ae3854959f/app/test/live_status_test.dart#L59-L183)实际点击浏览器覆盖成功、false、异常三支；两条失败路径继续实际点击复制并断言 Clipboard 写入正确链接，不再只是检查按钮出现。
+
+### F2 / S5-S3-R2：关闭
+
+[`step2_flow.dart:308–319`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a239b2b56b911a53ec466d31090924ae3854959f/app/lib/step2_flow.dart#L308-L319) 在详情导航返回后检查 mounted 并刷新父列表。[新增交互测试 137–168 行](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a239b2b56b911a53ec466d31090924ae3854959f/app/test/step2_live_status_refresh_test.dart#L137-L168)真实进入详情、开播、返回验证徽章出现，再进入详情结束、返回验证徽章消失；列表加载次数断言为 1 → 2 → 3。无需手动刷新或新增推送系统。
+
+### 既有权限补证与锁序
+
+- 数据库验收已补跨船长开播/结束被拒绝且会话不变、管理员队列缺失/错误口令及错误口令决策被拒绝、`not_false` 保留会话且不写虚假事实，以及举报人/航次/理由/备注/时间字段断言；未借补证新增业务规则。
+- [管理员处理先锁 departure，再锁 report/session](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a239b2b56b911a53ec466d31090924ae3854959f/server/src/step5-routes.js#L708-L726)，与航次动作统一锁顺序。[并发用例 334–440 行](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a239b2b56b911a53ec466d31090924ae3854959f/server/scripts/step5-live-acceptance.mjs#L334-L440)使用隔离库显式 session 锁及 `pg_stat_activity` 锁等待屏障，再释放并核对管理员与返航/开播竞争的结果、会话与事实，不是仅凭一次 `Promise.all` 偶然跑过。
+- 回执所述“修复前隔离库复现 `40P01`”仍属于**开发者本地自报**；Dot 未获得该旧复现的原始日志，也未独立复现，不把它改写为 Dot 已实证或线上事故。Dot 已核实的是修复后源码、屏障用例及以下 CI 的成功执行。
+
+### CI 原始日志及精确 SHA 关系
+
+最终代码提交为 `a239b2b56b911a53ec466d31090924ae3854959f`。本轮数据库及 App CI **实际检出**的是 `888ee2f53a054b2119d48b60a91d59ca73fde9af`，不能将两者写成同一个 SHA。Dot 已比较：`a239b2b` → `888ee2f` 仅新增 Muse 评审文档 `docs/ui-design-review-6919b692.md`；`888ee2f` → `cc7fe2d` 仅修改 README 与本回执。因此这些 CI 覆盖的是最终代码相同的源码内容，后续没有未测的 app/server 变化。
+
+| Dot 实读的原始 CI | 结果（均检出完整 `888ee2f53a054b2119d48b60a91d59ca73fde9af`） |
+| --- | --- |
+| [数据库 run 40305185796 / job 121512438973](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40305185796/job/121512438973) | 迁移 `001`–`020`；Step 4 **710**、Step 5 **133**、直播 **77** 项断言通过 |
+| [Flutter 测试/分析 run 40304504608 / job 121510172436](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40304504608/job/121510172436) | **20 tests passed**；**No issues found**；上述浏览器三分支与工作台双向返回用例均出现在实际日志 |
+| [iOS 模拟器 job 121510172071](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40304504608/job/121510172071) | 构建成功 |
+| [Android debug APK job 121510172369](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40304504608/job/121510172369) | 构建成功 |
+
+开发者本地 Step 4 **709** 与上述 CI **710** 分别保留来源，不相互替代。
+
+### 状态与边界
+
+请 Muse / Luna 沿本任务同步“本轮限定沙盒技术通过、旧两项 UI 阻断关闭”，无需重复派单或重跑旧评审。Dot **未独立另起空库重跑、未做真机或截图视觉验收**；模拟交互通过不等于实机成功唤起抖音。本结论不是创始人的整切片/整体产品验收，不自动授权第 6 步、真实直播内容接入、真实资金/保险或生产上线。

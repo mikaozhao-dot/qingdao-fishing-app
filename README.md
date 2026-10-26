@@ -46,7 +46,7 @@ flutter run
 
 第 4 步当前执行范围以 `docs/codex-dev-step4-brief-v2.md` 和 `docs/current-rules-index.md` 为准；履约子集和本轮实现状态见 `docs/step4-build-notes.md`。切片 1 在 Dot 审查的沙盒范围内通过；切片 2、4 按 Dot 既有复核结论在限定范围内通过。切片 3 的个人级保险出航 POST 门禁固定代码提交 `0d46add7` 通过 709 项数据库验收、Flutter 检查及 iOS 模拟器／Android APK 构建，并经 Dot 在限定沙盒范围内定点通过；逐项证据见 `docs/step4-slice3-insurance-post-gate-fix-receipt-2026-10-26.md`。天气取消仅验证独立状态与保留原成团快照；触发、通知及退款流程仍待 SOP 批准。第 4 步 v2 仍未全量验收，真实支付、真实退款和生产使用未获授权。
 
-第 5 步切片 1（返航后渔获双源回填、结构化返港评价、船长/船况分离事实与个人鱼种图鉴）的实现与验收状态见 `docs/step5-slice1-delivery-receipt-2026-10-26.md`；数据口径和新增表见 `docs/data-model-step5-slice1-addendum.md`。该切片完成后仍须 Dot 定点复核，未获复核通过前不进入下一切片。
+第 5 步切片 1（返航后渔获双源回填、结构化返港评价、船长/船况分离事实与个人鱼种图鉴）的实现与验收状态见 `docs/step5-slice1-delivery-receipt-2026-10-26.md`；数据口径和新增表见 `docs/data-model-step5-slice1-addendum.md`。代码 SHA `a3785c4` 已获 Dot 限定沙盒技术复核通过，双源分歧 B 与复订口径 A 已由创始人批准；整切片产品验收仍未完成，未获明确验收前不进入下一切片。
 
 ## 关键文件
 

@@ -52,3 +52,55 @@
 5. 本地与 CI 证据是否对应同一固定代码 SHA；Android 以 CI 构建为准。
 
 等待 Dot 的独立结论。未获复核通过前不启动第 6 步；未获另行授权前不接真实直播内容、资金、保险或生产部署。
+
+
+## Dot 独立定点复核（2026-10-26 17:32 CST）：暂不通过
+
+**给 Luna / Muse：固定代码 `09129e8e18c1dbcfe0c9b8a028541b86ecd03580` 本轮暂不通过，原因是下列两处确定 UI 缺陷。请沿本切片原任务最小修复并补实际交互用例，不另开重复任务，不扩展业务规则或第 6 步。** 被评交付回执及写入前 main 为 `16cc5f0fce1b2baaf601a1362c50913663778e78`；本节是此前“待 Dot”状态的后续结论，前文交付记录保留。
+
+本轮独立读取了固定源码、迁移 `020`、验收脚本及四个 CI job 原始日志，不仅查看回执自报或绿灯。Dot 未独立另起空库运行验收，未做真机/截图视觉验收。
+
+### S5-S3-R1（必须修复）：浏览器回退失败时，复制出口也被关闭
+
+[`app/lib/live_status.dart:57–64`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/09129e8e18c1dbcfe0c9b8a028541b86ecd03580/app/lib/live_status.dart#L57-L64) 中，“浏览器打开”忽略 `launchUrl` 的 false 返回，抛异常后也无条件 `Navigator.pop`。因此首次外部跳转失败后，用户再点浏览器且仍打不开，回退弹窗与复制按钮会一起消失；注释“复制仍可用”与实际行为不符。
+
+**最小修复：**浏览器成功打开才关闭；返回 false 或抛异常时保留弹窗、复制出口，并给出失败提示。无需新增直播播放器或外部平台接入。
+
+**必须用例：**实际点击复制并核验 Clipboard 内容；实际点击浏览器回退，分别模拟成功、false、异常，失败两支确认仍能复制。当前[`live_status_test.dart:36–56`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/09129e8e18c1dbcfe0c9b8a028541b86ecd03580/app/test/live_status_test.dart#L36-L56)只断言两个按钮出现，没有执行复制/浏览器动作，不能据此认定完整回退已可用。
+
+### S5-S3-R2（必须修复）：结束直播返回工作台仍留下旧徽章和可点击链接
+
+[`_setLive:1588–1595`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/09129e8e18c1dbcfe0c9b8a028541b86ecd03580/app/lib/step2_flow.dart#L1588-L1595) 成功开播/结束后只刷新详情自身；[`_openDetail:308–318`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/09129e8e18c1dbcfe0c9b8a028541b86ecd03580/app/lib/step2_flow.dart#L308-L318)等待导航返回后不刷新父列表。工作台继续以旧 `item.liveStatus` [渲染卡片徽章及链接](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/09129e8e18c1dbcfe0c9b8a028541b86ecd03580/app/lib/step2_flow.dart#L2265-L2270)。
+
+可由源码直接确定的路径：工作台有直播的卡片 → 详情成功结束 → 返回工作台，旧“直播中 · 抖音”仍可点击，直到手动刷新或切页；反向开播返回也不能立即反映新状态。服务端已结束并不能修复客户端这份旧状态。
+
+**最小修复：**详情导航返回时刷新父列表，或回传变化使缓存失效；不要求实时推送系统。**必须用例：**工作台 → 详情开播/结束 → 返回，两方向确认卡片状态同步，结束后无失效直播入口。
+
+### 保留现有正确实现，不因 UI 问题全量返工
+
+- [开播路由](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/09129e8e18c1dbcfe0c9b8a028541b86ecd03580/server/src/step5-routes.js#L546-L591)确实检查本船长、审核状态、绑定、`in_progress`、本人出航打卡且未返航，并以航次/档案锁和活动会话唯一索引控制重复开播。结束路由检查本船长、出航中和打卡状态；不要把结束路由描述成重复检查了开播路由的全部审核/绑定条件。
+- [返航事务](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/09129e8e18c1dbcfe0c9b8a028541b86ecd03580/server/src/step4-routes.js#L1248-L1261)同时完成航次并结束活动会话，查询也按有效状态生成入口。
+- 举报有同用户同航次唯一约束；管理员处理检查环境口令，核实虚假结束对应会话并记录有限事实；公开事实不含举报人、备注或评分。本轮未发现这些路径的确定权限绕过。
+
+### 随修复建议补证：不是已经复现的缺陷
+
+现 42 项直播验收没有分别验证跨船长开/结束、无/错管理员口令、`not_false` 处理、举报人/航次/理由/时间/备注完整字段。建议补这些已有规则的负向与字段断言，不新增权限或产品口径，也不将“缺用例”说成已经发现权限绕过。
+
+另有**静态并发风险，未复现死锁**：[管理员处理先锁 report/session 再插入引用 departure 的事实](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/09129e8e18c1dbcfe0c9b8a028541b86ecd03580/server/src/step5-routes.js#L708-L727)，而返航/开播先锁 departure 再访问 session，存在反序竞争的可能。建议随修复检查并统一锁顺序，在隔离库用明确屏障验证管理员核实与返航/开播竞争，断言无死锁、状态及事实一致；不要把此静态风险写成线上已发生事故。它与上面两项确定 UI 必修分开记录。
+
+### Dot 实读的同 SHA CI
+
+以下原始日志全部检出完整 `09129e8e18c1dbcfe0c9b8a028541b86ecd03580`：
+
+| 证据 | 实读结果 |
+| --- | --- |
+| [数据库 run 40298256807 / job 121489518089](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40298256807/job/121489518089) | 迁移 `001`–`020`；Step 4 **710**、Step 5 **133**、直播 **42** 项断言通过 |
+| [Flutter 测试/分析 job 121489712274](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40298311930/job/121489712274) | **16 tests passed**；**No issues found** |
+| [iOS 模拟器 job 121489712253](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40298311930/job/121489712253) | 构建成功 |
+| [Android debug APK job 121489711945](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40298311930/job/121489711945) | 构建成功 |
+
+上方 **709** 是交付方本地记录，本轮 GitHub 原始日志为 **710**，应分别保留来源；不能互相替代，也不能机械要求每次运行数字完全相同。CI 成功不覆盖上述未实际执行的 UI 分支，不能作为本轮通过依据。
+
+### 沿原任务交回
+
+请 Luna 提交最小修复的固定 SHA、对应实际用例及按 SHA 标注的 CI；Muse 同步本轮暂不通过和修复范围。Dot 后续只针对修复与受影响回归复核，不重做已通过的旧切片，不自行批准新业务规则、整切片产品验收、第 6 步或生产上线。

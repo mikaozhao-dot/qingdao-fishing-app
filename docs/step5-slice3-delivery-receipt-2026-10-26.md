@@ -2,9 +2,9 @@
 
 ## 状态
 
-- 实现已提交到 `main`：[`09129e8e18c1dbcfe0c9b8a028541b86ecd03580`](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/09129e8e18c1dbcfe0c9b8a028541b86ecd03580)。
-- 本地隔离数据库验收、Flutter 回归和静态分析已通过；GitHub Actions 已在同 SHA `09129e8e18c1dbcfe0c9b8a028541b86ecd03580` 通过数据库验收、Flutter 测试与分析、iOS 模拟器和 Android APK 构建。
-- Dot 定点复核尚未完成；复核通过前不进入第 6 步。本回执不表示切片产品验收或生产授权。
+- 原始实现 [`09129e8e18c1dbcfe0c9b8a028541b86ecd03580`](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/09129e8e18c1dbcfe0c9b8a028541b86ecd03580) 经 Dot 定点复核后暂不通过；修复项 F1/F2 和补证已分别提交，最终代码提交为 [`a239b2b56b911a53ec466d31090924ae3854959f`](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/a239b2b56b911a53ec466d31090924ae3854959f)。
+- 本地数据库验收、服务端检查、Flutter 回归/分析和 iOS 模拟器构建通过。当前 `main` 文档审阅提交 `888ee2f53a054b2119d48b60a91d59ca73fde9af` 未改动 `app/` 或 `server/`；数据库、Flutter、分析、iOS、Android 五项 CI 均已在此同一 SHA 通过，详见文末补充回执。
+- 创始人于 2026-10-26 本轮告知 Dot 已审批本次修复。仓库尚未收到该审批对应的独立评审文件或明确被评 SHA；本回执只记录创始人转达，不补写未提供的评语。切片 3 整体产品验收仍待创始人明确确认；本回执不表示生产授权。
 
 ## 交付范围
 
@@ -51,8 +51,7 @@
 4. 抖音 HTTPS 外部跳转失败后的网页与复制回退用例，及 UI 截图未提供的限制。
 5. 本地与 CI 证据是否对应同一固定代码 SHA；Android 以 CI 构建为准。
 
-等待 Dot 的独立结论。未获复核通过前不启动第 6 步；未获另行授权前不接真实直播内容、资金、保险或生产部署。
-
+截至此原始交付回执提交时，等待 Dot 的独立结论；当时未获复核通过前不启动第 6 步。未获另行授权前不接真实直播内容、资金、保险或生产部署。
 
 ## Dot 独立定点复核（2026-10-26 17:32 CST）：暂不通过
 
@@ -104,3 +103,37 @@
 ### 沿原任务交回
 
 请 Luna 提交最小修复的固定 SHA、对应实际用例及按 SHA 标注的 CI；Muse 同步本轮暂不通过和修复范围。Dot 后续只针对修复与受影响回归复核，不重做已通过的旧切片，不自行批准新业务规则、整切片产品验收、第 6 步或生产上线。
+
+## 最小修复交付与后续 CI（2026-10-26）
+
+原 SHA `09129e8e18c1dbcfe0c9b8a028541b86ecd03580` 的 Dot 暂不通过结论及历史 CI 保留在上节。按修复单 `docs/muse-to-luna-step5-slice3-fixback-2026-10-26.md`，后续逐项提交如下：
+
+| 项目 | 固定代码 SHA | 变更与证据 |
+| --- | --- | --- |
+| F1 / S5-S3-R1 | `1584edbe9ec6d18f0ec5de77f5995b88ca34236d` | `app/lib/live_status.dart` 保留失败时的复制出口；`app/test/live_status_test.dart` 覆盖浏览器成功、false、异常，以及失败后实际复制并核对剪贴板内容。 |
+| F2 / S5-S3-R2 | `6919b6920b8f34f302a592ce0732ca128e3fe1c7` | `app/lib/step2_flow.dart` 在详情返回时刷新工作台；`app/test/step2_live_status_refresh_test.dart` 覆盖返回后开播徽章出现、结束后徽章和入口消失。 |
+| 随修复补证及锁序 | `a239b2b56b911a53ec466d31090924ae3854959f` | `server/src/step5-routes.js` 统一管理员处理与航次动作的锁顺序；`server/scripts/step5-live-acceptance.mjs` 补跨船长拒绝、缺失/错误管理员口令、`not_false`、举报字段和屏障并发用例。隔离库修复前的屏障测试曾复现 PostgreSQL `40P01` 死锁；修复后管理员核实分别与返航、开播竞争均通过，状态与事实断言通过。该复现只发生在隔离测试库，不是线上事故。 |
+
+### 本地验证
+
+最终代码 SHA `a239b2b56b911a53ec466d31090924ae3854959f`：
+
+- `npm run check` 通过；`npm test`：8 项通过。
+- `smoke:step4`：709 项断言；`smoke:step5`：133 项断言；`smoke:step5-live`：77 项断言，均在本地隔离数据库通过。
+- `flutter test --no-pub`：20 项通过；`flutter analyze --no-pub` 无问题；`flutter build ios --simulator --no-codesign --no-pub` 成功。
+- 未提交新截图，也未做设备视觉目检；UI 分支证据为实际 Flutter 交互测试，不冒充真机目检。Android 本机未构建，以下 CI 覆盖 Android APK。
+
+### 当前 main 同 SHA CI
+
+代码 SHA `a239b2b56b911a53ec466d31090924ae3854959f` 之后，`888ee2f53a054b2119d48b60a91d59ca73fde9af` 只改了文档，没有修改 `app/` 或 `server/`。数据库及 App 工作流均检出此同一 main SHA 并成功：
+
+| 工作流 | 检出 SHA | 实际结果 |
+| --- | --- | --- |
+| Step 4/5 隔离数据库验收 | `888ee2f53a054b2119d48b60a91d59ca73fde9af` | [run 40305185796](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40305185796)：Step 4 710、Step 5 133、直播状态 77 项断言通过。 |
+| Flutter 回归与分析、iOS 模拟器、Android debug APK | `888ee2f53a054b2119d48b60a91d59ca73fde9af` | [run 40304504608](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40304504608)：Flutter 测试/分析、iOS 和 Android job 全部通过。 |
+
+### Dot 修复复核状态
+
+创始人于 2026-10-26 本轮告知：“dot 审核了”。按该直接同步，Dot 对本次最小修复的门槛视为已通过。当前仓库未见对应的 Dot 原始评审文件、评语或明确评审 SHA，因此此处只记录创始人转达，不补写未提供的评审内容；前面的 `09129e8e` 暂不通过结论仍作为历史记录保留。
+
+这不等同于创始人对切片 3 整体产品验收，也不授权真实直播内容、真实资金、真实保险或生产部署。当前仓库没有第 6 步任务书；本回执不启动第 6 步实施。

@@ -706,10 +706,20 @@ export function registerStep5Routes(app, { pool, config, requireUser }) {
         return sendError(reply, 400, '处理结果无效');
       }
       const result = await transaction(pool, async (client) => {
+        const reportTarget = await client.query(
+          'SELECT departure_id FROM step5_live_reports WHERE id=$1', [reportId],
+        );
+        if (!reportTarget.rowCount) return { error: [404, '举报不存在'] };
+        const departure = await client.query(
+          'SELECT id FROM departures WHERE id=$1 FOR UPDATE',
+          [reportTarget.rows[0].departure_id],
+        );
+        if (!departure.rowCount) return { error: [404, '举报对应班次不存在'] };
         const report = await client.query(
           `SELECT r.id,r.departure_id,r.session_id,r.processing_status,l.captain_user_id
            FROM step5_live_reports r JOIN step5_live_sessions l ON l.id=r.session_id
-           WHERE r.id=$1 FOR UPDATE OF r,l`, [reportId],
+           WHERE r.id=$1 AND r.departure_id=$2 FOR UPDATE OF r,l`,
+          [reportId, departure.rows[0].id],
         );
         if (!report.rowCount) return { error: [404, '举报不存在'] };
         const row = report.rows[0];

@@ -51,6 +51,20 @@ async function scalar(sql, values = []) {
   return (await pool.query(sql, values)).rows[0];
 }
 
+async function waitForBlockedQuery(queryFragment, label) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const waiting = await scalar(
+      `SELECT count(*)::integer AS count FROM pg_stat_activity
+       WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE $1`,
+      [`%${queryFragment}%`],
+    );
+    if (waiting.count > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for lock barrier: ${label}`);
+}
+
 async function createUser({ captain = false } = {}) {
   sequence += 1;
   const id = randomUUID();
@@ -111,6 +125,7 @@ try {
   await app.ready();
   const captain = await createUser({ captain: true });
   const reporter = await createUser();
+  const otherCaptain = await createUser({ captain: true });
   const preDeparture = await createDeparture(captain, 'confirmed');
   const blockedBeforeDeparted = await request(
     'POST', `/step5/departures/${preDeparture.departureId}/live/start`, captain.token, {},
@@ -138,12 +153,29 @@ try {
   );
   check(boundProfile.status, 200, 'captain can bind a Douyin profile');
   check(boundProfile.body.handle, 'test_fishing', 'captain handle is normalized');
+  const otherCaptainProfile = await request(
+    'POST', '/captain/douyin-profile', otherCaptain.token,
+    { handle: 'other_captain', profileUrl: 'https://www.douyin.com/user/other-captain' },
+  );
+  check(otherCaptainProfile.status, 200, 'second captain can bind a Douyin profile');
 
   const validStart = await request(
     'POST', `/step5/departures/${liveTrip.departureId}/live/start`, captain.token, {},
   );
   check(validStart.status, 201, 'departed and bound captain can start a live badge');
   check(validStart.body.active, true, 'successful start returns active state');
+  const crossCaptainStart = await request(
+    'POST', `/step5/departures/${liveTrip.departureId}/live/start`, otherCaptain.token, {},
+  );
+  check(crossCaptainStart.status, 403, 'a different captain cannot start another captain live');
+  const crossCaptainEnd = await request(
+    'POST', `/step5/departures/${liveTrip.departureId}/live/end`, otherCaptain.token, {},
+  );
+  check(crossCaptainEnd.status, 403, 'a different captain cannot end another captain live');
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM step5_live_sessions WHERE departure_id=$1 AND ended_at IS NULL',
+    [liveTrip.departureId],
+  )).count, 1, 'cross-captain requests leave the owner session active and unchanged');
   const unbindDuringLive = await request(
     'POST', '/captain/douyin-profile', captain.token, { handle: '', profileUrl: '' },
   );
@@ -185,10 +217,31 @@ try {
     { reason: 'other' },
   );
   check(captainSelfReport.status, 403, 'captain cannot report their own badge');
+  const missingAdminPassword = await request(
+    'GET', '/admin/step5/live-reports', null, undefined,
+  );
+  check(missingAdminPassword.status, 401, 'admin queue rejects a missing password');
+  const wrongAdminPassword = await request(
+    'GET', '/admin/step5/live-reports', null, undefined, 'wrong-acceptance-password',
+  );
+  check(wrongAdminPassword.status, 401, 'admin queue rejects a wrong password');
+  const deniedDecision = await request(
+    'POST', `/admin/step5/live-reports/${firstReport.body.id}/decision`, null,
+    { decision: 'false_verified' }, 'wrong-acceptance-password',
+  );
+  check(deniedDecision.status, 401, 'admin decision rejects a wrong password');
+  check((await scalar(
+    'SELECT processing_status FROM step5_live_reports WHERE id=$1', [firstReport.body.id],
+  )).processing_status, 'pending', 'rejected admin decisions leave the report unchanged');
   const queue = await request('GET', '/admin/step5/live-reports', null, undefined,
     testConfig.adminPassword);
-  check(queue.body.items.some((report) => report.id === firstReport.body.id),
-    true, 'admin can read the pending report queue');
+  const queuedReport = queue.body.items.find((report) => report.id === firstReport.body.id);
+  check(Boolean(queuedReport), true, 'admin can read the pending report queue');
+  check(queuedReport.reporterUserId, reporter.id, 'admin queue records the actual reporter');
+  check(queuedReport.departureId, liveTrip.departureId, 'admin queue records the reported departure');
+  check(queuedReport.reason, 'wrong_account', 'admin queue records the selected report reason');
+  check(queuedReport.note, 'acceptance fixture', 'admin queue records the optional note');
+  check(typeof queuedReport.createdAt, 'string', 'admin queue records the report time');
 
   const decision = await request(
     'POST', `/admin/step5/live-reports/${firstReport.body.id}/decision`, null,
@@ -205,6 +258,35 @@ try {
   check(captainFactsAfter.body.liveBadgeFacts.length, 1, 'public captain facts contain the dated incident fact');
   const hiddenDetail = await request('GET', `/departures/${liveTrip.departureId}`, reporter.token);
   check(hiddenDetail.status, 404, 'ended live link is no longer visible from trip detail');
+
+  const notFalseTrip = await createDeparture(captain, 'in_progress', true);
+  const notFalseStart = await request(
+    'POST', `/step5/departures/${notFalseTrip.departureId}/live/start`, captain.token, {},
+  );
+  check(notFalseStart.status, 201, 'not-false fixture starts a live session');
+  const notFalseReport = await request(
+    'POST', `/step5/departures/${notFalseTrip.departureId}/live-reports`, reporter.token,
+    { reason: 'other', note: 'checked and found accurate' },
+  );
+  check(notFalseReport.status, 201, 'not-false fixture records a report');
+  const notFalseDecision = await request(
+    'POST', `/admin/step5/live-reports/${notFalseReport.body.id}/decision`, null,
+    { decision: 'not_false' }, testConfig.adminPassword,
+  );
+  check(notFalseDecision.status, 200, 'admin can mark a report not false');
+  check(notFalseDecision.body.processingStatus, 'not_false', 'not-false decision records its status');
+  check((await scalar(
+    'SELECT ended_at FROM step5_live_sessions WHERE departure_id=$1',
+    [notFalseTrip.departureId],
+  )).ended_at, null, 'not-false handling leaves the live session active');
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM step5_captain_live_incident_facts WHERE departure_id=$1',
+    [notFalseTrip.departureId],
+  )).count, 0, 'not-false handling does not write a false-live fact');
+  const endNotFalseSession = await request(
+    'POST', `/step5/departures/${notFalseTrip.departureId}/live/end`, captain.token, {},
+  );
+  check(endNotFalseSession.status, 200, 'test ends the not-false fixture session');
 
   const manualEndTrip = await createDeparture(captain, 'in_progress', true);
   const manualEndStart = await request(
@@ -248,6 +330,118 @@ try {
   check(startAfterReturn.status, 409, 'returned captain cannot start a new live session');
   check((await scalar('SELECT status FROM departures WHERE id=$1', [returningTrip.departureId])).status,
     'completed', 'rejected post-return start leaves completed status unchanged');
+
+  const raceTrip = await createDeparture(captain, 'in_progress', true);
+  const raceStarted = await request(
+    'POST', `/step5/departures/${raceTrip.departureId}/live/start`, captain.token, {},
+  );
+  check(raceStarted.status, 201, 'race fixture starts a live session');
+  const raceReport = await request(
+    'POST', `/step5/departures/${raceTrip.departureId}/live-reports`, reporter.token,
+    { reason: 'not_live', note: 'lock-order race fixture' },
+  );
+  check(raceReport.status, 201, 'race fixture records a pending live report');
+  const raceSession = await scalar(
+    'SELECT id FROM step5_live_sessions WHERE departure_id=$1 AND ended_at IS NULL',
+    [raceTrip.departureId],
+  );
+  const gate = await pool.connect();
+  try {
+    await gate.query('BEGIN');
+    await gate.query(
+      'SELECT id FROM step5_live_sessions WHERE id=$1 FOR UPDATE',
+      [raceSession.id],
+    );
+    const adminRace = request(
+      'POST', `/admin/step5/live-reports/${raceReport.body.id}/decision`, null,
+      { decision: 'false_verified' }, testConfig.adminPassword,
+    );
+    await waitForBlockedQuery('step5_live_reports r JOIN step5_live_sessions l',
+      'admin decision waiting at report/session barrier');
+    const returnRace = request(
+      'POST', `/captain/departures/${raceTrip.departureId}/checkin`, captain.token,
+      { event: 'returned' },
+    );
+    await waitForBlockedQuery(
+      'FROM departures d WHERE d.id=$1 AND d.captain_user_id=$2 FOR UPDATE',
+      'return check-in waiting behind admin departure lock',
+    );
+    await gate.query('COMMIT');
+    const [adminRaceResult, returnRaceResult] = await Promise.all([adminRace, returnRace]);
+    check(adminRaceResult.status, 200, 'admin verification and return check-in do not deadlock');
+    check(adminRaceResult.body.processingStatus, 'false_verified',
+      'racing admin decision keeps its verified report status');
+    check(returnRaceResult.status, 200, 'return check-in completes after admin verification');
+    check((await scalar('SELECT status FROM departures WHERE id=$1', [raceTrip.departureId])).status,
+      'completed', 'racing return check-in leaves the trip completed');
+    check((await scalar(
+      'SELECT count(*)::integer AS count FROM step5_captain_live_incident_facts WHERE departure_id=$1',
+      [raceTrip.departureId],
+    )).count, 1, 'racing admin verification writes one consistent incident fact');
+    check((await scalar(
+      'SELECT count(*)::integer AS count FROM step5_live_sessions WHERE departure_id=$1 AND ended_at IS NULL',
+      [raceTrip.departureId],
+    )).count, 0, 'racing return and admin verification leave no active live session');
+  } finally {
+    await gate.query('ROLLBACK').catch(() => {});
+    gate.release();
+  }
+
+  const startRaceTrip = await createDeparture(captain, 'in_progress', true);
+  const startRaceStarted = await request(
+    'POST', `/step5/departures/${startRaceTrip.departureId}/live/start`, captain.token, {},
+  );
+  check(startRaceStarted.status, 201, 'start-race fixture starts a live session');
+  const startRaceReport = await request(
+    'POST', `/step5/departures/${startRaceTrip.departureId}/live-reports`, reporter.token,
+    { reason: 'wrong_account', note: 'admin/start lock-order race fixture' },
+  );
+  check(startRaceReport.status, 201, 'start-race fixture records a pending report');
+  const startRaceSession = await scalar(
+    'SELECT id FROM step5_live_sessions WHERE departure_id=$1 AND ended_at IS NULL',
+    [startRaceTrip.departureId],
+  );
+  const startGate = await pool.connect();
+  try {
+    await startGate.query('BEGIN');
+    await startGate.query(
+      'SELECT id FROM step5_live_sessions WHERE id=$1 FOR UPDATE',
+      [startRaceSession.id],
+    );
+    const adminStartRace = request(
+      'POST', `/admin/step5/live-reports/${startRaceReport.body.id}/decision`, null,
+      { decision: 'false_verified' }, testConfig.adminPassword,
+    );
+    await waitForBlockedQuery('step5_live_reports r JOIN step5_live_sessions l',
+      'admin/start decision waiting at report/session barrier');
+    const liveStartRace = request(
+      'POST', `/step5/departures/${startRaceTrip.departureId}/live/start`, captain.token, {},
+    );
+    await waitForBlockedQuery(
+      'FROM departures d JOIN captain_profiles cp ON cp.user_id=d.captain_user_id',
+      'new live start waiting behind admin departure lock',
+    );
+    await startGate.query('COMMIT');
+    const [adminStartResult, liveStartResult] = await Promise.all([
+      adminStartRace,
+      liveStartRace,
+    ]);
+    check(adminStartResult.status, 200, 'admin verification and live start do not deadlock');
+    check(adminStartResult.body.processingStatus, 'false_verified',
+      'admin/start race keeps its verified report status');
+    check(liveStartResult.status, 201, 'live start proceeds after the admin decision');
+    check((await scalar(
+      'SELECT count(*)::integer AS count FROM step5_live_sessions WHERE departure_id=$1 AND ended_at IS NULL',
+      [startRaceTrip.departureId],
+    )).count, 1, 'admin/start race leaves at most one active session');
+    check((await scalar(
+      'SELECT count(*)::integer AS count FROM step5_captain_live_incident_facts WHERE departure_id=$1',
+      [startRaceTrip.departureId],
+    )).count, 1, 'admin/start race writes one consistent incident fact');
+  } finally {
+    await startGate.query('ROLLBACK').catch(() => {});
+    startGate.release();
+  }
 
   console.info(`Step 5 live acceptance passed (${assertions} assertions).`);
 } finally {

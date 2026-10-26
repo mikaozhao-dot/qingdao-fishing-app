@@ -1,6 +1,6 @@
 # 约钓者｜青岛海钓拼船
 
-iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；第 2 步支持发班与活动浏览；第 3 步接通选位、锁位、下单、沙盒支付和保险适配；第 5 步切片 1 提供返航后渔获、评价事实与个人鱼种图鉴；切片 2 大鱼榜按创始人选定的航次最大个体口径修订，获 Dot 限定沙盒技术通过并由创始人限定范围验收关闭；切片 3 直播状态任务已下达，Dot 复核通过前不进入第 6 步，真实资金、保险和生产部署仍未授权。
+iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；第 2 步支持发班与活动浏览；第 3 步接通选位、锁位、下单、沙盒支付和保险适配；第 5 步切片 1 提供返航后渔获、评价事实与个人鱼种图鉴；切片 2 大鱼榜按创始人选定的航次最大个体口径修订，获 Dot 限定沙盒技术通过并由创始人限定范围验收关闭；切片 3 直播状态实现和同 SHA CI 已完成，等待 Dot 定点复核；复核通过前不进入第 6 步，真实资金、保险和生产部署仍未授权。
 
 ## 仓库结构
 
@@ -48,6 +48,8 @@ flutter run
 
 第 5 步切片 1（返航后渔获双源回填、结构化返港评价、船长/船况分离事实与个人鱼种图鉴）的实现与验收状态见 `docs/step5-slice1-delivery-receipt-2026-10-26.md`；数据口径和新增表见 `docs/data-model-step5-slice1-addendum.md`。代码 SHA `a3785c4` 已获 Dot 限定沙盒技术复核通过，双源分歧 B 与复订口径 A 已由创始人批准；整切片产品验收仍未完成，未获明确验收前不进入下一切片。
 
+第 5 步切片 3 直播状态实现与验收证据见 `docs/step5-slice3-delivery-receipt-2026-10-26.md`，字段与状态机增量见 `docs/data-model-step5-slice3-addendum.md`。代码 SHA `09129e8e18c1dbcfe0c9b8a028541b86ecd03580` 的数据库验收、Flutter 测试与分析、iOS 模拟器和 Android APK CI 均已通过；Dot 定点复核待完成，复核通过前不进入第 6 步。
+
 ## 关键文件
 
 - `docs/codex-dev-step0-brief-v1.md`、`docs/dev-step0-kickoff-2026-10-23.md`：第 0 步任务与开工令。
@@ -59,7 +61,7 @@ flutter run
 - `docs/data-model-step2-addendum.md`：只记录第 2 步新增字段与座位库存快照口径。
 - `docs/data-model-step5-slice1-addendum.md`、`docs/step5-slice1-delivery-receipt-2026-10-26.md`：第 5 步切片 1 数据模型、口径假设、验证证据与 Dot 定点复核请求。
 - `docs/muse-to-luna-step5-slice2-brief-2026-10-26.md`、`docs/muse-to-luna-step5-slice2-revision-order-2026-10-26.md`、`docs/step5-slice2-start-ack-2026-10-26.md`、`docs/step5-slice2-revision-start-ack-2026-10-26.md`、`docs/step5-slice2-delivery-receipt-2026-10-26.md`：第 5 步切片 2 大鱼榜原任务、C 修订令、开工回执、验收证据与 Dot 限定技术通过及创始人限定范围验收记录。
-- `docs/muse-to-luna-step5-slice3-brief-2026-10-26.md`、`docs/step5-slice3-start-ack-2026-10-26.md`：第 5 步切片 3 直播状态任务与开工回执；Dot 复核通过前不进入第 6 步。
+- `docs/muse-to-luna-step5-slice3-brief-2026-10-26.md`、`docs/step5-slice3-start-ack-2026-10-26.md`、`docs/data-model-step5-slice3-addendum.md`、`docs/step5-slice3-delivery-receipt-2026-10-26.md`：第 5 步切片 3 直播状态任务、开工回执、数据模型增量、同 SHA 验收证据与 Dot 定点复核请求；复核通过前不进入第 6 步。
 - `docs/codex-seat-map-v04-rework-order-2026-10-24.md`、`docs/muse-seat-premium-scope-reply-2026-10-24.md`、`docs/codex-seat-map-implementation-order-2026-10-24.md`：V04 草图返工、船尾四位同额加价和当前执行边界；2026-10-25 创始人最新选位参考追加在 V04 返工令末尾。
 - `docs/seat-map-v04-implementation-receipt-2026-10-24.md`、`docs/seat-map-spatial-redesign-status-2026-10-24.md`、`docs/step3-build-notes.md`、`docs/step3-review-request-2026-10-24.md`：选位页历史回执、当前返工进度、构建证据与 dot 复核请求。
 - `docs/v04-targeted-repair-followup-2026-10-25.md`：V04 旧航次座位快照、部分配额船图和触控重叠定点修复，以及待 Muse / dot 复核的证据。

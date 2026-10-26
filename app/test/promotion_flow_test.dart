@@ -1,9 +1,12 @@
 import 'dart:convert';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:qingdao_fishing_app/api_client.dart';
 import 'package:qingdao_fishing_app/promotion_flow.dart';
 
@@ -113,4 +116,93 @@ void main() {
       expect(find.text('待审核'), findsOneWidget);
     },
   );
+
+  testWidgets('poster share receives a generated PNG file', (tester) async {
+    ShareParams? shared;
+    Future<Uint8List?>? encodedPoster;
+    Step1Api.clientOverride = MockClient((request) async {
+      expect(request.url.path, '/promotions/me');
+      return http.Response(
+        jsonEncode({
+          'codes': [
+            {
+              'id': 'code-1',
+              'code': 'AB12CD34',
+              'channel': 'member',
+              'status': 'active',
+              'scanCount': 0,
+              'attributionCount': 0,
+              'validMemberCount': 0,
+              'landingUrl': 'https://example.test/p/AB12CD34?source=qr',
+            },
+          ],
+          'totals': {},
+          'commissions': [],
+          'attributions': [],
+          'payouts': [],
+        }),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PromotionCenterPage(
+          token: 'session-token',
+          sharePoster: (params) async {
+            shared = params;
+            return ShareResult.unavailable;
+          },
+          posterImageEncoder: (boundary) =>
+              encodedPoster = tester.runAsync(() async {
+                final image = await boundary.toImage(pixelRatio: 3);
+                try {
+                  final data = await image.toByteData(
+                    format: ui.ImageByteFormat.png,
+                  );
+                  if (data == null) throw StateError('PNG encoding failed');
+                  return Uint8List.view(
+                    data.buffer,
+                    data.offsetInBytes,
+                    data.lengthInBytes,
+                  );
+                } finally {
+                  image.dispose();
+                }
+              }),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final shareButton = find.text('保存 / 分享海报');
+    final shareButtonWidget = find.ancestor(
+      of: shareButton,
+      matching: find.byType(OutlinedButton),
+    );
+    await tester.ensureVisible(shareButtonWidget);
+    await tester.pumpAndSettle();
+    await tester.tap(shareButtonWidget);
+    await tester.pump();
+    expect(encodedPoster, isNotNull);
+    await encodedPoster;
+    await tester.pumpAndSettle();
+    expect(shared, isNotNull);
+    expect(shared!.files, hasLength(1));
+    final imageFile = shared!.files!.single;
+    expect(imageFile.mimeType, 'image/png');
+    expect(shared!.fileNameOverrides, ['约钓者-member-推广海报.png']);
+    final bytes = await imageFile.readAsBytes();
+    expect(bytes.take(8).toList(), [
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a,
+    ]);
+    expect(bytes.length, greaterThan(1000));
+  });
 }

@@ -27,6 +27,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>FlutterDeepLinkingEnabled</key>
+	<false/>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于上传船舶外观、甲板、船舱、厕所和船长资质照片。</string>
 	<key>NSLocalNetworkUsageDescription</key>

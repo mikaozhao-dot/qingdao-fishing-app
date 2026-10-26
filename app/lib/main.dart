@@ -95,7 +95,17 @@ class QingdaoFishingApp extends StatelessWidget {
 enum AppRole { angler, captain }
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key});
+  const AppShell({
+    super.key,
+    this.promotionLinkStream,
+    this.initialPromotionLink,
+  });
+
+  @visibleForTesting
+  final Stream<Uri>? promotionLinkStream;
+
+  @visibleForTesting
+  final Future<Uri?> Function()? initialPromotionLink;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -133,12 +143,12 @@ class _AppShellState extends State<AppShell> {
   @override
   void initState() {
     super.initState();
-    _deepLinkSubscription = _appLinks.uriLinkStream.listen(
-      _receivePromotionLink,
-      onError: (_) {},
-    );
-    _appLinks
-        .getInitialLink()
+    _deepLinkSubscription =
+        (widget.promotionLinkStream ?? _appLinks.uriLinkStream).listen(
+          _receivePromotionLink,
+          onError: (_) {},
+        );
+    (widget.initialPromotionLink?.call() ?? _appLinks.getInitialLink())
         .then((uri) {
           if (uri != null) _receivePromotionLink(uri);
         })
@@ -167,23 +177,43 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _claimPendingPromotion() async {
-    final visitorToken = _pendingPromotionVisitorToken;
-    final token = _sessionToken;
-    if (visitorToken == null ||
-        token == null ||
-        _claimingPromotion ||
-        visitorToken == _claimedPromotionVisitorToken) {
+    if (_sessionToken == null || _claimingPromotion) {
       return;
     }
     _claimingPromotion = true;
     try {
-      await Step1Api.post('/promotions/attribution/claim', {
-        'visitorToken': visitorToken,
-      }, token: token);
-      _claimedPromotionVisitorToken = visitorToken;
-      _pendingPromotionVisitorToken = null;
-    } catch (_) {
-      // Keep the referral until the user is authenticated and the API is reachable.
+      while (mounted && _sessionToken != null) {
+        final visitorToken = _pendingPromotionVisitorToken;
+        final token = _sessionToken;
+        if (visitorToken == null) break;
+        if (visitorToken == _claimedPromotionVisitorToken) {
+          if (_pendingPromotionVisitorToken == visitorToken) {
+            _pendingPromotionVisitorToken = null;
+          }
+          continue;
+        }
+
+        Map<String, dynamic> result;
+        try {
+          result = await Step1Api.post('/promotions/attribution/claim', {
+            'visitorToken': visitorToken,
+          }, token: token);
+        } catch (_) {
+          // Retain this referral for a later retry if the request failed.
+          if (_pendingPromotionVisitorToken == visitorToken) break;
+          continue;
+        }
+
+        final terminal =
+            result['claimed'] == true ||
+            result['reason'] == 'already_attributed';
+        if (terminal) _claimedPromotionVisitorToken = visitorToken;
+        if (_pendingPromotionVisitorToken == visitorToken) {
+          _pendingPromotionVisitorToken = null;
+        }
+        if (_pendingPromotionVisitorToken == null) break;
+        // A newer deep link arrived while this claim was in flight; process it next.
+      }
     } finally {
       _claimingPromotion = false;
     }

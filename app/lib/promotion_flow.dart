@@ -58,6 +58,7 @@ String _attributionStatus(String status) => switch (status) {
   'self_referral' => '自推排除',
   'existing_buyer' => '已有成交记录',
   'refunded' => '退款后无佣金',
+  'identity_already_qualified' => '实名资格已使用',
   _ => status,
 };
 
@@ -69,11 +70,18 @@ class PromotionCenterPage extends StatefulWidget {
   const PromotionCenterPage({
     required this.token,
     this.onRequireLogin,
+    this.sharePoster,
+    this.posterImageEncoder,
     super.key,
   });
 
   final String? token;
   final VoidCallback? onRequireLogin;
+  @visibleForTesting
+  final Future<ShareResult> Function(ShareParams params)? sharePoster;
+  @visibleForTesting
+  final Future<Uint8List?> Function(RenderRepaintBoundary boundary)?
+  posterImageEncoder;
 
   @override
   State<PromotionCenterPage> createState() => _PromotionCenterPageState();
@@ -220,7 +228,13 @@ class _PromotionCenterPageState extends State<PromotionCenterPage> {
                   if (codes.isEmpty)
                     const _EmptyCard(text: '登录后会自动生成会员推广码。')
                   else
-                    ...codes.map((code) => _PromotionCodeCard(code: code)),
+                    ...codes.map(
+                      (code) => _PromotionCodeCard(
+                        code: code,
+                        sharePoster: widget.sharePoster,
+                        posterImageEncoder: widget.posterImageEncoder,
+                      ),
+                    ),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -459,8 +473,15 @@ class _SectionHeading extends StatelessWidget {
 }
 
 class _PromotionCodeCard extends StatefulWidget {
-  const _PromotionCodeCard({required this.code});
+  const _PromotionCodeCard({
+    required this.code,
+    this.sharePoster,
+    this.posterImageEncoder,
+  });
   final Map<String, dynamic> code;
+  final Future<ShareResult> Function(ShareParams params)? sharePoster;
+  final Future<Uint8List?> Function(RenderRepaintBoundary boundary)?
+  posterImageEncoder;
 
   @override
   State<_PromotionCodeCard> createState() => _PromotionCodeCardState();
@@ -478,33 +499,27 @@ class _PromotionCodeCardState extends State<_PromotionCodeCard> {
       await WidgetsBinding.instance.endOfFrame;
       final renderObject = _posterKey.currentContext?.findRenderObject();
       if (renderObject is! RenderRepaintBoundary) throw Exception('海报还在准备，请重试');
-      final image = await renderObject.toImage(pixelRatio: 3);
-      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      image.dispose();
+      final bytes = widget.posterImageEncoder == null
+          ? await _encodePoster(renderObject)
+          : await widget.posterImageEncoder!(renderObject);
       if (bytes == null) throw Exception('海报生成失败');
       if (!mounted) return;
       final fileName = '约钓者-${widget.code['channel']}-推广海报.png';
       final box = context.findRenderObject() as RenderBox?;
-      await SharePlus.instance.share(
-        ShareParams(
-          title: '约钓者推广海报',
-          files: [
-            XFile.fromData(
-              Uint8List.view(
-                bytes.buffer,
-                bytes.offsetInBytes,
-                bytes.lengthInBytes,
-              ),
-              mimeType: 'image/png',
-              name: fileName,
-            ),
-          ],
-          fileNameOverrides: [fileName],
-          sharePositionOrigin: box == null
-              ? null
-              : box.localToGlobal(Offset.zero) & box.size,
-        ),
+      final shareParams = ShareParams(
+        title: '约钓者推广海报',
+        files: [XFile.fromData(bytes, mimeType: 'image/png', name: fileName)],
+        fileNameOverrides: [fileName],
+        sharePositionOrigin: box == null
+            ? null
+            : box.localToGlobal(Offset.zero) & box.size,
       );
+      final sharePoster = widget.sharePoster;
+      if (sharePoster == null) {
+        await SharePlus.instance.share(shareParams);
+      } else {
+        await sharePoster(shareParams);
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -515,6 +530,21 @@ class _PromotionCodeCardState extends State<_PromotionCodeCard> {
       }
     } finally {
       if (mounted) setState(() => _sharing = false);
+    }
+  }
+
+  Future<Uint8List?> _encodePoster(RenderRepaintBoundary boundary) async {
+    final image = await boundary.toImage(pixelRatio: 3);
+    try {
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) return null;
+      return Uint8List.view(
+        data.buffer,
+        data.offsetInBytes,
+        data.lengthInBytes,
+      );
+    } finally {
+      image.dispose();
     }
   }
 

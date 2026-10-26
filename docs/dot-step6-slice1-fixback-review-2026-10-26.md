@@ -1,5 +1,8 @@
 # Dot 独立定点复核：Step 6 切片 1 修复回单（2026-10-26）
 
+> 最新状态见文末“增量复核：4d75e579”：原 R1 筛选已修正，升级验收待交；以下首轮结论保留为历史，不替代最新增量。
+
+
 ## 结论：暂不整体通过，R1 迁移漏项与 R4 原生链路补证仍开放
 
 给 Muse / Luna：本轮实读固定代码 `6da12f70d63c3347771d2f4ebf20bec6e280b0ce`、迁移、用例和四个 CI job 原始日志。R2 可关闭；R3 原两条误报反例可关闭；R1 新写入路径已有修复，但升级迁移仍漏掉可恢复的历史资格；R4 配置修复通过，原要求的原生端到端证据仍缺，不能整体关闭。本结论不批准切片 2、产品验收、真实资金/打款或生产。
@@ -68,3 +71,42 @@ Muse 请同步本结论：**R1 保留、R2 关闭、R3 原误报反例关闭、R
 H5 免下载首单仍未交付/未验收；本轮不扩围实现整套 H5。退款重订 A/B 仍待创始人选择，marina 是正本已有渠道而非新待裁定项。切片不关闭、不进入切片 2。
 
 本次仅独立静态审查与 CI 原始日志核查，未在本执行环境重跑空库、升级 fixture、Flutter、真机或交互模拟器，未做截图视觉验收。以上升级缺陷是源码可确定的路径，不冒称已在运行环境复现。
+
+## 增量复核：`4d75e579`（2026-10-26 16:42 UTC / 2026-10-27 00:42 CST）
+
+**当前结论：R1 原静态漏种条件已被代码针对修正，升级验收仍待交；R4 原生交互补证仍开放，暂不整体通过。** 不应继续把上文针对 `6da12f70` 的“仅按当前金额回填”描述为新 SHA 仍未修改，也不应因新 CI 绿色提前关闭 R1。
+
+### 提交及交付阶段
+
+已核 main 为 [`4d75e5795734592847adc490c86ac3d29fa573f7`](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/4d75e5795734592847adc490c86ac3d29fa573f7)。该代码提交只改 `app/pubspec.yaml`、`app/pubspec.lock` 和新增 migration 023；未改业务服务、测试脚本或交付回执。
+
+[本轮开工回执](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4d75e5795734592847adc490c86ac3d29fa573f7/docs/step6-slice1-r1-upgrade-fix-ack-2026-10-26.md) 明确分三批提交：开工范围、实现代码、升级 fixture/回归/交付回执。因此当前是中间代码批次，不把尚待下一笔提交的证据描述成“最终交付已失败”。交付回执仍只记录 `6da12f70`，尚未收到这一批的新完整复核请求。[Muse 对 1db3ec92 的“通过”](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4d75e5795734592847adc490c86ac3d29fa573f7/docs/ui-design-review-1db3ec92.md) 仅为旧证据文档补齐，不是本次新代码或 R1/R4 的技术放行。
+
+### R1：代码层面认可的进展与关闭条件
+
+[023 全文](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4d75e5795734592847adc490c86ac3d29fa573f7/server/migrations/023_backfill_historic_promotion_identity_qualifications.sql#L1-L24) 将筛选改为当前正余额、非空 `qualified_at`、或历史正额 `commission_created` 事件三者之一，并从仍已核验用户取身份摘要；不再漏掉“曾正额计佣、冻结期全退归零、原身份仍在”的原反例。新的编号迁移可作用于已应用 022 的库，且 `ON CONFLICT DO NOTHING` 保留已有消费事实，满足不只修改初始化 SQL 的方向。
+
+**未关闭的部分是证据，不是重复要求重写这段筛选。** 最新源码比对无新增升级 fixture；实读 `step6-promotion-acceptance.mjs` 也没有 022→023 升级测试。本次 CI 在验收数据生成之前先应用全部迁移，故“023 应用成功 + 182 项通过”不能证明有历史数据的回填反例已经执行。
+
+沿既定计划补交即可：022 状态下的仍正额、历史正额后全退、从未计佣三组；验证 023 的选中/排除及重复执行不增行，再走 A/X→A/Y→B/X 的实际 API 拒绝链。历史事件备用路径最好单独覆盖，避免只依赖 `qualified_at` 而遗漏该分支。旧身份已经丢失的 Q1 风险边界不因 023 自动消失；不据此改变退款重订 A/B。
+
+### app_links 跨主版本升级对 R4 的影响
+
+依赖约束由 `^6.4.1` 改为 `^7.0.0`，锁文件实际为 **7.2.2**，并非只改迁移。已查看维护者[官方 changelog](https://pub.dev/packages/app_links/changelog)：7.x 涉及 iOS scene 生命周期与最低 SDK 更新；7.2.2 更改早期链接缓冲、Android Activity 重建重发以及 iOS 链接/engine 行为。官方[7.x iOS 配置文档](https://github.com/llfbandit/app_links/blob/main/doc/README_ios_7.md)仍要求关闭 Flutter 默认深链，支持 application/scene 两种生命周期，不能因为升级而移除既有 false 配置。
+
+CI 用 Flutter **3.47.8**，双端构建与既有 26 项回归成功，未见这批提交带来的构建阻断；但注入式 widget 仍绕过真实插件分发。升级既不能证明 R4 已完成，也不能据此断言发生了新的原生故障。R4 后续证据应绑定 **7.2.2 的当前构建 SHA**，至少包含原要求的 H5→冷/热启动→token→登录→真实 claim，并检查重复链接/重建后不重复归因；无需另开全套新业务范围。
+
+### 新 SHA 原始 CI，已独立实读
+
+| 原始日志 | 核实结果 |
+| --- | --- |
+| [数据库 run 40360278983 / job 121703529329](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40360278983/job/121703529329) | 实际检出完整 `4d75e579…`；023 应用成功；Step 4 **710**、Step 5 **133**、直播 **77**、推广 **182** 项 |
+| [Flutter job 121703529519](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40360278886/job/121703529519) | 同 SHA；**26 tests passed**，**No issues found** |
+| [iOS job 121703529051](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40360278886/job/121703529051) | 同 SHA；模拟器构建成功 |
+| [Android job 121703529704](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40360278886/job/121703529704) | 同 SHA；debug APK 构建成功 |
+
+710 是本次新 run 的实际输出，不覆盖此前 run 的 709，也不据此推断旧差额原因。
+
+### 给 Muse / Luna 的当前状态
+
+请保留原开工计划，提交剩余升级 fixture、对应执行结果和新交付回执；R4 仍按实际原生证据收口。R2/R3 本次无相应实现改动且回归通过，维持上次限定结论。本增量仅静态代码/文档审查、官方依赖文档核查和原始 CI 实读，未独立运行升级库或原生交互。切片不关闭、不进入切片 2，不构成产品验收、业务规则变更或生产授权。

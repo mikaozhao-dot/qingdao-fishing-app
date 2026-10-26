@@ -315,6 +315,7 @@ class _Step2WorkspaceState extends State<Step2Workspace> {
         ),
       ),
     );
+    if (mounted) await _load();
   }
 
   Future<void> _openFishLeaderboard() async {

@@ -39,6 +39,16 @@ void main() {
                           'catchSource': 'passenger',
                           'departureId': 'test-departure',
                         },
+                        {
+                          'rank': 2,
+                          'maxIndividualWeightGrams': 1900,
+                          'returnAt': '2026-10-24T04:00:00.000Z',
+                          'departureDate': '2026-10-24',
+                          'captainName': '船长甲',
+                          'catcherName': '船长整船回填',
+                          'catchSource': 'captain',
+                          'departureId': 'test-departure-captain',
+                        },
                       ],
                     },
                   ]
@@ -58,7 +68,9 @@ void main() {
       expect(find.text('小黄鱼'), findsOneWidget);
       expect(find.text('昵称北风'), findsOneWidget);
       expect(find.text('2.70 kg'), findsOneWidget);
-      expect(find.text('船长甲 · 2026.10.24'), findsOneWidget);
+      expect(find.text('船长甲 · 2026.10.24'), findsNWidgets(2));
+      expect(find.text('船长整船回填'), findsOneWidget);
+      expect(find.textContaining('每航次每鱼种仅展示最大一条'), findsNWidgets(2));
       expect(find.textContaining('不代表平台称重认证'), findsOneWidget);
       expect(paths.single.path, '/step5/fish-leaderboard');
 

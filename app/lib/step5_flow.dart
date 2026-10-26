@@ -1144,7 +1144,7 @@ class _Step5FishLeaderboardPageState extends State<Step5FishLeaderboardPage> {
         children: [
           const _Step5Card(
             title: '每一次好手气，都值得被看见',
-            body: '按鱼种与返航月份展示单次最大个体重量前 20 名。',
+            body: '每航次每鱼种仅展示最大一条，按返航月份和鱼种分榜，每榜前 20 名。',
             footnote: '数据来自船长与钓友的渔获回填，不代表平台称重认证。',
           ),
           const SizedBox(height: 14),
@@ -1201,7 +1201,7 @@ class _Step5FishLeaderboardPageState extends State<Step5FishLeaderboardPage> {
             ),
           const SizedBox(height: 14),
           const Text(
-            '排名按最大个体重量排序，同重量按先记录者优先。仅展示单次钓获，不对船长或钓友排名。',
+            '排名按最大个体重量排序，同重量按先记录者优先。每航次每鱼种仅展示最大一条，不对船长或钓友排名。',
             style: TextStyle(
               color: FishingTokens.muted,
               fontSize: 11,
@@ -1292,7 +1292,7 @@ class _LeaderboardFishCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '${item['catcherName'] ?? '船长回填'}',
+                          '${item['catcherName'] ?? '船长整船回填'}',
                           style: const TextStyle(
                             fontWeight: FontWeight.w700,
                             fontSize: 13,

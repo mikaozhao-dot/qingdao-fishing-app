@@ -525,13 +525,98 @@ try {
   check(JSON.stringify(clearedBoard.body).includes(leaderAngler.user.identityNumber), false,
     'leaderboard response never exposes a passenger identity number');
 
+  const disputedAngler = { user: await createUser() };
+  const clearAngler = { user: await createUser() };
+  await pool.query('UPDATE users SET display_name=$1 WHERE id=$2',
+    ['争议钓友甲', disputedAngler.user.id]);
+  await pool.query('UPDATE users SET display_name=$1 WHERE id=$2',
+    ['无争议钓友乙', clearAngler.user.id]);
+  const scopeTrip = await createTrip({
+    captain, boatId, dateDaysAgo: 3, passengers: [disputedAngler, clearAngler],
+  });
+  await setTripReturnAt(scopeTrip, new Date(localMonthStart(3).getTime() + 8 * 86400000));
+  const scopeCaptainReport = await request(
+    'POST', `/step5/departures/${scopeTrip.departureId}/captain-catch`, captain.token,
+    { outcome: 'caught', items: [
+      { fishCode: 'yellow_croaker', quantity: 10, maxIndividualWeightGrams: 5000 },
+      { fishCode: 'sea_bass', quantity: 10, maxIndividualWeightGrams: 3500 },
+      { fishCode: 'octopus', quantity: 10, maxIndividualWeightGrams: 3300 },
+    ] },
+  );
+  check(scopeCaptainReport.status, 201, 'C review scenario stores a ship-level multi-species source');
+  const disputedOwnReport = await request(
+    'POST', `/step5/departures/${scopeTrip.departureId}/passenger-catch`, disputedAngler.user.token,
+    { catchReport: { outcome: 'caught', items: [
+      { fishCode: 'yellow_croaker', quantity: 1, maxIndividualWeightGrams: 4800 },
+      { fishCode: 'octopus', quantity: 1, maxIndividualWeightGrams: 3600 },
+    ] } },
+  );
+  check(disputedOwnReport.status, 201, 'disputed angler can record multiple species before raising an objection');
+  check(disputedOwnReport.body.reconciliation.status, 'awaiting_passenger',
+    'own-source submission alone remains outside pending review when counts fit the captain report');
+  const clearOwnReport = await request(
+    'POST', `/step5/departures/${scopeTrip.departureId}/passenger-catch`, clearAngler.user.token,
+    { catchReport: { outcome: 'caught', items: [
+      { fishCode: 'yellow_croaker', quantity: 2, maxIndividualWeightGrams: 4000 },
+      { fishCode: 'sea_bass', quantity: 2, maxIndividualWeightGrams: 3500 },
+    ] } },
+  );
+  check(clearOwnReport.status, 201, 'uncontested passenger can record independent species sources');
+  check(clearOwnReport.body.reconciliation.status, 'awaiting_passenger',
+    'uncontested passenger remains outside the other passenger pending state');
+
+  const scopeBeforeDispute = await leaderboardGet(monthKey(3));
+  check(fishBoard(scopeBeforeDispute, 'yellow_croaker')?.items.map((item) => [item.catcherName, item.maxIndividualWeightGrams]),
+    [['船长整船回填', 5000]], 'C keeps one trip/species maximum and labels a ship-level winning source');
+  check(fishBoard(scopeBeforeDispute, 'sea_bass')?.items.map((item) => [item.catcherName, item.maxIndividualWeightGrams]),
+    [['船长整船回填', 3500]], 'equal trip/species weights keep the earlier captain source as winner');
+  check(fishBoard(scopeBeforeDispute, 'octopus')?.items.map((item) => [item.catcherName, item.maxIndividualWeightGrams]),
+    [['争议钓友甲', 3600]], 'passenger can win a species when their source has the largest weight');
+  check(fishBoard(scopeBeforeDispute, 'yellow_croaker')?.items.length, 1,
+    'same trip and species with captain plus two passengers produces one C entry');
+
+  const actualDispute = await request(
+    'POST', `/step5/departures/${scopeTrip.departureId}/passenger-catch`, disputedAngler.user.token,
+    { captainResponse: { action: 'dispute' } },
+  );
+  check(actualDispute.status, 201, 'passenger dispute is submitted through the real endpoint');
+  check(actualDispute.body.reconciliation.status, 'pending_review',
+    'real passenger objection transitions that passenger to pending_review');
+  const disputedState = await request(
+    'GET', `/step5/departures/${scopeTrip.departureId}/me`, disputedAngler.user.token,
+  );
+  const clearState = await request(
+    'GET', `/step5/departures/${scopeTrip.departureId}/me`, clearAngler.user.token,
+  );
+  check(disputedState.body.reconciliation, 'pending_review', 'disputed passenger sees their own pending state');
+  check(clearState.body.reconciliation, 'awaiting_passenger', 'other passenger state remains unaffected');
+
+  const scopeDuringDispute = await leaderboardGet(monthKey(3));
+  check(fishBoard(scopeDuringDispute, 'yellow_croaker')?.items.map((item) => [item.catcherName, item.maxIndividualWeightGrams]),
+    [['无争议钓友乙', 4000]], 'after dispute removes captain and disputed passenger, the uncontested passenger takes the maximum');
+  check(fishBoard(scopeDuringDispute, 'sea_bass')?.items.map((item) => [item.catcherName, item.maxIndividualWeightGrams]),
+    [['无争议钓友乙', 3500]], 'other passenger remains listed for their uncontested species');
+  check(fishBoard(scopeDuringDispute, 'octopus'), undefined,
+    'dispute excludes the disputed passenger and ship source across every species');
+
+  await pool.query(
+    `UPDATE step5_catch_reconciliations SET status='confirmed'
+     WHERE departure_id=$1 AND passenger_id=$2`,
+    [scopeTrip.departureId, scopeTrip.orderIds[0].passengerId],
+  );
+  const scopeAfterRestore = await leaderboardGet(monthKey(3));
+  check(fishBoard(scopeAfterRestore, 'yellow_croaker')?.items.map((item) => [item.catcherName, item.maxIndividualWeightGrams]),
+    [['船长整船回填', 5000]], 'isolated state restoration recomputes the ship-level maximum');
+  check(fishBoard(scopeAfterRestore, 'octopus')?.items.map((item) => [item.catcherName, item.maxIndividualWeightGrams]),
+    [['争议钓友甲', 3600]], 'restored source re-enters its species board after recalculation');
+
   const noWeightTrip = await createTrip({ captain, boatId, dateDaysAgo: 3 });
-  await setTripReturnAt(noWeightTrip, new Date(localMonthStart(1).getTime() + 6 * 86400000));
+  await setTripReturnAt(noWeightTrip, new Date(localMonthStart(4).getTime() + 6 * 86400000));
   check((await request(
     'POST', `/step5/departures/${noWeightTrip.departureId}/captain-catch`, captain.token,
     { outcome: 'caught', items: [{ fishCode: 'octopus', quantity: 3 }] },
   )).status, 201, 'catch can be saved without an optional individual weight');
-  const noWeightBoard = await leaderboardGet(monthKey(1));
+  const noWeightBoard = await leaderboardGet(monthKey(4));
   check(fishBoard(noWeightBoard, 'octopus'), undefined,
     'records without an individual weight do not create leaderboard entries');
 
@@ -586,7 +671,7 @@ try {
   const emptyBoard = await leaderboardGet(monthKey(24));
   check(emptyBoard.body.boards, [], 'month with no weighted catches returns a true empty state');
 
-  console.info(`Step 5 acceptance passed: ${assertions} assertions; includes slice 2 leaderboard, pending-review, month-boundary, tie-order, top-20, empty-state and privacy cases.`);
+  console.info(`Step 5 acceptance passed: ${assertions} assertions; includes slice 2 C grouping, source attribution, dispute downranking and restoration, month-boundary, tie-order, top-20, empty-state and privacy cases.`);
 } finally {
   await app.close();
   await pool.end();

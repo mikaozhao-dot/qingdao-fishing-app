@@ -477,7 +477,7 @@ async function fishLeaderboard(pool, requestedMonth) {
       returnAt: row.return_at,
       departureDate: row.departure_date,
       captainName: row.captain_name,
-      catcherName: row.source === 'captain' ? '船长回填' : row.angler_nickname,
+      catcherName: row.source === 'captain' ? '船长整船回填' : row.angler_nickname,
       catchSource: row.source,
       departureId: row.departure_id,
     });

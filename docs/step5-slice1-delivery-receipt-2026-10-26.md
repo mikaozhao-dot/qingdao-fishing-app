@@ -110,3 +110,34 @@ completedDeparture目前普通SELECT，两种源写入没有共同航次锁；�
 ### 待创始人决定
 
 双源分歧及复订队列的简短选项已补入现有 `docs/current-rules-index.md` 的“待批/待核实”清单；临时实现口径不是产品批准。请在常规决策时选择，Dot 的技术复核不代替创始人批准。
+
+
+## dot 修复版独立定点复核（2026-10-26，给 Muse / Luna）：限定沙盒技术复核通过
+
+**固定代码 `a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0` 的本轮 S5-R1、S5-R2、必需补证及并发修复通过限定沙盒技术复核，关闭 `8b834d9449c10a94b1d2a131337fd50354fc8aa7` 对应技术阻断。** 本结论基于固定 SHA 源码、实际用例与 GitHub Actions 原始日志，不仅依据交付自报。后续文档提交至 `8316ca2748814ed31a43632ed9ecac77bdf292a8` 之间未改动待验代码。
+
+### 逐项核验
+
+- **S5-R1 已关闭**：[`app/lib/step5_flow.dart:421–435`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0/app/lib/step5_flow.dart#L421-L435) 仅发送尚未存在的来源。[widget 用例 126–262](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0/app/test/step5_catch_sheet_test.dart#L126-L262) 实际点击两次提交，覆盖先本人渔获后回应、先回应后本人渔获，断言第二次 payload 不含旧块且两类原记录保留；CI 明确执行并通过该用例。
+- **S5-R2 已关闭**：[`step5-routes.js:272–283`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0/server/src/step5-routes.js#L272-L283) 对窗口内全部评价展开标签后统一分组，样本数独立计算。[验收用例 255–277](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0/server/scripts/step5-acceptance.mjs#L255-L277) 覆盖共享标签、多标签、仅船况标签，核对同标签为 2 次及样本数为 3。
+- **必需补证已完成**：新增显式异议、独立补充、图鉴来源、数量高于/低于船长总数及未列鱼种、原记录保留；20 天、89 天与 90.25 天首航样本均有实际乘客，断言成熟队列人数为 3，修正原空 fixture 的覆盖缺口。证据见 [事实与补充用例](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0/server/scripts/step5-acceptance.mjs#L279-L359)、[成熟样本](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0/server/scripts/step5-acceptance.mjs#L194-L202)及[断言](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0/server/scripts/step5-acceptance.mjs#L429-L431)。这些验证现有沙盒实现，不批准临时业务定义，也不声称覆盖恰好 90 天的瞬时边界。
+- **并发修复已关闭本轮风险项**：两种来源写入口在事务内获取相同航次的 `FOR UPDATE` 行锁后再插入与核对。[屏障并发用例 361–388](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0/server/scripts/step5-acceptance.mjs#L361-L388) 断言两请求均等待共享锁、解锁后均返回 201、最终核对为待核对且两条源均保留。该新用例确已在本次数据库 CI 执行通过；此前旧代码风险仍应描述为静态推导，不追认成已动态复现的数据丢失。
+
+### 已核原始 CI 日志与验证限度
+
+下列 job 原始日志均明确检出完整代码 SHA `a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0`：
+
+- [数据库 job 121330494101](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40246976315/job/121330494101)：迁移 `001`–`019` 全部成功；Step 4 **709** 断言、Step 5 **65** 断言通过。
+- [Flutter 测试/分析 job 121330494377](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40246976296/job/121330494377)：新增双顺序提交用例明确通过；**11 tests passed**，分析无问题。
+- [iOS 模拟器 job 121330494420](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40246976296/job/121330494420)与[Android Debug job 121330494124](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40246976296/job/121330494124)：构建成功。
+
+旧提交 `5aed8ec` 的 CI 为 **710/36**，本次为 **709/65**，回执已分开更正。Step 4 验收脚本新旧 blob 均为 `70520d198a820f15a5263f470b1384fc03435e3f`，内容完全相同，**不存在为减少计数而删测**。该脚本[锁位/配额并发后的条件分支 865–884](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/a3785c4b9bcdb68daebcfae3072f2ba711ad8ad0/server/scripts/step4-acceptance.mjs#L865-L884)可决定是否额外执行一次 `expect`，从而产生 709/710 差异；汇总日志未打印具体胜者，dot 不声称已逐次实证这两次运行走了哪一分支。
+
+dot 本次未另起空库独立重跑，亦未做真机目检。widget 提交测试是模拟交互/请求载荷证据，不是设备截图或真机视觉验收；本地 `npm test` 等自报不冒充 dot 独立执行结果。
+
+### 给 Muse / Luna 的状态同步与审批边界
+
+- 请沿本回执更新原任务状态为：**本轮技术阻断已关闭；整切片产品验收与待决业务口径仍未完成**。不另建重复工单，不重开第 4 步或既有保险门禁结论。
+- 双源数量分歧规则、复订观察窗口/首航队列/90 天成熟期/同船长分母仍是 `docs/current-rules-index.md` 的待批选项，最终由创始人决定；本次技术复核不代批、不将其升级为已批准规则。
+- 每类原始来源最多一次、同类更正暂不支持的现状已明示；本轮通过仅确认另一类尚缺来源可以后补，不授权覆盖原文或新增更正规则。
+- **本结论不等于整切片产品验收、真机视觉验收、生产上线或真实资金/保险接入，也不自动授权进入下一切片。** 后续推进仍沿既有任务与创始人决策边界办理。

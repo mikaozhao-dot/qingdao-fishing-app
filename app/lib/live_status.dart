@@ -36,36 +36,65 @@ Future<void> openDouyinProfile(
   if (!context.mounted || opened) return;
   final uri = Uri.tryParse(profileUrl);
   if (uri == null || uri.scheme != 'https') return;
+  String? browserError;
   await showDialog<void>(
     context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: const Text('打开抖音主页'),
-      content: const Text('暂时无法唤起抖音，可复制主页链接或用浏览器打开。'),
-      actions: [
-        TextButton(
-          onPressed: () async {
-            await Clipboard.setData(ClipboardData(text: profileUrl));
-            if (dialogContext.mounted) Navigator.pop(dialogContext);
-            if (context.mounted) {
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('主页链接已复制')));
-            }
-          },
-          child: const Text('复制链接'),
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (dialogBuildContext, setDialogState) => AlertDialog(
+        title: const Text('打开抖音主页'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('暂时无法唤起抖音，可复制主页链接或用浏览器打开。'),
+            if (browserError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                browserError!,
+                style: TextStyle(
+                  color: Theme.of(dialogBuildContext).colorScheme.error,
+                ),
+              ),
+            ],
+          ],
         ),
-        FilledButton(
-          onPressed: () async {
-            try {
-              await launchUrl(uri, mode: LaunchMode.platformDefault);
-            } catch (_) {
-              // The copy action remains available when the browser cannot open it.
-            }
-            if (dialogContext.mounted) Navigator.pop(dialogContext);
-          },
-          child: const Text('浏览器打开'),
-        ),
-      ],
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: profileUrl));
+              if (dialogBuildContext.mounted) Navigator.pop(dialogBuildContext);
+              if (context.mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('主页链接已复制')));
+              }
+            },
+            child: const Text('复制链接'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              var opened = false;
+              try {
+                opened =
+                    await (launch ??
+                        ((value, mode) => launchUrl(value, mode: mode)))(
+                      uri,
+                      LaunchMode.platformDefault,
+                    );
+              } catch (_) {
+                opened = false;
+              }
+              if (!dialogBuildContext.mounted) return;
+              if (opened) {
+                Navigator.pop(dialogBuildContext);
+              } else {
+                setDialogState(() => browserError = '浏览器无法打开，请复制链接重试。');
+              }
+            },
+            child: const Text('浏览器打开'),
+          ),
+        ],
+      ),
     ),
   );
 }

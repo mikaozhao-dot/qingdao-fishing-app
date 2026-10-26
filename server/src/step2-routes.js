@@ -1124,7 +1124,9 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
     const row = await loadDeparture(pool, request.params.id);
     const isPublished = row?.status === 'open' && new Date(row.departure_at) > new Date();
     const isLive = row?.status === 'in_progress' && row.live_session;
-    if (!row || (!isPublished && !isLive)) {
+    const isCaptainTrip = row?.status === 'in_progress'
+      && row.captain_user_id === request.user.id;
+    if (!row || (!isPublished && !isLive && !isCaptainTrip)) {
       return sendError(reply, 404, '活动不存在或已结束');
     }
     const [seats, rig] = await Promise.all([

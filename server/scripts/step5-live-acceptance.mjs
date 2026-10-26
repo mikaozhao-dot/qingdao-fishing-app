@@ -221,6 +221,12 @@ try {
     'GET', `/departures/${manualEndTrip.departureId}`, reporter.token,
   );
   check(hiddenAfterManualEnd.status, 404, 'manual end removes the activity link');
+  const captainTripAfterManualEnd = await request(
+    'GET', `/departures/${manualEndTrip.departureId}`, captain.token,
+  );
+  check(captainTripAfterManualEnd.status, 200, 'captain can still manage their in-progress trip');
+  check(captainTripAfterManualEnd.body.departure.liveStatus, null,
+    'captain view after manual end has no public live badge');
 
   const returningTrip = await createDeparture(captain, 'in_progress', true);
   const returningStart = await request(

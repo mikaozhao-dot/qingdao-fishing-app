@@ -90,6 +90,39 @@ export async function syncPromotionForUser(client, userId) {
   const netTicketFen = calculateNetTicketFen(order);
   const commissionFen = ['cancelled', 'refunded'].includes(order.status)
     ? 0 : calculateCommissionFen(netTicketFen);
+
+  if (commissionFen > 0) {
+    const consumed = await client.query(
+      `INSERT INTO promotion_identity_qualifications
+         (identity_number_hash,user_id,promotion_attribution_id)
+       VALUES ($1,$2,$3)
+       ON CONFLICT DO NOTHING
+       RETURNING user_id,promotion_attribution_id`,
+      [user.identity_number_hash, user.id, attribution.id],
+    );
+    if (!consumed.rowCount) {
+      const existingIdentity = await client.query(
+        `SELECT user_id,promotion_attribution_id
+         FROM promotion_identity_qualifications
+         WHERE user_id=$1 OR identity_number_hash=$2
+         ORDER BY CASE WHEN user_id=$1 THEN 0 ELSE 1 END
+         LIMIT 1`,
+        [user.id, user.identity_number_hash],
+      );
+      const priorConsumption = existingIdentity.rows[0];
+      if (!priorConsumption || priorConsumption.user_id !== user.id
+          || priorConsumption.promotion_attribution_id !== attribution.id) {
+        await client.query(
+          `UPDATE promotion_attributions
+           SET qualification_status='identity_already_qualified'
+           WHERE id=$1 AND qualification_status<>'identity_already_qualified'`,
+          [attribution.id],
+        );
+        return;
+      }
+    }
+  }
+
   await client.query(
     `UPDATE promotion_attributions
      SET order_id=COALESCE(order_id,$2),qualification_status=$3,
@@ -99,7 +132,8 @@ export async function syncPromotionForUser(client, userId) {
   );
 
   let ledgerResult = await client.query(
-    `SELECT id,amount_fen,net_ticket_amount_fen,status,release_at,refund_after_release
+    `SELECT id,amount_fen,net_ticket_amount_fen,status,release_at,refund_after_release,
+            release_refund_baseline_fen
      FROM commission_ledger WHERE promotion_attribution_id=$1 FOR UPDATE`,
     [attribution.id],
   );
@@ -111,12 +145,14 @@ export async function syncPromotionForUser(client, userId) {
           rate_basis_points,status,release_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (promotion_attribution_id) DO NOTHING
-       RETURNING id,amount_fen,net_ticket_amount_fen,status,release_at,refund_after_release`,
+       RETURNING id,amount_fen,net_ticket_amount_fen,status,release_at,refund_after_release,
+                 release_refund_baseline_fen`,
       [attribution.id, attribution.owner_user_id, commissionFen, netTicketFen,
         COMMISSION_RATE_BASIS_POINTS, commissionFen > 0 ? 'frozen' : 'reversed', releaseAt],
     );
     ledgerResult = inserted.rowCount ? inserted : await client.query(
-      `SELECT id,amount_fen,net_ticket_amount_fen,status,release_at,refund_after_release
+      `SELECT id,amount_fen,net_ticket_amount_fen,status,release_at,refund_after_release,
+              release_refund_baseline_fen
        FROM commission_ledger WHERE promotion_attribution_id=$1 FOR UPDATE`,
       [attribution.id],
     );
@@ -143,12 +179,21 @@ export async function syncPromotionForUser(client, userId) {
         commissionFen > 0 ? 'commission_recalculated_before_release' : 'commission_reversed_before_release',
         commissionFen, { orderId: order.id, netTicketAmountFen: netTicketFen });
     }
-  } else if (Number(order.ticket_refunded_fen) > 0 && !ledger.refund_after_release) {
+  } else if (['available', 'withdrawal_pending', 'paid'].includes(ledger.status)
+      && Number(order.ticket_refunded_fen) > Number(ledger.release_refund_baseline_fen)
+      && !ledger.refund_after_release) {
+    const refundDeltaFen = Number(order.ticket_refunded_fen)
+      - Number(ledger.release_refund_baseline_fen);
     await client.query(
       `UPDATE commission_ledger SET refund_after_release=true WHERE id=$1`, [ledger.id],
     );
     await logCommissionEvent(client, ledger.id, 'refund_after_release_exception',
-      Number(ledger.amount_fen), { orderId: order.id, ticketRefundFen: Number(order.ticket_refunded_fen) });
+      refundDeltaFen, {
+        orderId: order.id,
+        ticketRefundFen: Number(order.ticket_refunded_fen),
+        releaseRefundBaselineFen: Number(ledger.release_refund_baseline_fen),
+        newRefundFen: refundDeltaFen,
+      });
   }
 
   if (order.departure_status === 'completed' && order.returned_at) {
@@ -158,8 +203,12 @@ export async function syncPromotionForUser(client, userId) {
 
 async function syncCompletedCommission(client, ledgerId, returnedAt) {
   const ledgerResult = await client.query(
-    `SELECT id,status,amount_fen,release_at FROM commission_ledger
-     WHERE id=$1 FOR UPDATE`, [ledgerId],
+    `SELECT l.id,l.status,l.amount_fen,l.release_at,l.release_refund_baseline_fen,
+            COALESCE(o.ticket_refunded_fen,0) AS ticket_refunded_fen
+     FROM commission_ledger l
+     LEFT JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+     LEFT JOIN booking_orders o ON o.id=a.order_id
+     WHERE l.id=$1 FOR UPDATE OF l`, [ledgerId],
   );
   if (!ledgerResult.rowCount) return;
   const ledger = ledgerResult.rows[0];
@@ -168,8 +217,11 @@ async function syncCompletedCommission(client, ledgerId, returnedAt) {
   const nextStatus = releaseAt.getTime() <= Date.now() ? 'available' : 'pending_unlock';
   if (ledger.status === nextStatus && new Date(ledger.release_at).getTime() === releaseAt.getTime()) return;
   await client.query(
-    `UPDATE commission_ledger SET status=$2,release_at=$3 WHERE id=$1`,
-    [ledger.id, nextStatus, releaseAt],
+    `UPDATE commission_ledger SET status=$2,release_at=$3,
+       release_refund_baseline_fen=CASE WHEN $2::varchar='available'
+         THEN $4 ELSE release_refund_baseline_fen END
+     WHERE id=$1`,
+    [ledger.id, nextStatus, releaseAt, ledger.ticket_refunded_fen],
   );
   await logCommissionEvent(client, ledger.id,
     nextStatus === 'available' ? 'commission_released' : 'trip_completed_waiting_release',
@@ -178,14 +230,18 @@ async function syncCompletedCommission(client, ledgerId, returnedAt) {
 
 export async function releaseMaturedPromotions(client, payeeUserId) {
   const result = await client.query(
-    `SELECT id,amount_fen,release_at FROM commission_ledger
-     WHERE payee_user_id=$1 AND status='pending_unlock' AND release_at<=now()
-     ORDER BY release_at,id FOR UPDATE`, [payeeUserId],
+    `SELECT l.id,l.amount_fen,l.release_at,COALESCE(o.ticket_refunded_fen,0) AS ticket_refunded_fen
+     FROM commission_ledger l
+     LEFT JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+     LEFT JOIN booking_orders o ON o.id=a.order_id
+     WHERE l.payee_user_id=$1 AND l.status='pending_unlock' AND l.release_at<=now()
+     ORDER BY l.release_at,l.id FOR UPDATE OF l SKIP LOCKED`, [payeeUserId],
   );
   for (const row of result.rows) {
     const updated = await client.query(
-      `UPDATE commission_ledger SET status='available'
-       WHERE id=$1 AND status='pending_unlock' AND release_at<=now()`, [row.id],
+      `UPDATE commission_ledger SET status='available',release_refund_baseline_fen=$2
+       WHERE id=$1 AND status='pending_unlock' AND release_at<=now()`,
+      [row.id, row.ticket_refunded_fen],
     );
     if (!updated.rowCount) continue;
     await logCommissionEvent(client, row.id, 'commission_released', Number(row.amount_fen), {

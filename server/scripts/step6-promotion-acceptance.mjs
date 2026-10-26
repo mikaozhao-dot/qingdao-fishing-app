@@ -55,7 +55,7 @@ async function request(method, path, token, payload, adminPassword = null, extra
 
 async function expect(method, path, token, payload, status = 200, adminPassword = null) {
   const response = await request(method, path, token, payload, adminPassword);
-  check(response.status, status, `${method} ${path}`);
+  check(response.status, status, `${method} ${path}: ${JSON.stringify(response.body)}`);
   return response;
 }
 
@@ -230,6 +230,65 @@ try {
   check(Number(commission.amount_fen), 500, 'commission is five percent of the net ticket amount');
   check(Number(commission.net_ticket_amount_fen), 10_000, 'platform fee is excluded from commission basis');
   check(commission.order_id, paidTrip.orderId, 'commission traces to the first paid order');
+  const concurrentIdentitySyncs = await Promise.all([
+    expect('GET', '/promotions/me', guest.token, undefined, 200),
+    expect('GET', '/promotions/me', guest.token, undefined, 200),
+  ]);
+  check(concurrentIdentitySyncs.length, 2, 'concurrent promotion reads both complete');
+  const consumedIdentity = makeSandboxIdentityNumber('101');
+  const identityQualification = await scalar(
+    `SELECT user_id,promotion_attribution_id,identity_number_hash
+     FROM promotion_identity_qualifications WHERE user_id=$1`, [guest.id],
+  );
+  check(identityQualification.user_id, guest.id, 'first paid qualification consumes its verified identity');
+  check(identityQualification.promotion_attribution_id,
+    (await scalar('SELECT id FROM promotion_attributions WHERE attributed_user_id=$1', [guest.id])).id,
+    'identity consumption is tied to the original attribution');
+  check(identityQualification.identity_number_hash.toString('hex'), security.identityHash(consumedIdentity).toString('hex'),
+    'identity consumption stores only the HMAC digest');
+
+  await verifyIdentity(guest, '106');
+  check((await scalar('SELECT identity_number_hash FROM promotion_identity_qualifications WHERE user_id=$1',
+    [guest.id])).identity_number_hash.toString('hex'), security.identityHash(consumedIdentity).toString('hex'),
+  'identity correction does not replace the consumed identity fact');
+
+  const reusedIdentityBuyer = await makeUser('历史实名资格复用排除');
+  const reusedIdentityScan = await scan(firstCode.code);
+  await claim(reusedIdentityBuyer, reusedIdentityScan.visitorToken);
+  await verifyIdentity(reusedIdentityBuyer, '101');
+  await makePaidOrder(reusedIdentityBuyer, captain, 72, 10_000);
+  await expect('GET', '/promotions/me', reusedIdentityBuyer.token, undefined, 200);
+  check((await scalar('SELECT qualification_status FROM promotion_attributions WHERE attributed_user_id=$1',
+    [reusedIdentityBuyer.id])).qualification_status, 'identity_already_qualified',
+  'an identity used for another buyers first commission is rejected after its owner corrects theirs');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM commission_ledger l
+     JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+     WHERE a.attributed_user_id=$1`, [reusedIdentityBuyer.id],
+  )).count, 0, 'reused identity cannot create a second commission ledger');
+
+  const raceIdentityA = await makeUser('身份资格竞争甲');
+  const raceIdentityB = await makeUser('身份资格竞争乙');
+  const raceScanA = await scan(firstCode.code);
+  const raceScanB = await scan(secondCode.code);
+  await claim(raceIdentityA, raceScanA.visitorToken);
+  await claim(raceIdentityB, raceScanB.visitorToken);
+  const raceAttributions = await pool.query(
+    `SELECT attributed_user_id,id FROM promotion_attributions
+     WHERE attributed_user_id=ANY($1::uuid[]) ORDER BY attributed_user_id`,
+    [[raceIdentityA.id, raceIdentityB.id]],
+  );
+  const raceHash = Buffer.alloc(32, 0x7f);
+  const competingIdentityClaims = await Promise.all(raceAttributions.rows.map((row) => pool.query(
+    `INSERT INTO promotion_identity_qualifications
+       (identity_number_hash,user_id,promotion_attribution_id)
+     VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING user_id`,
+    [raceHash, row.attributed_user_id, row.id],
+  )));
+  check(competingIdentityClaims.reduce((sum, result) => sum + result.rowCount, 0), 1,
+    'concurrent qualifications for one identity HMAC have a single database winner');
+  check((await scalar('SELECT count(*)::integer AS count FROM promotion_identity_qualifications WHERE identity_number_hash=$1',
+    [raceHash])).count, 1, 'database identity uniqueness holds after a concurrent qualification race');
 
   await pool.query('UPDATE booking_orders SET ticket_refunded_fen=2000 WHERE id=$1', [paidTrip.orderId]);
   await expect('GET', '/promotions/me', guest.token, undefined, 200);
@@ -244,21 +303,81 @@ try {
   check(returned.body.status, 'completed', 'captain return check-in completes the trip');
   check((await scalar('SELECT status FROM commission_ledger WHERE id=$1', [commission.id])).status,
     'pending_unlock', 'trip completion starts the seven-day unlock period');
-  await pool.query('UPDATE commission_ledger SET release_at=now()-interval \'1 second\' WHERE id=$1',
+  let returnedAt = (await scalar(
+    `SELECT checked_at FROM departure_checkins WHERE departure_id=$1 AND event='returned'`, [paidTrip.id],
+  )).checked_at;
+  const exactReleaseAt = new Date(new Date(returnedAt).getTime() + 7 * 86_400_000);
+  check(new Date((await scalar('SELECT release_at FROM commission_ledger WHERE id=$1', [commission.id])).release_at).getTime(),
+    exactReleaseAt.getTime(), 'release deadline is exactly return time plus seven days');
+  returnedAt = new Date(Date.now() - 7 * 86_400_000 + 60_000);
+  await pool.query(
+    `UPDATE departure_checkins SET checked_at=$2 WHERE departure_id=$1 AND event='returned'`,
+    [paidTrip.id, returnedAt],
+  );
+  await expect('GET', '/promotions/me', guest.token, undefined, 200);
+  let beforeBoundary = await scalar('SELECT status,release_at,release_refund_baseline_fen FROM commission_ledger WHERE id=$1',
     [commission.id]);
+  check(beforeBoundary.status, 'pending_unlock', 'commission remains locked just before the seven-day boundary');
+  check(new Date(beforeBoundary.release_at).getTime(), returnedAt.getTime() + 7 * 86_400_000,
+    'release time follows the returned check-in fixture');
+  await expect('GET', '/promotions/me', guest.token, undefined, 200);
+  check((await scalar(`SELECT count(*)::integer AS count FROM promotion_commission_events
+    WHERE commission_ledger_id=$1 AND event_type='refund_after_release_exception'`, [commission.id])).count,
+  0, 'pre-release partial refund does not create an exception during repeated sync');
+
+  returnedAt = new Date(Date.now() - 7 * 86_400_000 - 60_000);
+  await pool.query(
+    `UPDATE departure_checkins SET checked_at=$2 WHERE departure_id=$1 AND event='returned'`,
+    [paidTrip.id, returnedAt],
+  );
+  await expect('GET', '/promotions/me', guest.token, undefined, 200);
   const matureDashboard = await expect('GET', '/promotions/me', referrer.token, undefined, 200);
   check(matureDashboard.body.commissions[0].status, 'available', 'dashboard releases a matured commission');
   check(matureDashboard.body.commissions[0].amountFen, 400, 'matured commission keeps the refund-adjusted amount');
-  await expect('POST', '/promotions/payout-requests', referrer.token,
-    { commissionLedgerIds: [commission.id] }, 201);
+  const releasedLedger = await scalar(
+    'SELECT release_refund_baseline_fen,refund_after_release FROM commission_ledger WHERE id=$1', [commission.id],
+  );
+  check(Number(releasedLedger.release_refund_baseline_fen), 2_000,
+    'release snapshots the refund total accumulated before release');
+  check(releasedLedger.refund_after_release, false, 'releasing with an earlier partial refund is not an exception');
+  const payoutAttempts = await Promise.all([
+    request('POST', '/promotions/payout-requests', referrer.token, { commissionLedgerIds: [commission.id] }),
+    request('POST', '/promotions/payout-requests', referrer.token, { commissionLedgerIds: [commission.id] }),
+  ]);
+  check(payoutAttempts.filter((response) => response.status === 201).length, 1,
+    'concurrent payout requests reserve an available ledger once');
+  check(payoutAttempts.filter((response) => response.status === 409).length, 1,
+    'the losing concurrent payout request is rejected');
+  const wrongPayeePayout = await request('POST', '/promotions/payout-requests', guest.token,
+    { commissionLedgerIds: [commission.id] });
+  check(wrongPayeePayout.status, 409, 'another payee cannot request payout against this ledger');
   check((await scalar('SELECT status FROM commission_ledger WHERE id=$1', [commission.id])).status,
     'withdrawal_pending', 'payout request reserves only available commission');
-  const payout = (await scalar('SELECT id FROM promotion_payout_requests WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1',
+  let payout = (await scalar('SELECT id FROM promotion_payout_requests WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1',
     [referrer.id])).id;
+  check((await scalar('SELECT count(*)::integer AS count FROM promotion_payout_items WHERE commission_ledger_id=$1',
+    [commission.id])).count, 1, 'concurrent payout requests create one reservation item');
+  check((await request('POST', `/admin/promotions/payout-requests/${payout}/decision`, null,
+    { decision: 'approved', note: 'missing password' })).status, 401,
+  'admin payout review requires the administrator password');
+  check((await request('POST', `/admin/promotions/payout-requests/${payout}/decision`, null,
+    { decision: 'approved', note: 'wrong password' }, 'wrong-password')).status, 401,
+  'wrong administrator password is rejected');
+  await expect('POST', `/admin/promotions/payout-requests/${payout}/decision`, null,
+    { decision: 'paid_marked', note: 'illegal early mark' }, 409, testConfig.adminPassword);
+  await expect('POST', `/admin/promotions/payout-requests/${payout}/decision`, null,
+    { decision: 'rejected', note: 'sandbox retry test' }, 200, testConfig.adminPassword);
+  check((await scalar('SELECT status FROM commission_ledger WHERE id=$1', [commission.id])).status,
+    'available', 'rejecting a sandbox payout releases its ledger for retry');
+  const retryPayout = await expect('POST', '/promotions/payout-requests', referrer.token,
+    { commissionLedgerIds: [commission.id] }, 201);
+  payout = retryPayout.body.payout.id;
   await expect('POST', `/admin/promotions/payout-requests/${payout}/decision`, null,
     { decision: 'approved', note: 'sandbox acceptance' }, 200, testConfig.adminPassword);
   await expect('POST', `/admin/promotions/payout-requests/${payout}/decision`, null,
     { decision: 'paid_marked', note: 'sandbox only' }, 200, testConfig.adminPassword);
+  await expect('POST', `/admin/promotions/payout-requests/${payout}/decision`, null,
+    { decision: 'paid_marked', note: 'duplicate paid mark' }, 409, testConfig.adminPassword);
   check((await scalar('SELECT status FROM commission_ledger WHERE id=$1', [commission.id])).status,
     'paid', 'sandbox payout mark moves the ledger to paid');
   await pool.query('UPDATE booking_orders SET ticket_refunded_fen=10000 WHERE id=$1', [paidTrip.orderId]);
@@ -268,6 +387,10 @@ try {
   );
   check(afterReleaseRefund.refund_after_release, true, 'post-release refund is recorded as an exception');
   check(Number(afterReleaseRefund.amount_fen), 400, 'post-release refund does not claw back sandbox payout');
+  await expect('GET', '/promotions/me', guest.token, undefined, 200);
+  check((await scalar(`SELECT count(*)::integer AS count FROM promotion_commission_events
+    WHERE commission_ledger_id=$1 AND event_type='refund_after_release_exception'`, [commission.id])).count,
+  1, 'repeated sync records a post-release refund exception exactly once');
 
   const hotelCode = await getCode(referrer, 'hotel');
   check(hotelCode.status, 'pending', 'business channel code waits for review');
@@ -331,6 +454,16 @@ try {
   check(fullRefundLedger.status, 'reversed', 'full cancellation refund reverses the frozen commission');
   check(Number(fullRefundLedger.amount_fen), 0, 'full cancellation refund leaves no commission balance');
   check(Number(fullRefundLedger.ticket_refunded_fen), 10_000, 'full ticket refund is recorded separately from fees');
+  await expect('GET', '/promotions/me', fullRefundBuyer.token, undefined, 200);
+  await expect('GET', '/promotions/me', fullRefundBuyer.token, undefined, 200);
+  check((await scalar(`SELECT refund_after_release FROM commission_ledger WHERE promotion_attribution_id=(
+    SELECT id FROM promotion_attributions WHERE attributed_user_id=$1)`, [fullRefundBuyer.id])).refund_after_release,
+  false, 'repeated sync after a frozen full refund does not flag a release exception');
+  check((await scalar(`SELECT count(*)::integer AS count FROM promotion_commission_events e
+    JOIN commission_ledger l ON l.id=e.commission_ledger_id
+    JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+    WHERE a.attributed_user_id=$1 AND e.event_type='refund_after_release_exception'`, [fullRefundBuyer.id])).count,
+  0, 'repeated sync after a frozen full refund does not append an exception event');
 
   const secondLevelBuyer = await makeUser('二级场景测试会员');
   await verifyIdentity(secondLevelBuyer, '105');
@@ -357,6 +490,39 @@ try {
   )).count, 0, 'schema contains no multi-level commission relationship fields');
   check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [secondLevelTrip.orderId])).status,
     'paid', 'second-level acceptance fixture settled through sandbox payment');
+
+  const mutualA = await makeUser('互推锁顺序甲');
+  const mutualB = await makeUser('互推锁顺序乙');
+  await verifyIdentity(mutualA, '107');
+  await verifyIdentity(mutualB, '108');
+  const mutualACode = await getCode(mutualA);
+  const mutualBCode = await getCode(mutualB);
+  const mutualAScan = await scan(mutualBCode.code);
+  const mutualBScan = await scan(mutualACode.code);
+  await claim(mutualA, mutualAScan.visitorToken);
+  await claim(mutualB, mutualBScan.visitorToken);
+  const mutualATrip = await makePaidOrder(mutualA, captain, 72, 10_000);
+  const mutualBTrip = await makePaidOrder(mutualB, captain, 72, 10_000);
+  for (const trip of [mutualATrip, mutualBTrip]) {
+    await pool.query('UPDATE departures SET status=\'in_progress\' WHERE id=$1', [trip.id]);
+    await expect('POST', `/captain/departures/${trip.id}/checkin`, captain.token,
+      { event: 'returned' }, 200);
+    await pool.query(
+      `UPDATE departure_checkins SET checked_at=now()-interval '8 days'
+       WHERE departure_id=$1 AND event='returned'`, [trip.id],
+    );
+  }
+  const mutualDashboardReads = await Promise.all([
+    request('GET', '/promotions/me', mutualA.token, undefined),
+    request('GET', '/promotions/me', mutualB.token, undefined),
+  ]);
+  check(mutualDashboardReads.map((response) => response.status).sort(), [200, 200],
+    'mutual referrals can sync qualifications and release matured ledgers concurrently');
+  await expect('GET', '/promotions/me', mutualA.token, undefined, 200);
+  await expect('GET', '/promotions/me', mutualB.token, undefined, 200);
+  check((await scalar(`SELECT count(*)::integer AS count FROM commission_ledger
+    WHERE payee_user_id=ANY($1::uuid[]) AND status='available'`, [[mutualA.id, mutualB.id]])).count,
+  2, 'skip-locked release retry makes both reciprocal matured ledgers available');
 
   console.info(`Step 6 slice 1 promotion acceptance passed: ${assertions} assertions.`);
 } finally {

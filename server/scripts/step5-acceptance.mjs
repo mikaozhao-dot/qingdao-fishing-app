@@ -516,6 +516,10 @@ try {
   check(blackheadItems[0].maxIndividualWeightGrams, 2700,
     'trip/species merge selects the highest eligible source weight');
   check(blackheadItems[0].catcherName, '昵称北风', 'passenger attribution uses the public nickname');
+  check(blackheadItems[0].departureDate,
+    (await scalar("SELECT to_char(return_at AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') AS day FROM departures WHERE id=$1",
+      [mergeTrip.departureId])).day,
+    'displayed trip date uses the Asia/Shanghai return date');
   check(JSON.stringify(clearedBoard.body).includes('实名不得展示'), false,
     'leaderboard response never exposes a passenger legal name');
   check(JSON.stringify(clearedBoard.body).includes(leaderAngler.user.identityNumber), false,

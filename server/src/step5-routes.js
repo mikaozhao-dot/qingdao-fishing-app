@@ -455,7 +455,7 @@ async function fishLeaderboard(pool, requestedMonth) {
          ) AS board_rank
          FROM trip_species WHERE source_rank=1
        )
-       SELECT departure_id,source,fish_code,weight_grams,recorded_at,return_at,
+       SELECT departure_id,source,fish_code,weight_grams,recorded_at,return_at,departure_date,
               captain_name,angler_nickname,board_rank
        FROM board_rows WHERE board_rank <= 20
        ORDER BY fish_code,board_rank`,

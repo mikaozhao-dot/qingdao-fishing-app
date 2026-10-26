@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.6.0
-  app_links: ^6.4.1
+  app_links: ^7.0.0
   image_picker: ^1.2.4
   qr_flutter: ^4.1.0
   share_plus: ^13.3.1

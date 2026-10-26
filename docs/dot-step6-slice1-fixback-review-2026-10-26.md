@@ -1,6 +1,6 @@
 # Dot 独立定点复核：Step 6 切片 1 修复回单（2026-10-26）
 
-> 最新状态见文末“增量复核：4d75e579”：原 R1 筛选已修正，升级验收待交；以下首轮结论保留为历史，不替代最新增量。
+> 最新状态见文末“补证终轮定点复核：db9972ab”：R1 限定升级缺陷已关闭，R2/R3 维持关闭；R4 原生证据尚未完整收口。此前各轮结论保留为历史。
 
 
 ## 结论：暂不整体通过，R1 迁移漏项与 R4 原生链路补证仍开放
@@ -110,3 +110,64 @@ CI 用 Flutter **3.47.8**，双端构建与既有 26 项回归成功，未见这
 ### 给 Muse / Luna 的当前状态
 
 请保留原开工计划，提交剩余升级 fixture、对应执行结果和新交付回执；R4 仍按实际原生证据收口。R2/R3 本次无相应实现改动且回归通过，维持上次限定结论。本增量仅静态代码/文档审查、官方依赖文档核查和原始 CI 实读，未独立运行升级库或原生交互。切片不关闭、不进入切片 2，不构成产品验收、业务规则变更或生产授权。
+
+
+## 补证终轮定点复核：`db9972ab`（2026-10-26 17:43 UTC / 2026-10-27 01:43 CST）
+
+**R1 历史全退资格升级漏种在限定沙盒技术范围关闭。R2/R3 维持已关闭的限定结论。R4 配置及非原生回归通过，原生双端证据尚未完整收口；不整体关单、不进切片 2。**
+
+本次对象为测试/验收提交 [`db9972abf356cd546f64edb403230287813cfea5`](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/db9972abf356cd546f64edb403230287813cfea5) 和回执 [`f1eb302d`](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/f1eb302d5b0c7acb99b6dfa94671e024a1531c64/docs/step6-slice1-dot-followup-2026-10-27.md)。写入前 main 为 `f1eb302d`。已比对 `4d75e579→db9972ab`：App 运行时代码、插件版本与 migration 023 未再改变，新增测试、夹具、截图及文档。因此不会把仅测试变化要求为一次新的原生运行时代码验证。
+
+### R1：所要求的升级证据已经具备，不再重复索要
+
+已逐段实读 [验收脚本 550–741 行](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/db9972abf356cd546f64edb403230287813cfea5/server/scripts/step6-promotion-acceptance.mjs#L550-L741)：
+
+- 通过实际沙盒接口构造正佣金、历史正佣金后冻结期全退归零、实名但从未计佣对照。
+- 另构造全退后 `qualified_at=NULL`、仅正额 `commission_created` 事件仍在的对照，独立覆盖事件备用分支。
+- 在隔离库中删除两条应漏种的资格及 023 迁移记录，模拟 022 后漏种状态，再调用真实 `server/src/migrate.js`；断言原身份摘要被补回、正余额原记录保留、未计佣身份未被消费。
+- 再次删除 023 版本记录并重跑真实迁移入口，断言总资格数不增且事件备用行仍只有一条。
+- 回填后通过实名 API 执行 A/X→A/Y，再让 B 使用 X 付首单；结果为 `identity_already_qualified`，第二份佣金账本数为 0。
+
+这不是直接使用旧版本服务从零部署的历史重放，而是**可控升级状态 fixture + 真实迁移执行 + 实际 API 后验**，足以验证本次明确的可恢复漏种反例。原始 CI 已执行含这些断言的完整脚本并通过 251 项，故 R1 本次缺陷及补证可关闭。不要求重新做相同 fixture。Q1 中已丢失历史摘要的真实数据仍不在可恢复证明范围，本次仍不构成真实数据风险接受或生产迁移批准。
+
+### R4 重复归因回归：认可实际层级，不越级解释
+
+[新增 widget](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/db9972abf356cd546f64edb403230287813cfea5/app/test/main_app_promotion_attribution_test.dart#L198-L279) 在同一 AppShell 中重复投递相同链接，确认不再请求；销毁并重建 AppShell 后重新登录，允许一次新请求并处理 mocked `already_attributed`。测试中“不新增归因”使用的是 mock 内存 Set，不能单独证明真实服务端幂等。
+
+真实服务端的独立证明来自 [验收 210–225 行](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/db9972abf356cd546f64edb403230287813cfea5/server/scripts/step6-promotion-acceptance.mjs#L210-L225)：重复实际 claim 返回 `already_attributed`，并查数据库确认归因只有一条。两层证据合起来满足本轮重复归因补证；仍不是 Android Activity 重建或真实插件分发测试。
+
+### iOS 证据已提交；独立核验到哪里
+
+[原生回执](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/db9972abf356cd546f64edb403230287813cfea5/docs/step6-slice1-r1-r4-followup-2026-10-27.md) 记录运行时代码 `4d75e579`、app_links 7.2.2、iOS 模拟器环境，以及 Safari H5 冷/热启动、登录、claim 和数据库状态核对。该运行时代码与本次测试 SHA 的 App 实现一致，故不因测试文件变化要求重复跑 iOS。
+
+Dot 已实际查看 [cold PNG](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/db9972abf356cd546f64edb403230287813cfea5/docs/evidence/step6-slice1-r4/ios-cold-claim-account.png) 和 [hot PNG](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/db9972abf356cd546f64edb403230287813cfea5/docs/evidence/step6-slice1-r4/ios-hot-claim-account.png)：二者展示登录态“我的/账号与入驻”，无账户或访客 token。它们支持“App 处于登录态”的画面事实，**不能单独证明来自 H5 的冷/热启动过程、具体 claim 或数据库结果**。这部分端到端成功当前仍是 Luna 书面运行报告，不写成 Dot 独立复现或已核实请求链。
+
+H5 PNG 在仓库树中存在，大小 1,814,379 bytes；当前 GitHub connector 对该文件 base64 内容返回空，二进制/Blob 读取不支持，因此本次未目检该图，不将读取限制归责为图片损坏。仓内该证据目录目前只有三张 PNG，未发现相应脱敏 claim 原始日志/SQL 结果或连贯操作记录。请优先补挂**已有实测**的最小脱敏证据（冷/热各自步骤与对应请求/数据库结果、构建关联）；无须因为本次工具读取限制或测试文件变化重新实施相同 iOS 测试。此为审计关联补齐，不否认报告已经做过实测。
+
+Android 原生 H5 冷/热→登录/claim 仍未交付；回执明确本机无 SDK/adb/emulator/AVD，当前只有 APK 构建。此处保持原门槛，不把 widget 或 APK 当成设备证明，也不据此杜撰实际 Android 故障。
+
+### 原始 CI 已逐 job 核实，同一完整 SHA `db9972abf356cd546f64edb403230287813cfea5`
+
+| 证据 | 结果 |
+| --- | --- |
+| [数据库 run 40364146459 / job 121717159381](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40364146459/job/121717159381) | 实际 checkout 同 SHA；Step 4 **710**、Step 5 **133**、直播 **77**、Step 6 **251** 项通过 |
+| [Flutter job 121717162424](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40364147015/job/121717162424) | 同 SHA；**27 tests passed**；**No issues found** |
+| [Android job 121717162656](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40364147015/job/121717162656) | 同 SHA；debug APK 构建成功 |
+| [iOS job 121717162964](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40364147015/job/121717162964) | 同 SHA；simulator Runner.app 构建成功 |
+
+本地 Flutter analysis server 故障与直接 `dart analyze` 成功是回执报告，未冒充 Dot 独立执行；同 SHA CI 的 Flutter analyze 实际已通过。README 中段仍有“本轮同 SHA CI 待”的旧句，顶部及新回执已写成功：这是文档状态待对齐，不是要求重跑已成功 CI 的理由。
+
+### 给 Muse 的收口状态
+
+请按最新结论同步：**R1/R2/R3 限定技术项关闭；R4 配置、widget 和服务端幂等补证认可，Android 原生路径仍开放，iOS 已有运行报告与画面但完整链的可核验关联待补。** 本次不重复索要已通过的升级测试，不扩展 H5 免下载首单实现范围。产品验收、退款重订 A/B、切片 2 与生产授权均不由本技术复核代批。
+
+Dot 本次进行了源码/夹具审查、同 SHA 原始 CI 核查和两张已取得图片的目检；未独立运行数据库或原生交互。上述范围与限制随结论一起保留。
+
+### 与 Muse 后续巡检的对齐（2026-10-26 22:52 UTC）
+
+已只读核对 main `437666ce6bbb7c8af888e92694631061c4a3f9ff` 的 [Muse 巡检](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/437666ce6bbb7c8af888e92694631061c4a3f9ff/docs/ui-design-review-f1eb302.md)。该提交只新增巡检文档，不改变本次受审实现、夹具或 CI。Muse 已明确列出已入仓的 Dot 增量 `e79a2b1b`，其“代码认可、证据待交”是较早阶段的正确历史状态；本节之前的 db9972ab 补证终轮结论用于更新这一阶段，不将 Muse 巡检当成 Dot 已经发布最终结论。
+
+Muse 对 R1 夹具、双端证据边界与本次结论基本一致；但 AppShell 重建测试的服务器响应来自 mock，不能单独证明原生链路或真实服务端，真实幂等证据仍是上文实际 API + 数据库断言。Muse 未独立实读 CI；Dot 已在上文逐 job 核对，无需因旧文字要求重跑。Muse 将 README 描述为一致，不消除其中“同 SHA CI 仍待”的过期句；请只对齐文档状态，不重复跑已通过测试。
+
+双方均未目检 1.81MB H5 图，不能将其记为已验证；即使补看单张 H5 图，也不能单独证明完整冷/热启动及 claim 链。R4 剩余收口仍按上述已有实测关联和 Android 原生证据办理。退款重订 A/B 仍由创始人决定，转述评审不构成该业务选择或下一切片授权。
+

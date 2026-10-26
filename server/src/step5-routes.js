@@ -383,11 +383,128 @@ async function captainFacts(pool, captainId, security) {
   };
 }
 
+async function fishLeaderboard(pool, requestedMonth) {
+  const currentResult = await pool.query(
+    `SELECT to_char(now() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM') AS month`,
+  );
+  const currentMonth = currentResult.rows[0].month;
+  const month = requestedMonth ?? currentMonth;
+  if (typeof month !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || month > currentMonth) {
+    return { error: [400, '月份格式无效或不能选择未来月份'] };
+  }
+
+  const fishCodes = FISH_CATALOG.map((fish) => fish.code);
+  const [months, result] = await Promise.all([
+    pool.query(
+      `SELECT DISTINCT to_char(d.return_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM') AS month
+       FROM departures d
+       WHERE d.status='completed' AND d.return_at <= now()
+         AND EXISTS (
+           SELECT 1 FROM departure_checkins returned
+           WHERE returned.departure_id=d.id AND returned.captain_user_id=d.captain_user_id
+             AND returned.event='returned'
+         )
+       ORDER BY month DESC`,
+    ),
+    pool.query(
+      `WITH candidates AS (
+         SELECT r.departure_id,r.id AS report_id,r.source,r.passenger_id,
+                i.id AS item_id,i.fish_code,i.max_individual_weight_grams AS weight_grams,
+                r.created_at AS recorded_at,d.return_at,
+                to_char(d.return_at AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') AS departure_date,
+                c.captain_name,
+                CASE WHEN r.source='passenger'
+                     THEN COALESCE(NULLIF(BTRIM(u.display_name),''),'钓友')
+                     ELSE NULL END AS angler_nickname
+         FROM step5_catch_reports r
+         JOIN step5_catch_items i ON i.report_id=r.id
+         JOIN departures d ON d.id=r.departure_id
+         JOIN captain_profiles c ON c.user_id=d.captain_user_id
+         LEFT JOIN users u ON r.source='passenger' AND u.id=r.author_user_id
+         WHERE d.status='completed' AND d.return_at <= now()
+           AND d.return_at >= (($1 || '-01')::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+           AND d.return_at < (((($1 || '-01')::date + INTERVAL '1 month')::timestamp) AT TIME ZONE 'Asia/Shanghai')
+           AND i.max_individual_weight_grams IS NOT NULL
+           AND i.fish_code=ANY($2::varchar[])
+           AND EXISTS (
+             SELECT 1 FROM departure_checkins departed
+             WHERE departed.departure_id=d.id AND departed.captain_user_id=d.captain_user_id
+               AND departed.event='departed'
+           )
+           AND EXISTS (
+             SELECT 1 FROM departure_checkins returned
+             WHERE returned.departure_id=d.id AND returned.captain_user_id=d.captain_user_id
+               AND returned.event='returned'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM step5_catch_reconciliations reconciliation
+             WHERE reconciliation.departure_id=r.departure_id
+               AND reconciliation.status='pending_review'
+               AND (r.source='captain' OR reconciliation.passenger_id=r.passenger_id)
+           )
+       ), trip_species AS (
+         SELECT *,row_number() OVER (
+           PARTITION BY departure_id,fish_code
+           ORDER BY weight_grams DESC,recorded_at ASC,source ASC,report_id ASC,item_id ASC
+         ) AS source_rank
+         FROM candidates
+       ), board_rows AS (
+         SELECT *,row_number() OVER (
+           PARTITION BY fish_code
+           ORDER BY weight_grams DESC,recorded_at ASC,return_at ASC,departure_id ASC,report_id ASC,item_id ASC
+         ) AS board_rank
+         FROM trip_species WHERE source_rank=1
+       )
+       SELECT departure_id,source,fish_code,weight_grams,recorded_at,return_at,
+              captain_name,angler_nickname,board_rank
+       FROM board_rows WHERE board_rank <= 20
+       ORDER BY fish_code,board_rank`,
+      [month, fishCodes],
+    ),
+  ]);
+
+  const boards = new Map();
+  for (const row of result.rows) {
+    const fish = FISH_BY_CODE.get(row.fish_code);
+    if (!fish) continue;
+    const board = boards.get(row.fish_code) ?? {
+      fishCode: row.fish_code, fishName: fish.name, items: [],
+    };
+    board.items.push({
+      rank: Number(row.board_rank),
+      maxIndividualWeightGrams: Number(row.weight_grams),
+      recordedAt: row.recorded_at,
+      returnAt: row.return_at,
+      departureDate: row.departure_date,
+      captainName: row.captain_name,
+      catcherName: row.source === 'captain' ? '船长回填' : row.angler_nickname,
+      catchSource: row.source,
+      departureId: row.departure_id,
+    });
+    boards.set(row.fish_code, board);
+  }
+
+  return {
+    month,
+    timeZone: 'Asia/Shanghai',
+    availableMonths: [...new Set([currentMonth, ...months.rows.map((row) => row.month)])]
+      .sort((left, right) => right.localeCompare(left)),
+    boards: [...boards.values()],
+    sourceNote: '榜单数据来自船长与乘客的渔获回填记录，不代表平台称重认证。',
+  };
+}
+
 export function registerStep5Routes(app, { pool, config, requireUser }) {
   const security = createSecurity(config);
   const requirePool = async (_request, reply) => {
     if (!pool) return sendError(reply, 503, '数据库未配置');
   };
+
+  app.get('/step5/fish-leaderboard', { preHandler: requirePool }, async (request, reply) => {
+    const result = await fishLeaderboard(pool, request.query?.month);
+    if (result.error) return sendError(reply, result.error[0], result.error[1]);
+    return result;
+  });
 
   app.get('/step5/fish-catalog', async () => ({
     items: FISH_CATALOG.map(({ code, name }) => ({ code, name })),

@@ -446,7 +446,143 @@ try {
   check((await scalar('SELECT outcome FROM step5_catch_reports WHERE id=$1', [captainReport.body.reportId])).outcome,
     'caught', 'source row remains unchanged after attempted mutation');
 
-  console.info(`Step 5 acceptance passed: ${assertions} assertions; positive, negative, consistency, facts, atlas and immutability cases.`);
+  const localNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const localMonthStart = (offset) => new Date(
+    Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth() - offset, 1) - 8 * 60 * 60 * 1000,
+  );
+  const monthKey = (offset) => {
+    const value = new Date(Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth() - offset, 1));
+    return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}`;
+  };
+  const setTripReturnAt = async (trip, returnAt) => {
+    const departureAt = new Date(returnAt.getTime() - 4 * 60 * 60 * 1000);
+    await pool.query('UPDATE departures SET departure_at=$1,return_at=$2 WHERE id=$3',
+      [departureAt, returnAt, trip.departureId]);
+    await pool.query(
+      `UPDATE departure_checkins SET checked_at=$1
+       WHERE departure_id=$2 AND captain_user_id=$3 AND event IN ('departed','returned')`,
+      [departureAt, trip.departureId, captain.id],
+    );
+    await pool.query(
+      `UPDATE departure_checkins SET checked_at=$1
+       WHERE departure_id=$2 AND captain_user_id=$3 AND event='returned'`,
+      [returnAt, trip.departureId, captain.id],
+    );
+  };
+  const leaderboardGet = async (month) => request(
+    'GET', `/step5/fish-leaderboard${month ? `?month=${month}` : ''}`,
+  );
+  const fishBoard = (response, fishCode) => response.body.boards.find((board) => board.fishCode === fishCode);
+
+  const currentBoard = await leaderboardGet();
+  const currentMonthKey = monthKey(0);
+  check(currentBoard.status, 200, 'public fish leaderboard endpoint is available');
+  check(currentBoard.body.month, currentMonthKey, 'leaderboard defaults to the current Asia/Shanghai month');
+  check(currentBoard.body.timeZone, 'Asia/Shanghai', 'leaderboard identifies its month boundary time zone');
+  check(currentBoard.body.availableMonths.includes(currentMonthKey), true,
+    'current month is selectable even when it has no catches');
+  check((await leaderboardGet('2099-01')).status, 400,
+    'leaderboard rejects a future month');
+
+  const leaderAngler = { user: await createUser() };
+  await pool.query('UPDATE users SET display_name=$1,legal_name_ciphertext=$2 WHERE id=$3',
+    ['昵称北风', security.encrypt('实名不得展示'), leaderAngler.user.id]);
+  const mergeTrip = await createTrip({ captain, boatId, dateDaysAgo: 3, passengers: [leaderAngler] });
+  await setTripReturnAt(mergeTrip, new Date(localMonthStart(1).getTime() + 5 * 86400000));
+  const mergeCaptain = await request(
+    'POST', `/step5/departures/${mergeTrip.departureId}/captain-catch`, captain.token,
+    { outcome: 'caught', items: [{ fishCode: 'blackhead', quantity: 1, maxIndividualWeightGrams: 2400 }] },
+  );
+  check(mergeCaptain.status, 201, 'leaderboard captain source can be recorded for a returned trip');
+  const mergePassenger = await request(
+    'POST', `/step5/departures/${mergeTrip.departureId}/passenger-catch`, leaderAngler.user.token,
+    { catchReport: { outcome: 'caught', items: [{ fishCode: 'blackhead', quantity: 2, maxIndividualWeightGrams: 2700 }] } },
+  );
+  check(mergePassenger.status, 201, 'leaderboard passenger source can be recorded for their own catch');
+  check(mergePassenger.body.reconciliation.status, 'pending_review',
+    'higher passenger quantity activates the existing pending-review state');
+  const pendingBoard = await leaderboardGet(monthKey(1));
+  check(fishBoard(pendingBoard, 'blackhead'), undefined,
+    'pending-review captain and passenger records are excluded from the leaderboard');
+  await pool.query(
+    `UPDATE step5_catch_reconciliations SET status='confirmed'
+     WHERE departure_id=$1 AND passenger_id=$2`, [mergeTrip.departureId, mergeTrip.orderIds[0].passengerId],
+  );
+  const clearedBoard = await leaderboardGet(monthKey(1));
+  const blackheadItems = fishBoard(clearedBoard, 'blackhead')?.items ?? [];
+  check(blackheadItems.length, 1, 'clearing pending review restores one merged trip/species entry');
+  check(blackheadItems[0].departureId, mergeTrip.departureId,
+    'merged leaderboard entry points to the completed trip');
+  check(blackheadItems[0].maxIndividualWeightGrams, 2700,
+    'trip/species merge selects the highest eligible source weight');
+  check(blackheadItems[0].catcherName, '昵称北风', 'passenger attribution uses the public nickname');
+  check(JSON.stringify(clearedBoard.body).includes('实名不得展示'), false,
+    'leaderboard response never exposes a passenger legal name');
+  check(JSON.stringify(clearedBoard.body).includes(leaderAngler.user.identityNumber), false,
+    'leaderboard response never exposes a passenger identity number');
+
+  const noWeightTrip = await createTrip({ captain, boatId, dateDaysAgo: 3 });
+  await setTripReturnAt(noWeightTrip, new Date(localMonthStart(1).getTime() + 6 * 86400000));
+  check((await request(
+    'POST', `/step5/departures/${noWeightTrip.departureId}/captain-catch`, captain.token,
+    { outcome: 'caught', items: [{ fishCode: 'octopus', quantity: 3 }] },
+  )).status, 201, 'catch can be saved without an optional individual weight');
+  const noWeightBoard = await leaderboardGet(monthKey(1));
+  check(fishBoard(noWeightBoard, 'octopus'), undefined,
+    'records without an individual weight do not create leaderboard entries');
+
+  const unreturnedTrip = await createTrip({ captain, boatId, dateDaysAgo: 3, returned: false });
+  check((await request(
+    'POST', `/step5/departures/${unreturnedTrip.departureId}/captain-catch`, captain.token,
+    { outcome: 'caught', items: [{ fishCode: 'octopus', quantity: 1, maxIndividualWeightGrams: 9900 }] },
+  )).status, 409, 'a trip without return check-in cannot contribute a new leaderboard source');
+  check((await scalar('SELECT count(*)::integer AS count FROM step5_catch_reports WHERE departure_id=$1',
+    [unreturnedTrip.departureId])).count, 0, 'unreturned catch submission leaves no record');
+
+  const tieTrips = [];
+  for (let index = 0; index < 21; index += 1) {
+    const trip = await createTrip({ captain, boatId, dateDaysAgo: 3 });
+    await setTripReturnAt(trip, new Date(localMonthStart(1).getTime() + (7 * 86400000) + index * 60000));
+    tieTrips.push(trip);
+    const weight = index < 2 ? 5000 : 5000 - index * 100;
+    const report = await request(
+      'POST', `/step5/departures/${trip.departureId}/captain-catch`, captain.token,
+      { outcome: 'caught', items: [{ fishCode: 'yellow_croaker', quantity: 1, maxIndividualWeightGrams: weight }] },
+    );
+    check(report.status, 201, `weighted leaderboard source ${index + 1} is accepted`);
+    if (index === 0) await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  const ranked = await leaderboardGet(monthKey(1));
+  const yellowCroakerItems = fishBoard(ranked, 'yellow_croaker')?.items ?? [];
+  check(yellowCroakerItems.length, 20, 'each species leaderboard is capped at 20 entries');
+  check(yellowCroakerItems.map((item) => item.rank), Array.from({ length: 20 }, (_, index) => index + 1),
+    'leaderboard ranks are consecutive from one through twenty');
+  check(yellowCroakerItems.slice(0, 2).map((item) => item.departureId),
+    [tieTrips[0].departureId, tieTrips[1].departureId],
+    'equal weights keep the earlier recorded catch first');
+  check(yellowCroakerItems.at(-1).maxIndividualWeightGrams, 3100,
+    'top twenty excludes the twenty-first weighted catch');
+
+  const olderBoundaryTrip = await createTrip({ captain, boatId, dateDaysAgo: 30 });
+  const newerBoundaryTrip = await createTrip({ captain, boatId, dateDaysAgo: 30 });
+  await setTripReturnAt(olderBoundaryTrip, new Date(localMonthStart(1).getTime() - 60000));
+  await setTripReturnAt(newerBoundaryTrip, new Date(localMonthStart(1).getTime() + 60000));
+  for (const [trip, weight] of [[olderBoundaryTrip, 1800], [newerBoundaryTrip, 1900]]) {
+    check((await request(
+      'POST', `/step5/departures/${trip.departureId}/captain-catch`, captain.token,
+      { outcome: 'caught', items: [{ fishCode: 'sea_bass', quantity: 1, maxIndividualWeightGrams: weight }] },
+    )).status, 201, 'boundary catch is stored as a weighted source');
+  }
+  const olderMonthBoard = await leaderboardGet(monthKey(2));
+  const newerMonthBoard = await leaderboardGet(monthKey(1));
+  check(fishBoard(olderMonthBoard, 'sea_bass')?.items.map((item) => item.departureId),
+    [olderBoundaryTrip.departureId], '23:59 Asia/Shanghai return belongs to the ending month');
+  check(fishBoard(newerMonthBoard, 'sea_bass')?.items.map((item) => item.departureId),
+    [newerBoundaryTrip.departureId], '00:01 Asia/Shanghai return belongs to the new month');
+  const emptyBoard = await leaderboardGet(monthKey(24));
+  check(emptyBoard.body.boards, [], 'month with no weighted catches returns a true empty state');
+
+  console.info(`Step 5 acceptance passed: ${assertions} assertions; includes slice 2 leaderboard, pending-review, month-boundary, tie-order, top-20, empty-state and privacy cases.`);
 } finally {
   await app.close();
   await pool.end();

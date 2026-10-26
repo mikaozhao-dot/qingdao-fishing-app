@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api_client.dart';
 import 'fishing_tokens.dart';
 import 'step3_flow.dart';
+import 'step5_flow.dart';
 
 class Step2Workspace extends StatefulWidget {
   const Step2Workspace({
@@ -170,6 +171,8 @@ class _Step2WorkspaceState extends State<Step2Workspace> {
           const Text('找一班合适的船，看看谁正准备出发。', style: _bodyStyle),
           const SizedBox(height: 20),
           _SearchLaunchCard(onTap: () => widget.onSelectTab(1)),
+          const SizedBox(height: 12),
+          _LeaderboardLaunchCard(onTap: _openFishLeaderboard),
           const SizedBox(height: 20),
           _SectionHeading(
             title: '近期可拼班次',
@@ -309,6 +312,14 @@ class _Step2WorkspaceState extends State<Step2Workspace> {
           token: widget.token!,
           allowBooking: !_isCaptain,
         ),
+      ),
+    );
+  }
+
+  Future<void> _openFishLeaderboard() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Step5FishLeaderboardPage(token: widget.token!),
       ),
     );
   }
@@ -2568,6 +2579,59 @@ class _SearchLaunchCard extends StatelessWidget {
             const Icon(
               Icons.arrow_forward_ios_rounded,
               size: 15,
+              color: FishingTokens.secondary,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _LeaderboardLaunchCard extends StatelessWidget {
+  const _LeaderboardLaunchCard({required this.onTap});
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => Material(
+    color: FishingTokens.deepSurface,
+    borderRadius: BorderRadius.circular(18),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: FishingTokens.line),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: FishingTokens.brand.withValues(alpha: .12),
+                borderRadius: BorderRadius.circular(13),
+              ),
+              child: const Icon(
+                Icons.emoji_events_outlined,
+                color: FishingTokens.brand,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('本月大鱼榜', style: TextStyle(fontWeight: FontWeight.w800)),
+                  SizedBox(height: 3),
+                  Text('看看各鱼种的单次最大钓获', style: _smallBody),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 14,
               color: FishingTokens.secondary,
             ),
           ],

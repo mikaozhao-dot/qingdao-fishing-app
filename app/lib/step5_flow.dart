@@ -1056,3 +1056,274 @@ extension _ToggleSet<T> on Set<T> {
     if (!remove(value)) add(value);
   }
 }
+
+class Step5FishLeaderboardPage extends StatefulWidget {
+  const Step5FishLeaderboardPage({required this.token, super.key});
+  final String token;
+
+  @override
+  State<Step5FishLeaderboardPage> createState() =>
+      _Step5FishLeaderboardPageState();
+}
+
+class _Step5FishLeaderboardPageState extends State<Step5FishLeaderboardPage> {
+  String? _month;
+  List<String> _months = [];
+  List<Map<String, dynamic>> _boards = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load({String? month}) async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final query = month == null
+          ? ''
+          : '?month=${Uri.encodeQueryComponent(month)}';
+      final result = await Step1Api.get(
+        '/step5/fish-leaderboard$query',
+        token: widget.token,
+      );
+      if (!mounted) return;
+      setState(() {
+        _month = '${result['month'] ?? month ?? ''}';
+        _months = (result['availableMonths'] as List? ?? const [])
+            .map((value) => '$value')
+            .toList();
+        _boards = _maps(result['boards']);
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString().replaceFirst('Exception: ', '');
+        _loading = false;
+      });
+    }
+  }
+
+  String _monthLabel(String value) {
+    final parts = value.split('-');
+    return parts.length == 2
+        ? '${parts[0]} 年 ${int.tryParse(parts[1]) ?? parts[1]} 月'
+        : value;
+  }
+
+  String _dateLabel(Object? value) {
+    final text = '$value';
+    if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(text)) return '日期待补';
+    return text.replaceAll('-', '.');
+  }
+
+  String _weightLabel(Object? value) {
+    final grams = int.tryParse('$value') ?? 0;
+    if (grams >= 1000) return '${(grams / 1000).toStringAsFixed(2)} kg';
+    return '$grams g';
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: FishingTokens.background,
+    appBar: AppBar(
+      title: const Text('大鱼榜'),
+      backgroundColor: FishingTokens.background,
+      foregroundColor: FishingTokens.ink,
+    ),
+    body: RefreshIndicator(
+      onRefresh: () => _load(month: _month),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 10, 18, 30),
+        children: [
+          const _Step5Card(
+            title: '每一次好手气，都值得被看见',
+            body: '按鱼种与返航月份展示单次最大个体重量前 20 名。',
+            footnote: '数据来自船长与钓友的渔获回填，不代表平台称重认证。',
+          ),
+          const SizedBox(height: 14),
+          if (_months.isNotEmpty)
+            DropdownButtonFormField<String>(
+              key: ValueKey(_month),
+              initialValue: _months.contains(_month) ? _month : _months.first,
+              dropdownColor: FishingTokens.surface,
+              decoration: const InputDecoration(labelText: '返航月份'),
+              items: _months
+                  .map(
+                    (value) => DropdownMenuItem(
+                      value: value,
+                      child: Text(_monthLabel(value)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: _loading
+                  ? null
+                  : (value) {
+                      if (value != null) _load(month: value);
+                    },
+            ),
+          if (_loading) ...[
+            const SizedBox(height: 18),
+            const LinearProgressIndicator(minHeight: 2),
+          ],
+          if (_error != null) ...[
+            const SizedBox(height: 16),
+            _Step5Card(title: '暂时无法读取', body: _error!),
+            TextButton.icon(
+              onPressed: () => _load(month: _month),
+              icon: const Icon(Icons.refresh),
+              label: const Text('重试'),
+            ),
+          ],
+          if (!_loading && _error == null && _boards.isEmpty) ...[
+            const SizedBox(height: 18),
+            const _Step5Card(
+              title: '这个月还没有上榜渔获',
+              body: '完成返航后，船长或钓友回填了最大个体重量的渔获会出现在这里。',
+            ),
+          ],
+          if (!_loading && _error == null)
+            ..._boards.map(
+              (board) => Padding(
+                padding: const EdgeInsets.only(top: 13),
+                child: _LeaderboardFishCard(
+                  board: board,
+                  dateLabel: _dateLabel,
+                  weightLabel: _weightLabel,
+                ),
+              ),
+            ),
+          const SizedBox(height: 14),
+          const Text(
+            '排名按最大个体重量排序，同重量按先记录者优先。仅展示单次钓获，不对船长或钓友排名。',
+            style: TextStyle(
+              color: FishingTokens.muted,
+              fontSize: 11,
+              height: 1.5,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _LeaderboardFishCard extends StatelessWidget {
+  const _LeaderboardFishCard({
+    required this.board,
+    required this.dateLabel,
+    required this.weightLabel,
+  });
+  final Map<String, dynamic> board;
+  final String Function(Object?) dateLabel;
+  final String Function(Object?) weightLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _maps(board['items']);
+    return Container(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: FishingTokens.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: FishingTokens.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.phishing_outlined,
+                color: FishingTokens.brand,
+                size: 19,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${board['fishName'] ?? '鱼种'}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+              Text(
+                '${items.length} 条',
+                style: const TextStyle(
+                  color: FishingTokens.secondary,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...items.map((item) {
+            final rank = int.tryParse('${item['rank']}') ?? 0;
+            return Container(
+              margin: const EdgeInsets.only(top: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
+              decoration: BoxDecoration(
+                color: FishingTokens.deepSurface,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 24,
+                    child: Text(
+                      '$rank',
+                      style: TextStyle(
+                        color: rank == 1
+                            ? FishingTokens.brand
+                            : FishingTokens.secondary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${item['catcherName'] ?? '船长回填'}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          '${item['captainName'] ?? '船长'} · ${dateLabel(item['departureDate'])}',
+                          style: const TextStyle(
+                            color: FishingTokens.muted,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    weightLabel(item['maxIndividualWeightGrams']),
+                    style: const TextStyle(
+                      color: FishingTokens.brand,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 15,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}

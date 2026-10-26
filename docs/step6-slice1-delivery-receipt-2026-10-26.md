@@ -2,6 +2,8 @@
 
 ## 状态
 
+> 本文件前半部记录首轮代码 SHA `ad8e883a` 的交付和历史评审；当前修复回单与切片状态以文末“修复交付回单：固定代码 SHA `6da12f70`”为准。
+
 - 固定代码已提交至 main：[`ad8e883ae7261b9f61865310d2463ec6c7f7c714`](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/ad8e883ae7261b9f61865310d2463ec6c7f7c714)。本回执及 README 状态索引为后续文档提交；它们未改动 `app/` 或 `server/`，不能替代固定代码 SHA。
 - 本地隔离数据库和 GitHub Actions 数据库验收、Flutter 回归/分析、iOS 模拟器、Android APK 均通过。CI 链接与 SHA 见下文。
 - Muse 于 2026-10-26 在 [`docs/ui-design-review-ad8e883a.md`](ui-design-review-ad8e883a.md)（[`ae6ca32da452b542433f8e4c36ee1b1fe67ea667`](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/ae6ca32da452b542433f8e4c36ee1b1fe67ea667)）对固定 SHA `ad8e883ae7261b9f61865310d2463ec6c7f7c714` 给出**代码有条件通过**：推广主链与任务书一致；切片尚未关闭，待 Dot 对全额退款后重订资格和 `marina` 渠道归属作出裁定。Muse 评审中提及的回执现已在 main 的 `ee3b970` 提交中，包含逐项对照、本地验证及两条同 SHA CI；本回执保留 CI 运行链接。
@@ -134,3 +136,49 @@ Muse 评审第 1 项“补交交付回执”在其评审提交时已由 `ee3b970
 ### 下一步与限制
 
 请 Luna 沿原任务提交最小修复固定 SHA、对应反例及按实际检出 SHA 的 CI；Muse 同步本次暂不通过、H5 边界与仍待创始人的业务项。Dot 未独立空库重跑、未做真机或截图视觉验收；本结论不进入切片 2、不批准整体产品验收、真实资金/打款或生产上线。
+
+## 修复交付回单：固定代码 SHA `6da12f70`（2026-10-26）
+
+### 当前状态
+
+- 固定代码 SHA：[`6da12f70d63c3347771d2f4ebf20bec6e280b0ce`](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/6da12f70d63c3347771d2f4ebf20bec6e280b0ce)。服务端修复为 [`e1cabf4c76b9618e7146cc065774da8062009984`](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/e1cabf4c76b9618e7146cc065774da8062009984)，Flutter 与原生深链配置修复为 `6da12f70`；两笔代码提交分开，随后仅有评审和本回执文档提交。
+- Muse 巡检 [`docs/ui-design-review-6da12f70.md`](ui-design-review-6da12f70.md) 对 F1–F4 代码及随修复补证给出**有条件通过**，同时要求补齐本回执与同 SHA CI 记录。回执现已补齐；这不代表 Muse 已另行签收回执，也不代表 Dot 已完成定点复核。
+- 当前等待 Dot 对本次修复作定点复核，尤其请裁定下方 Q1、Q2。Dot 复核通过和创始人产品验收前，切片 1 不关闭、不进切片 2；不接真实资金、真实打款或生产。
+
+### F1–F4 修复与证据映射
+
+1. **F1 / 历史实名资格只消费一次。** 新迁移 `022_step6_promotion_identity_and_refund_baseline.sql` 持久记录消费资格时的身份 HMAC，并用数据库唯一约束和事务路径保护跨账号与并发竞争；历史正佣金资格按迁移时当前已核验身份回填。验收覆盖 A 使用身份 X 获得资格、之后更正身份为 Y、B 再使用 X 被拒，以及同一身份摘要并发插入仅一方成功。迁移前已更正掉的身份无法从现存数据恢复，作为披露的历史残留风险交 Dot 裁定（Q1）。
+2. **F2 / 无效归因不锁死后续有效触点。** `AppShell` 只在 `claimed == true` 或 `reason == already_attributed` 时将 token 视为终态；`self_referral`、`no_active_referral` 保持可重试，并只清理当前正在处理的同一 token。Flutter 接线测试覆盖冷启动链接、登录后 claim、无效同 token 再投递后的重试，以及旧请求处理中到达的新热链接随后被处理。
+3. **F3 / 区分解冻前退款与解冻后新增退款。** 账本在解冻时记录累计退款基线；只有处于已解冻/提现状态且退款总额超过基线时才登记解冻后异常，金额为新增差额、不追缴不扣款。数据库验收覆盖冻结期全额退款重复同步无误报、解冻前部分退款纳入基线、真实解冻后新增退款只记一次，以及真实返航时间加 7 天和边界前后状态。
+4. **F4 / Flutter 默认深链处理器隔离。** Android `AndroidManifest.xml` 配置 `flutter_deeplinking_enabled=false`，iOS `Info.plist` 配置 `FlutterDeepLinkingEnabled=false`。配置断言、AppShell 注入式冷/热链接流程测试，以及下表所列 Android/iOS 构建均通过。**这些证据没有完成真实 H5 点击 → 原生冷/热启动 → 登录 → 真实 claim 的完整设备交互，不能视为该端到端路径已验证。**
+
+### 随修复补证
+
+- 沙盒提现负向覆盖他人账本、重复/并发申请、无或错误管理员口令、非法状态流转、拒绝后重新申请及重复标记；未接真实打款。
+- 解冻时刻依据返航时间加 7 天计算，并覆盖边界前后；不是通过直接篡改 `release_at` 代替。
+- 互推双方并发同步/看板读取覆盖 `SKIP LOCKED` 路径；此前只是静态锁顺序风险，没有把它写成已发生的死锁。
+- 海报 widget 测试实际渲染 PNG，检查 PNG 文件头和大小，并断言分享回调收到 `image/png` 文件。没有真机保存或分享面板目检证据。
+
+### 同一代码 SHA 的 GitHub Actions
+
+两条 CI 都实际检出完整代码 SHA `6da12f70d63c3347771d2f4ebf20bec6e280b0ce`；CI 数字与本地数字分开记录：
+
+| 工作流与原始证据 | 结果 |
+| --- | --- |
+| [数据库验收 run 40333231826 / job 121607856817](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40333231826/job/121607856817) | job 成功；Step 4 **709** 项、Step 5 **133** 项、Step 5 直播 **77** 项、第 6 步切片 1 **182** 项断言通过。 |
+| [Flutter 回归、分析及双端构建 run 40332556101](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40332556101) | `analyze`：**26** 项通过、`No issues found`；`android`：debug APK 构建成功；`ios`：模拟器构建成功；三个 job 均成功。 |
+
+### 本地验证（与 CI 分开）
+
+- 隔离数据库：Step 4 **710** 项、Step 5 **133** 项、Step 5 直播 **77** 项、第 6 步切片 1 **182** 项断言通过；`npm run check` 通过，`npm test` **10/10** 通过。
+- Flutter：`flutter test --no-pub` **26** 项通过，`flutter analyze --no-pub` 无问题；本地 iOS simulator build 成功。该机器没有 Android SDK，Android 构建以同 SHA CI 结果为准。
+- 本地 iOS 模拟器曾收到测试 scheme URI，但当前环境未完成可交互的 H5 点击、登录与归因 claim；没有真机/可交互模拟器的完整链路证据，也没有原生页面截图。CI 构建成功仅证明相应构建通过。
+
+### 未验收边界与待 Dot 裁定
+
+- **H5 免下载首单未交付、未验收。** 本轮不扩围去做 Web 注册、实名和下单流程；后续排期按既定审批另行处理。
+- **Q1：迁移前已更正掉的身份。** 迁移无法恢复历史上已被替换的实名身份；请 Dot 裁定是否接受为历史残留风险。
+- **Q2：解冻后多笔新增退款的事件粒度。** 当前布尔标记保证重复同步不会重复记同一异常，但首笔异常后再发生另一笔新增退款，不会新增第二条事件。请 Dot 裁定是否接受现有布尔语义，或要求按新增退款逐笔记录。
+- 退款/取消后重订是否重新取得首单计佣资格的 A/B 选择仍待创始人决定，本轮未改；`marina` 属产品正本已列的码头商户渠道，本轮保留，非待裁定项。未获创始人产品验收，不关闭切片 1。
+
+**请求 Dot：**请以固定代码 SHA `6da12f70d63c3347771d2f4ebf20bec6e280b0ce` 和本修复回单为对象，只复核 F1–F4、随修复补证及 Q1/Q2；明确裁定与仍未完成的原生设备端到端证据边界。此处为复核请求，不预设 Dot 结论。

@@ -7,6 +7,7 @@ import {
   validWaitlistUuid,
 } from './step3-waitlist.js';
 import { configuredStep3Clock, readStep3Clock } from './step3-clock.js';
+import { syncPromotionForUser } from './promotion-service.js';
 
 const HOLD_KEY_PREFIX = 'fishing:step3:seat:';
 const sendError = (reply, statusCode, message) => reply.code(statusCode).send({ error: message });
@@ -249,7 +250,7 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
       await client.query('BEGIN');
       await client.query('SELECT id FROM departures WHERE id=$1 FOR UPDATE', [departureId]);
       const orderResult = await client.query(
-        `SELECT o.id,o.status,o.seat_fee_fen,o.discount_fen,o.platform_fee_fen,o.total_amount_fen,
+        `SELECT o.id,o.status,o.buyer_user_id,o.seat_fee_fen,o.discount_fen,o.platform_fee_fen,o.total_amount_fen,
                 o.cancelled_refund_fen,o.cancellation_penalty_fen,d.departure_at,d.status AS departure_status,
                 ${confirmationAtSql('d')} AS confirmation_at
          FROM booking_orders o JOIN departures d ON d.id=o.departure_id
@@ -290,9 +291,10 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
       );
       await client.query(
         `UPDATE booking_orders SET status='cancelled',cancelled_at=$2,updated_at=now(),
-          cancelled_refund_fen=$3,cancellation_penalty_fen=$4
+          cancelled_refund_fen=$3,cancellation_penalty_fen=$4,ticket_refunded_fen=$5
          WHERE id=$1`,
-        [order.id, now, amounts.refundFen + Number(order.platform_fee_fen), amounts.penaltyFen],
+        [order.id, now, amounts.refundFen + Number(order.platform_fee_fen), amounts.penaltyFen,
+          amounts.refundFen],
       );
       await client.query(
         `UPDATE booking_order_seats SET status='released' WHERE order_id=$1 AND status='paid'`, [order.id],
@@ -322,6 +324,7 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
           [order.id, refundFen, `customer-cancel:${order.id}`, now],
         );
       }
+      await syncPromotionForUser(client, order.buyer_user_id);
       await client.query('COMMIT');
       result = {
         cancelled: true,

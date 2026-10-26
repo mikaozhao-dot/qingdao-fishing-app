@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createSecurity, verifyChineseIdentityNumber } from './security.js';
+import { syncPromotionForUser } from './promotion-service.js';
 import { createSandboxInsuranceAdapter, createSandboxPaymentAdapter } from './step3-adapters.js';
 import { settleSupplementPayment } from './step4-routes.js';
 import { registerStep3WaitlistRoutes } from './step3-waitlist-routes.js';
@@ -444,7 +445,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
       return { statusCode: 400, body: { error: '支付订单或金额不匹配' } };
     }
     const orderResult = await client.query(
-      `SELECT o.id,o.status,o.hold_id,o.total_amount_fen,o.waitlist_entry_id,
+      `SELECT o.id,o.status,o.hold_id,o.total_amount_fen,o.waitlist_entry_id,o.buyer_user_id,
               h.status AS hold_status,h.expires_at AS hold_expires_at,
               w.authorization_expires_at
        FROM booking_orders o
@@ -632,6 +633,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
         `UPDATE booking_orders SET status='paid',paid_at=now(),updated_at=now() WHERE id=$1`,
         [event.orderId],
       );
+      await syncPromotionForUser(client, order.buyer_user_id);
       await client.query(
         `UPDATE booking_order_seats SET status='paid' WHERE order_id=$1 AND status='pending_payment'`,
         [event.orderId],

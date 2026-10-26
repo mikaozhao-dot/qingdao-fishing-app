@@ -1,7 +1,12 @@
+import 'dart:async';
+
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'api_client.dart';
 import 'fishing_tokens.dart';
+import 'promotion_flow.dart';
 import 'step1_flow.dart';
 import 'step2_flow.dart';
 import 'step4_flow.dart';
@@ -100,6 +105,11 @@ class _AppShellState extends State<AppShell> {
   AppRole _role = AppRole.angler;
   int _selectedIndex = 0;
   String? _sessionToken;
+  final AppLinks _appLinks = AppLinks();
+  StreamSubscription<Uri>? _deepLinkSubscription;
+  String? _pendingPromotionVisitorToken;
+  String? _claimedPromotionVisitorToken;
+  bool _claimingPromotion = false;
 
   static const _anglerTabs = <_AppTab>[
     _AppTab('首页', Icons.home_outlined),
@@ -119,6 +129,65 @@ class _AppShellState extends State<AppShell> {
       _role == AppRole.angler ? _anglerTabs : _captainTabs;
 
   String get _roleLabel => _role == AppRole.angler ? '钓友端' : '船长端';
+
+  @override
+  void initState() {
+    super.initState();
+    _deepLinkSubscription = _appLinks.uriLinkStream.listen(
+      _receivePromotionLink,
+      onError: (_) {},
+    );
+    _appLinks
+        .getInitialLink()
+        .then((uri) {
+          if (uri != null) _receivePromotionLink(uri);
+        })
+        .catchError((_) {});
+  }
+
+  @override
+  void dispose() {
+    _deepLinkSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _receivePromotionLink(Uri uri) {
+    final visitorToken = promotionVisitorTokenFromUri(uri);
+    if (visitorToken == null) return;
+    _pendingPromotionVisitorToken = visitorToken;
+    if (_sessionToken == null && _selectedIndex != 3) {
+      setState(() => _selectedIndex = 3);
+    }
+    _claimPendingPromotion();
+  }
+
+  void _handleTokenChanged(String? token) {
+    setState(() => _sessionToken = token);
+    if (token != null) _claimPendingPromotion();
+  }
+
+  Future<void> _claimPendingPromotion() async {
+    final visitorToken = _pendingPromotionVisitorToken;
+    final token = _sessionToken;
+    if (visitorToken == null ||
+        token == null ||
+        _claimingPromotion ||
+        visitorToken == _claimedPromotionVisitorToken) {
+      return;
+    }
+    _claimingPromotion = true;
+    try {
+      await Step1Api.post('/promotions/attribution/claim', {
+        'visitorToken': visitorToken,
+      }, token: token);
+      _claimedPromotionVisitorToken = visitorToken;
+      _pendingPromotionVisitorToken = null;
+    } catch (_) {
+      // Keep the referral until the user is authenticated and the API is reachable.
+    } finally {
+      _claimingPromotion = false;
+    }
+  }
 
   void _switchRole(AppRole role) {
     setState(() {
@@ -149,6 +218,21 @@ class _AppShellState extends State<AppShell> {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: '推广中心',
+            icon: const Icon(Icons.campaign_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (pageContext) => PromotionCenterPage(
+                  token: _sessionToken,
+                  onRequireLogin: () {
+                    Navigator.of(pageContext).pop();
+                    setState(() => _selectedIndex = 3);
+                  },
+                ),
+              ),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.only(right: FishingTokens.space12),
             child: PopupMenuButton<AppRole>(
@@ -187,8 +271,7 @@ class _AppShellState extends State<AppShell> {
             ? Step4AnglerWorkspace(
                 token: _sessionToken,
                 onOpenProfile: () => setState(() => _selectedIndex = 3),
-                onTokenChanged: (token) =>
-                    setState(() => _sessionToken = token),
+                onTokenChanged: _handleTokenChanged,
               )
             : tab.label == '行程' && _role == AppRole.captain
             ? Step4CaptainWorkspace(
@@ -200,16 +283,14 @@ class _AppShellState extends State<AppShell> {
                 roleLabel: _roleLabel,
                 tabLabel: tab.label,
                 token: _sessionToken,
-                onTokenChanged: (token) =>
-                    setState(() => _sessionToken = token),
+                onTokenChanged: _handleTokenChanged,
                 onOpenProfile: () => setState(() => _selectedIndex = 3),
               )
             : Step2Workspace(
                 roleLabel: _roleLabel,
                 tabLabel: tab.label,
                 token: _sessionToken,
-                onTokenChanged: (token) =>
-                    setState(() => _sessionToken = token),
+                onTokenChanged: _handleTokenChanged,
                 onOpenProfile: () => setState(() => _selectedIndex = 3),
                 onSelectTab: (index) => setState(() => _selectedIndex = index),
               ),

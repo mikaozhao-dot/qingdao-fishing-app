@@ -47,6 +47,7 @@ jobs:
       STEP4_ACCEPTANCE: 'true'
       STEP5_ACCEPTANCE: 'true'
       STEP5_LIVE_ACCEPTANCE: 'true'
+      STEP6_PROMOTION_ACCEPTANCE: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -69,3 +70,6 @@ jobs:
       - name: Run Step 5 slice 3 live status database acceptance
         working-directory: server
         run: npm run smoke:step5-live
+      - name: Run Step 6 slice 1 promotion database acceptance
+        working-directory: server
+        run: npm run smoke:step6-promotion

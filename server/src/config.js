@@ -19,6 +19,7 @@ export const config = Object.freeze({
   paymentSandboxSecretHex: process.env.PAYMENT_SANDBOX_SECRET_HEX ?? '',
   insuranceSandboxSecretHex: process.env.INSURANCE_SANDBOX_SECRET_HEX ?? '',
   adminPassword: process.env.ADMIN_PASSWORD ?? '',
+  promotionPublicBaseUrl: process.env.PROMOTION_PUBLIC_BASE_URL ?? 'http://localhost:3000',
   uploadDir: process.env.UPLOAD_DIR ?? fileURLToPath(new URL('../.local-uploads/', import.meta.url)),
   databaseUrl: process.env.DATABASE_URL,
   redisUrl: process.env.REDIS_URL,

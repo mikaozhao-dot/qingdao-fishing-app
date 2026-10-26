@@ -62,6 +62,7 @@ flutter run
 - `docs/data-model-step5-slice1-addendum.md`、`docs/step5-slice1-delivery-receipt-2026-10-26.md`：第 5 步切片 1 数据模型、口径假设、验证证据与 Dot 定点复核请求。
 - `docs/muse-to-luna-step5-slice2-brief-2026-10-26.md`、`docs/muse-to-luna-step5-slice2-revision-order-2026-10-26.md`、`docs/step5-slice2-start-ack-2026-10-26.md`、`docs/step5-slice2-revision-start-ack-2026-10-26.md`、`docs/step5-slice2-delivery-receipt-2026-10-26.md`：第 5 步切片 2 大鱼榜原任务、C 修订令、开工回执、验收证据与 Dot 限定技术通过及创始人限定范围验收记录。
 - `docs/muse-to-luna-step5-slice3-brief-2026-10-26.md`、`docs/muse-to-luna-step5-slice3-fixback-2026-10-26.md`、`docs/step5-slice3-start-ack-2026-10-26.md`、`docs/step5-slice3-fixback-start-ack-2026-10-26.md`、`docs/data-model-step5-slice3-addendum.md`、`docs/step5-slice3-delivery-receipt-2026-10-26.md`：第 5 步切片 3 直播状态任务、最小修复范围、开工回执、数据模型增量、修复与同 SHA 验收证据，以及 Dot 定点复核状态。
+- `docs/muse-to-luna-step6-slice1-brief-2026-10-26.md`、`docs/step6-slice1-start-ack-2026-10-26.md`、`docs/data-model-step6-slice1-addendum.md`：第 6 步切片 1 推广中心任务、开工回执与迁移数据模型增量；代码完成后另附交付回执与 Muse 评审请求。
 - `docs/codex-seat-map-v04-rework-order-2026-10-24.md`、`docs/muse-seat-premium-scope-reply-2026-10-24.md`、`docs/codex-seat-map-implementation-order-2026-10-24.md`：V04 草图返工、船尾四位同额加价和当前执行边界；2026-10-25 创始人最新选位参考追加在 V04 返工令末尾。
 - `docs/seat-map-v04-implementation-receipt-2026-10-24.md`、`docs/seat-map-spatial-redesign-status-2026-10-24.md`、`docs/step3-build-notes.md`、`docs/step3-review-request-2026-10-24.md`：选位页历史回执、当前返工进度、构建证据与 dot 复核请求。
 - `docs/v04-targeted-repair-followup-2026-10-25.md`：V04 旧航次座位快照、部分配额船图和触控重叠定点修复，以及待 Muse / dot 复核的证据。

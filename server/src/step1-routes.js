@@ -2,6 +2,7 @@ import { createLocalObjectStorage, allowedImageTypes } from './local-object-stor
 import { createIdentityAdapter } from './identity-adapter.js';
 import { createSecurity } from './security.js';
 import { createSmsAdapter } from './sms-adapter.js';
+import { syncPromotionForUser } from './promotion-service.js';
 
 const MARINAS = Object.freeze({
   xiaogang: '小港',
@@ -310,6 +311,7 @@ export function registerStep1Routes(app, { pool, config }) {
     }
     const legalNameCiphertext = security.encrypt(legalName);
     const identityNumberCiphertext = security.encrypt(identityNumber);
+    const identityNumberHash = security.identityHash(identityNumber);
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -327,12 +329,17 @@ export function registerStep1Routes(app, { pool, config }) {
       await client.query(
         `UPDATE users SET identity_status = $1::varchar, identity_rejection_reason = $2,
            identity_verified_at = CASE WHEN $1::varchar = 'verified' THEN now() ELSE NULL END,
-           updated_at = now() WHERE id = $3`,
-        [sandboxDecision.status, sandboxDecision.reason, request.user.id],
+           identity_number_hash = CASE WHEN $1::varchar = 'verified' THEN $3::bytea ELSE NULL END,
+           updated_at = now() WHERE id = $4`,
+        [sandboxDecision.status, sandboxDecision.reason, identityNumberHash, request.user.id],
       );
+      if (sandboxDecision.status === 'verified') {
+        await syncPromotionForUser(client, request.user.id);
+      }
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
+      if (error.code === '23505') return sendError(reply, 409, '该实名身份已关联其他账号');
       request.log.error({ err: error }, 'Identity verification submission failed');
       return sendError(reply, 500, '实名提交失败，请稍后重试');
     } finally {

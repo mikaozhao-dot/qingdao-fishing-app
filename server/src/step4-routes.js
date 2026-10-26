@@ -1,4 +1,5 @@
 import { createSecurity } from './security.js';
+import { syncPromotionForUser, syncPromotionsForDeparture } from './promotion-service.js';
 import { closeoutAtSql, processWaitlistCloseouts } from './step3-waitlist.js';
 import { configuredStep3Clock } from './step3-clock.js';
 
@@ -166,7 +167,7 @@ async function failSupplementRound(client, roundId, reason, terminalStatus = 'fa
 
 async function refundSupplementDecliners(client, roundId) {
   const exited = await client.query(
-    `SELECT p.order_id
+    `SELECT p.order_id,o.buyer_user_id,o.seat_fee_fen,o.discount_fen
      FROM departure_supplement_participants p
      JOIN booking_orders o ON o.id=p.order_id
      WHERE p.round_id=$1 AND p.consent_status IN ('rejected','timed_out') AND o.status='paid'
@@ -176,7 +177,8 @@ async function refundSupplementDecliners(client, roundId) {
   const orderIds = exited.rows.map((row) => row.order_id);
   await client.query(
     `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),
-       cancelled_refund_fen=total_amount_fen,cancellation_penalty_fen=0,updated_at=now()
+       cancelled_refund_fen=total_amount_fen,cancellation_penalty_fen=0,
+       ticket_refunded_fen=seat_fee_fen-discount_fen,updated_at=now()
      WHERE id=ANY($1::uuid[]) AND status='paid'`, [orderIds],
   );
   await client.query(
@@ -203,6 +205,9 @@ async function refundSupplementDecliners(client, roundId) {
     `UPDATE departure_waitlist_entries SET status='closed',updated_at=now()
      WHERE order_id=ANY($1::uuid[]) AND status='converted'`, [orderIds],
   );
+  for (const userId of new Set(exited.rows.map((row) => row.buyer_user_id))) {
+    await syncPromotionForUser(client, userId);
+  }
   return exited.rowCount;
 }
 
@@ -1259,6 +1264,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
            WHERE departure_id=$1 AND ended_at IS NULL`,
           [departure.id],
         );
+        await syncPromotionsForDeparture(client, departure.id);
       }
       return {
         ok: true,

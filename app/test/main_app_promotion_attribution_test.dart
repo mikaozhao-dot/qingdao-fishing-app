@@ -194,4 +194,86 @@ void main() {
       await linkController.close();
     },
   );
+
+  testWidgets(
+    'duplicate link delivery and AppShell recreation do not duplicate attribution',
+    (tester) async {
+      final firstLinkController = StreamController<Uri>.broadcast();
+      final claims = <String>[];
+      final attributedTokens = <String>{};
+      Step1Api.clientOverride = MockClient((request) async {
+        if (request.url.path == '/auth/code') {
+          return _json({'sandboxCode': '246810'});
+        }
+        if (request.url.path == '/auth/register') {
+          return _json({
+            'token': _sessionToken,
+            'user': {
+              'id': 'user-1',
+              'displayName': '测试用户',
+              'identityStatus': 'not_submitted',
+            },
+          });
+        }
+        if (request.url.path == '/account/me') {
+          return _json({
+            'user': {
+              'id': 'user-1',
+              'displayName': '测试用户',
+              'identityStatus': 'not_submitted',
+            },
+          });
+        }
+        if (request.url.path == '/promotions/attribution/claim') {
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          final visitorToken = body['visitorToken'] as String;
+          claims.add(visitorToken);
+          return attributedTokens.add(visitorToken)
+              ? _json({'claimed': true, 'reason': 'claimed'})
+              : _json({'claimed': false, 'reason': 'already_attributed'});
+        }
+        fail('Unexpected API request: ${request.method} ${request.url}');
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: app.AppShell(
+            initialPromotionLink: () async => _coldStartLink,
+            promotionLinkStream: firstLinkController.stream,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _logIn(tester);
+      expect(claims, [_visitorToken]);
+      expect(attributedTokens, {_visitorToken});
+
+      // app_links may emit the initial URI again after native lifecycle changes.
+      firstLinkController.add(_coldStartLink);
+      firstLinkController.add(_coldStartLink);
+      await tester.pumpAndSettle();
+      expect(claims, [_visitorToken]);
+      expect(attributedTokens, {_visitorToken});
+
+      // Recreate the app shell as a widget-level Activity recreation simulation.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await firstLinkController.close();
+      final recreatedLinkController = StreamController<Uri>.broadcast();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: app.AppShell(
+            initialPromotionLink: () async => _coldStartLink,
+            promotionLinkStream: recreatedLinkController.stream,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _logIn(tester);
+
+      expect(claims, [_visitorToken, _visitorToken]);
+      expect(attributedTokens, {_visitorToken});
+      await tester.pumpWidget(const SizedBox.shrink());
+      await recreatedLinkController.close();
+    },
+  );
 }

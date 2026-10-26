@@ -213,6 +213,10 @@ try {
   check(secondClaim.body.claimed, false, 'repeat claims cannot create a second attribution');
   check(secondClaim.body.reason, 'already_attributed', 'repeat claim reports existing attribution');
   check((await scalar(
+    'SELECT count(*)::integer AS count FROM promotion_attributions WHERE attributed_user_id=$1',
+    [guest.id],
+  )).count, 1, 'duplicate claim leaves exactly one persisted attribution');
+  check((await scalar(
     `SELECT c.code FROM promotion_attributions a JOIN promotion_codes c ON c.id=a.promotion_code_id
      WHERE a.attributed_user_id=$1`, [guest.id],
   )).code, firstCode.code, 'later code does not replace first attribution');
@@ -591,6 +595,37 @@ try {
   )).count > 0, true,
   'fully reversed upgrade fixture retains its original positive commission event');
 
+  const legacyEventOnlyBuyer = await makeUser('升级夹具：仅历史事件保留');
+  const legacyEventIdentity = makeSandboxIdentityNumber('206');
+  await verifyIdentity(legacyEventOnlyBuyer, '206');
+  const legacyEventScan = await scan(firstCode.code);
+  await claim(legacyEventOnlyBuyer, legacyEventScan.visitorToken);
+  const legacyEventTrip = await makePaidOrder(legacyEventOnlyBuyer, captain, 96, 10_000);
+  await expect('POST', `/orders/${legacyEventTrip.orderId}/cancel`,
+    legacyEventOnlyBuyer.token, {}, 200);
+  await pool.query(
+    'UPDATE promotion_attributions SET qualified_at=NULL WHERE attributed_user_id=$1',
+    [legacyEventOnlyBuyer.id],
+  );
+  const legacyEventLedger = await scalar(
+    `SELECT l.id,l.amount_fen,l.status,a.qualified_at
+     FROM commission_ledger l
+     JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+     WHERE a.attributed_user_id=$1`, [legacyEventOnlyBuyer.id],
+  );
+  check(legacyEventLedger.status, 'reversed',
+    'event-only upgrade fixture fully reverses the previously qualified commission');
+  check(Number(legacyEventLedger.amount_fen), 0,
+    'event-only historical qualification has zero current balance');
+  check(legacyEventLedger.qualified_at, null,
+    'event-only upgrade fixture removes the qualification timestamp to isolate fallback');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM promotion_commission_events e
+     WHERE e.commission_ledger_id=$1 AND e.event_type='commission_created' AND e.amount_fen>0`,
+    [legacyEventLedger.id],
+  )).count > 0, true,
+  'event-only upgrade fixture retains a positive historical commission event');
+
   const neverCommissionedBuyer = await makeUser('升级夹具：实名但从未计佣');
   await verifyIdentity(neverCommissionedBuyer, '203');
   const neverCommissionedScan = await scan(firstCode.code);
@@ -608,13 +643,19 @@ try {
 
   const migration023 = '023_backfill_historic_promotion_identity_qualifications.sql';
   await pool.query(
-    'DELETE FROM promotion_identity_qualifications WHERE user_id=$1', [legacyReversedBuyer.id],
+    'DELETE FROM promotion_identity_qualifications WHERE user_id=ANY($1::uuid[])',
+    [[legacyReversedBuyer.id, legacyEventOnlyBuyer.id]],
   );
   check((await scalar(
     'SELECT count(*)::integer AS count FROM promotion_identity_qualifications WHERE user_id=$1',
     [legacyReversedBuyer.id],
   )).count, 0,
   '022 upgrade-state fixture reproduces the zero-balance qualification missed by its backfill');
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM promotion_identity_qualifications WHERE user_id=$1',
+    [legacyEventOnlyBuyer.id],
+  )).count, 0,
+  '022 upgrade-state fixture removes the event-only identity qualification before backfill');
   await pool.query('DELETE FROM schema_migrations WHERE version=$1', [migration023]);
   const migrationResult = await execFileAsync(process.execPath, [migrationScriptPath], {
     cwd: serverWorkingDirectory,
@@ -630,6 +671,13 @@ try {
   check(backfilledIdentity.identity_number_hash.toString('hex'),
     security.identityHash(legacyIdentityX).toString('hex'),
   'upgrade backfill seeds the still-present identity from a zero-balance historical qualification');
+  const eventBackfilledIdentity = await scalar(
+    `SELECT identity_number_hash,consumed_at FROM promotion_identity_qualifications
+     WHERE user_id=$1`, [legacyEventOnlyBuyer.id],
+  );
+  check(eventBackfilledIdentity.identity_number_hash.toString('hex'),
+    security.identityHash(legacyEventIdentity).toString('hex'),
+  'upgrade backfill uses the historical commission event when qualified_at is absent');
   check((await scalar(
     'SELECT count(*)::integer AS count FROM promotion_identity_qualifications WHERE user_id=$1',
     [legacyPositiveBuyer.id],
@@ -640,6 +688,27 @@ try {
     [neverCommissionedBuyer.id],
   )).count, 0,
   'upgrade backfill does not consume identity for a buyer who never earned commission');
+
+  const qualificationCountAfterFirstRun = Number((await scalar(
+    'SELECT count(*)::integer AS count FROM promotion_identity_qualifications',
+  )).count);
+  await pool.query('DELETE FROM schema_migrations WHERE version=$1', [migration023]);
+  const rerunMigrationResult = await execFileAsync(process.execPath, [migrationScriptPath], {
+    cwd: serverWorkingDirectory,
+    env: process.env,
+    timeout: 30_000,
+  });
+  check(rerunMigrationResult.stdout.includes(`Applied migration ${migration023}`), true,
+    'upgrade acceptance can execute migration 023 a second time');
+  check(Number((await scalar(
+    'SELECT count(*)::integer AS count FROM promotion_identity_qualifications',
+  )).count), qualificationCountAfterFirstRun,
+  'rerunning migration 023 creates no duplicate identity qualification rows');
+  check((await scalar(
+    'SELECT count(*)::integer AS count FROM promotion_identity_qualifications WHERE user_id=$1',
+    [legacyEventOnlyBuyer.id],
+  )).count, 1,
+  'rerun preserves exactly one qualification seeded from the historical-event fallback');
 
   await verifyIdentity(legacyReversedBuyer, '204');
   const postUpgradeReuseBuyer = await makeUser('升级后复用已消费身份');

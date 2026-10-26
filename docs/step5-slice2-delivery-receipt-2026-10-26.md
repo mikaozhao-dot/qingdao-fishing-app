@@ -130,3 +130,42 @@ dot 已读取原始日志：
 3. R3：确认本轮 CI 链接确属上述固定 SHA，按 job 记录 Flutter 分析/测试、iOS 模拟器与 Android APK 结果；旧 SHA 的 CI 仅作历史证据。
 
 Dot 复核结论尚未收到；切片 2 仍开放、切片 3 未启动，真实资金、保险和生产部署不在本次范围。
+
+
+## Dot 独立定点复核结论（2026-10-26 10:57 CST）：限定沙盒技术通过
+
+**给 Muse / Luna：固定代码 `9fe22d62f1f33e17393d6fe92283b0d823b32160` 的本轮 R1/R2/R3 修订及补证，限定沙盒技术复核通过；关闭 Dot 在 `a1b1c9f228f520c85783114864dadf708d8030cc` 留下的这三项技术阻断。** 这是按仓内 Muse 记录的创始人选定 C（`d6e06f2dd360faf75ecb2b9f6559464e1681e6b9`）所做的独立实现复核，不重开旧个人/同钓获人榜语义，也不是 Dot 新批准业务规则。
+
+本轮实读固定源码、用例、更新回执和四个 CI job 的原始日志，而非仅据绿灯或交付方自报。被评交付回执为 `ceb66f84b08648517373de97ba726a1dde243bdc`；落笔前最新 main 为 `0c940831f4ef8082531eeb668a1b45ab00fcb831`，新增内容仅为 Muse 评审文档，未改变被评代码。本节是此前“待 Dot”状态的后续结论，保留前文及历史评审，不抹除其当时状态。
+
+### R1 已关闭：依新 C 核验，不冒称同鱼去重
+
+- [服务端分组与来源标注](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/9fe22d62f1f33e17393d6fe92283b0d823b32160/server/src/step5-routes.js#L439-L490) 按 `(departure_id, fish_code)` 取最大个体重量；同重先记录，稳定后备排序。乘客获胜显示昵称，船长整船获胜显示“船长整船回填”。
+- [页面说明](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/9fe22d62f1f33e17393d6fe92283b0d823b32160/app/lib/step5_flow.dart#L1147-L1204) 明确“每航次每鱼种仅展示最大一条”，不再把航次最大来源选择描述为跨来源同鱼去重；保留非平台称重认证说明。[Widget 断言](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/9fe22d62f1f33e17393d6fe92283b0d823b32160/app/test/step5_leaderboard_test.dart#L67-L83) 检查昵称、船长整船来源、C 文案、月份切换及空态。
+
+### R2 已关闭：真实异议动态下榜、最大值易主及隔离证据已补
+
+[新增数据库用例](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/9fe22d62f1f33e17393d6fe92283b0d823b32160/server/scripts/step5-acceptance.mjs#L528-L611) 在同航次加入甲、乙及船长来源和三个鱼种，先查证已有榜项，再由甲通过真实 API 提交异议触发 `pending_review`：
+
+- 异议前，小黄鱼船长 5000 g 胜出；海鲈 3500 g 同重取较早船长源；章鱼甲 3600 g 胜出。
+- 异议后，甲本航次全部鱼种、船长整船全部鱼种来源排除，乙状态及来源不被直接排除；小黄鱼最大值易主为乙 4000 g，海鲈乙 3500 g 保留，章鱼下榜。
+- 恢复证据是**仅在隔离验收数据库模拟状态恢复**后再查询，验证船长 5000 g 与甲章鱼 3600 g 重新成为获胜来源；它证明状态驱动重算，**不证明已有完整审核、异议解除或申诉产品流程**，本轮也不要求扩建此类流程。
+
+### R3 已关闭：本轮实际同 SHA 原始 CI 证据
+
+以下原始日志均检出完整 SHA `9fe22d62f1f33e17393d6fe92283b0d823b32160`，不是把旧 SHA 的成功移用于新代码：
+
+| 原始 CI 证据 | Dot 实读结果 |
+| --- | --- |
+| [数据库 run 40260583592 / job 121371907691](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40260583592/job/121371907691) | 迁移 `001`–`019`；Step 4 **709**、Step 5 **133** 项断言通过，包含本轮 C 及真实异议/恢复场景 |
+| [Flutter 测试与分析 job 121371907633](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40260583487/job/121371907633) | **12 tests passed**；分析 **No issues found** |
+| [iOS 模拟器 job 121371907665](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40260583487/job/121371907665) | 构建成功 |
+| [Android debug APK job 121371907466](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40260583487/job/121371907466) | 构建成功 |
+
+旧 `9a1fda5c` 数据库与 `7dd2f542` 双端结果仍仅是历史证据。Dot 未独立另起空库重跑；交付方本地测试记录仍应与上述独立读取的 CI 证据区分。
+
+### 给 Muse / Luna 的状态同步与边界
+
+1. 沿原切片任务记录本轮 R1/R2/R3 技术阻断已关闭；Muse `0c940831` 文档所列“待新回执、同 SHA CI、Dot 复核”是其评审时的状态，现对应技术证据已补齐并由本节核验，无须重复派单或重跑旧评审。
+2. **非阻断历史文案纠错**：当前回执已正确说明“模型已有可选长度、本片只做获批重量榜”；[旧任务书第 11 行](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/0c940831f4ef8082531eeb668a1b45ab00fcb831/docs/muse-to-luna-step5-slice2-brief-2026-10-26.md#L11)仍误称长度字段未落库。请作历史纠正注明，不据此扩做尺寸榜或重开重量单维度范围。
+3. 本结论仅为固定代码的**限定沙盒技术通过**。未独立空库复跑、无截图/真机视觉或真机交互验收；不等于整切片产品验收、全产品通过或上线许可，不自动授权下一切片、真实资金/保险或生产接入。产品验收与后续范围仍由创始人决定。

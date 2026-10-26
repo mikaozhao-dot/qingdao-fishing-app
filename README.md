@@ -1,6 +1,6 @@
 # 约钓者｜青岛海钓拼船
 
-iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；第 2 步支持发班与活动浏览；第 3 步接通选位、锁位、下单、沙盒支付和保险适配；第 5 步切片 1 提供返航后渔获、评价事实与个人鱼种图鉴；切片 2 大鱼榜按创始人选定的航次最大个体口径修订，获 Dot 限定沙盒技术通过并由创始人限定范围验收关闭；切片 3 直播状态实现和同 SHA CI 已完成，等待 Dot 定点复核；复核通过前不进入第 6 步，真实资金、保险和生产部署仍未授权。
+iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；第 2 步支持发班与活动浏览；第 3 步接通选位、锁位、下单、沙盒支付和保险适配；第 5 步切片 1 提供返航后渔获、评价事实与个人鱼种图鉴；切片 2 大鱼榜按创始人选定的航次最大个体口径修订，获 Dot 限定沙盒技术通过并由创始人限定范围验收关闭；切片 3 直播状态实现和同 SHA CI 已完成，Dot 定点复核已回两项最小交互修复（深链回退、结束直播后标记残留），待 Luna 修复后复核；复核通过前不进入第 6 步，真实资金、保险和生产部署仍未授权。
 
 ## 仓库结构
 
@@ -46,9 +46,9 @@ flutter run
 
 第 4 步当前执行范围以 `docs/codex-dev-step4-brief-v2.md` 和 `docs/current-rules-index.md` 为准；履约子集和本轮实现状态见 `docs/step4-build-notes.md`。切片 1 在 Dot 审查的沙盒范围内通过；切片 2、4 按 Dot 既有复核结论在限定范围内通过。切片 3 的个人级保险出航 POST 门禁固定代码提交 `0d46add7` 通过 709 项数据库验收、Flutter 检查及 iOS 模拟器／Android APK 构建，并经 Dot 在限定沙盒范围内定点通过；逐项证据见 `docs/step4-slice3-insurance-post-gate-fix-receipt-2026-10-26.md`。天气取消仅验证独立状态与保留原成团快照；触发、通知及退款流程仍待 SOP 批准。第 4 步 v2 仍未全量验收，真实支付、真实退款和生产使用未获授权。
 
-第 5 步切片 1（返航后渔获双源回填、结构化返港评价、船长/船况分离事实与个人鱼种图鉴）的实现与验收状态见 `docs/step5-slice1-delivery-receipt-2026-10-26.md`；数据口径和新增表见 `docs/data-model-step5-slice1-addendum.md`。代码 SHA `a3785c4` 已获 Dot 限定沙盒技术复核通过，双源分歧 B 与复订口径 A 已由创始人批准；整切片产品验收仍未完成，未获明确验收前不进入下一切片。
+第 5 步切片 1（返航后渔获双源回填、结构化返港评价、船长/船况分离事实与个人鱼种图鉴）的实现与验收状态见 `docs/step5-slice1-delivery-receipt-2026-10-26.md`；数据口径和新增表见 `docs/data-model-step5-slice1-addendum.md`。代码 SHA `a3785c4` 已获 Dot 限定沙盒技术复核通过，双源分歧 B 与复订口径 A 已由创始人批准；创始人已于 2026-10-26 按限定沙盒范围验收通过，切片 1 关闭。
 
-第 5 步切片 3 直播状态实现与验收证据见 `docs/step5-slice3-delivery-receipt-2026-10-26.md`，字段与状态机增量见 `docs/data-model-step5-slice3-addendum.md`。代码 SHA `09129e8e18c1dbcfe0c9b8a028541b86ecd03580` 的数据库验收、Flutter 测试与分析、iOS 模拟器和 Android APK CI 均已通过；Dot 定点复核待完成，复核通过前不进入第 6 步。
+第 5 步切片 3 直播状态实现与验收证据见 `docs/step5-slice3-delivery-receipt-2026-10-26.md`，字段与状态机增量见 `docs/data-model-step5-slice3-addendum.md`。代码 SHA `09129e8e18c1dbcfe0c9b8a028541b86ecd03580` 的数据库验收、Flutter 测试与分析、iOS 模拟器和 Android APK CI 均已通过；Dot 定点复核已回两项最小交互修复（修复单 `docs/muse-to-luna-step5-slice3-fixback-2026-10-26.md`），待 Luna 修复后复核，复核通过前不进入第 6 步。
 
 ## 关键文件
 

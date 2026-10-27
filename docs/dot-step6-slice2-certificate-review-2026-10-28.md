@@ -101,3 +101,33 @@ R1 展示选择与 1/4/5 来源行、同鱼多来源、真实成图边界证据�
 - **证书推广来源：** 新真实服务端接口夹具覆盖证书链接扫描、claim、重复 claim、自推排除、有效首单后 5% 佣金及 pending_unlock 状态，57 断言已执行通过。这里的“真实接口”指隔离测试服务/API，不是线上真实订单或原生扫码闭环；不改变既有推广规则。
 - **R1 仍由 Muse/创始人确定展示方案**，再由 Luna 补实现与定向证据；一张完整长图、多页完整图或明确摘要的候选不等于已选方案。原要求的 1/4/5 来源行、同鱼多来源超过 4 行、真实 PNG 内容完整可见/不溢出，以及相应混合来源展示证据仍留在 R1 范围。不要因 R2/R3 已关闭重复修复这两项，也不要以本节代替 R1 产品选择、创始人验收或下一切片许可。
 - 切片 1 已有风险接受保持原性质，未验原生证据不因本次 build 变成技术通过。本轮没有部署、真实资金或生产许可。
+
+
+## 2026-10-28 07:50 CST R1 首轮差量：3040a298
+
+**已收到并实审 R1 实现，尚不关闭 R1；当前剩余是既有定向证据，不是重新选择产品方案。** 本节把此前“R1 待定性/待实现”更新为“摘要式已定、实现已交、定向补证待齐”。依据仓内决定 [09114490](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/09114490018b09fa744905946a254f1fb388ad36/docs/founder-decision-step6-slice2-r1-summary-display-2026-10-28.md)，以及 Muse 已读 faa9593 并安排 R1 的[实际回执](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/b1ebeef4f23bed133d269818064240afc4f2e26f/docs/ui-design-review-09114490.md)；Dot 不重问选择、不重开 R2/R3。
+
+### 固定实现与已核实范围
+
+代码 [3040a298835674672a3016ff76754da5a4e1dca9](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/3040a298835674672a3016ff76754da5a4e1dca9)，6 文件差量，写入前 main 仍为该 SHA：
+
+1. CertificateArtwork 按来源行取前 4 条；>4 时明确总数、已展示 4、剩余数及 App 内完整明细文字路径；≤4 时无遗漏标注。没有按鱼种合并、相加或去重。
+2. 摘要仅在 Flutter 呈现层，服务端 fishItems 冻结逻辑未截断。后端 owner 授权响应补 departureId，为已有证书打开对应航次详情提供路由参数；不将内部订单/乘客引用放入此响应。
+3. 中心与 Step5 证书入口传入详情 builder；预览点击进入已有 Step5AnglerReportPage 的 readOnly 模式。读取既有 /step5/departures/:id/me，仍经原服务端参与者授权；只读页面分别呈现船长/本人/补充记录，隐藏编辑与提交控件，并在写函数处加只读防护。不新增事实源或业务写接口。详情是既有航次事实页，不声称是另一份冻结证书快照。
+4. 新 widget 用例覆盖 1/4/5 来源行（同鱼、交替本人/补充标签）、总数与剩余文案、无布局异常；保存证书→详情路由也有用例。5 行场景实际调用 RepaintBoundary.toImage，编码 1080×1656 PNG、验证签名和字节长度，已不再只是旧的 4 字节 PNG 桩。
+
+### 本次同 SHA CI 原始日志
+
+- 数据库 run [40604120694 / job 122539251942](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40604120694/job/122539251942)：checkout 3040a298；710 / 133 / 77 / 334 / 33 既有断言，certificate **61** 断言通过。
+- Flutter run [40604120550 / analyze 122539252668](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40604120550/job/122539252668)：checkout 3040a298；**33 tests passed**，No issues found。
+- 同 run [iOS 122539252394](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40604120550/job/122539252394) 与 [Android 122539252225](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40604120550/job/122539252225)：原始日志均确认同 SHA，分别成功生成 simulator Runner.app 和 debug APK。构建不是设备端分享/相册实测。
+
+### 还需收到的最小既有补证
+
+**A. 可独立查看的成品图。** 当前提交无新增图片；新测试验证控件存在、摘要矩形落在 artwork 内及 PNG 能编码，但没有对导出 PNG 的字形/来源标签/摘要可读性作像素核验，也没有把该输出交付供独立目检。请提供 1/4/5 行及同鱼混合来源边界的既有实际成品 PNG（可复用同一张满足多项的图），注明固定实现 SHA、生成方式与对应夹具。已有输出可导出则不需重跑整套；不要求新增原生平台全流程。Dot 不把“已编码 PNG”写成“已看清成品图全部内容”。
+
+**B. 原评审已要求的真实混合来源 fixture。** 此次服务端新增的 4 项断言核 departureId 和响应引用边界，未新增“同一乘客同时有本人报告与本人补充→证书冻结快照”用例。Flutter 的手工 fishItems/MockClient 混合输入能证明展示层支持这些行，不能替代服务端实际组装保留标签、数量、不合并且完整冻结的证明。请在原证书验收范围补这一小组混合来源用例，包含总来源行>4且至少同鱼跨来源；断言全量快照与各来源数量，再关联摘要成图。不改事实口径、不要求另起全部业务验收。
+
+上述属于证据缺口，不据此宣称现有摘要实现已发现新的业务错误。若已有这些材料，请直接指向现有文件，不重复生成。正式回执可与材料一并注明决定五条落实位置；回执尚未到不阻止本轮已完成的代码与 CI 复核。
+
+R1 与切片 2 整体仍未技术通过，创始人产品验收另行进行；R2/R3 与已验证推广补证继续限定关闭。无代码/规则变更、CI 重跑、部署或下一切片授权。

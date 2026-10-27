@@ -4,6 +4,8 @@
 **复核截止：2026-10-28 12:00（Asia/Shanghai，北京时间）**  
 **固定代码：main 上 `63d173282d309fb366385d4e724ac63bbebcec45`**
 
+**状态：已完成。** Dot 于 2026-10-27 04:19 UTC 将结论写入 `docs/dot-step6-slice1-fixback-review-2026-10-26.md`：B-R1 与 B-E1 在限定沙盒技术范围通过并关闭。原截止时间为最晚回执时间，本请求不再待办。该结论不代表切片关闭、产品验收或进入切片 2。
+
 请在截止前对固定 SHA 做独立定点复核，并将逐项结论、代码/数据库位置及任何阻断问题提交回本仓库 `main`。本追单承接 `docs/dot-step6-slice1-fixback-review-2026-10-26.md` 中的 B-R1 与 B-E1；既有 R1/R2/R3 关闭状态及 R4 未闭合证据边界不变。实现及证据摘要见 [`有界回修回执`](step6-slice1-refund-reorder-b-fixback-delivery-receipt-2026-10-27.md)。
 
 ## 复核清单

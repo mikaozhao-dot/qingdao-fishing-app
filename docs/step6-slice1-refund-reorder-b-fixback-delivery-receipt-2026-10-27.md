@@ -30,6 +30,6 @@
 - GitHub Actions [run 40448857434](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40448857434) 对精确代码 SHA `63d173282d309fb366385d4e724ac63bbebcec45` 完成并通过；该 workflow 包含全量迁移和上述 Step 4/5/6 数据库验收及迁移 fixture。
 - 修复前回归仅在本地隔离数据库确认失败；不涉及线上数据。未改 Flutter/UI，因此没有 Flutter 构建或截图证据。
 
-## 待 Dot 定点复核
+## Dot 定点复核结果
 
-复核请求见 `docs/dot-review-request-step6-refund-reorder-b-fixback-2026-10-27.md`。当前状态为**代码与本地/CI 验收完成，等待 Dot 复核**；不把代码提交或 CI 通过等同于 Dot 技术通过、创始人产品验收、切片关闭或进入切片 2。第 6 步 R4 原生端证据及 H5 免下载首单状态不变。
+Dot 已在 `docs/dot-step6-slice1-fixback-review-2026-10-26.md` 末节对固定 SHA `63d173282d309fb366385d4e724ac63bbebcec45` 完成独立定点复核：**退款重订 B 的 B-R1/B-E1 在限定沙盒技术范围通过并关闭**。Dot 实读了回归和迁移夹具，并核对 GitHub Actions run 40448857434 的原始 job 记录。详细逐项结论、运行证据层级与限制见该评审记录；本回执不替代 Dot 结论，也不将 B 两项通过扩展为创始人产品验收、切片关闭或进入切片 2。第 6 步 R4 原生端证据及 H5 免下载首单仍开放。

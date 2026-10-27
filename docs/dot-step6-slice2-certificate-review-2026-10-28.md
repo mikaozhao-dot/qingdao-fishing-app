@@ -54,3 +54,20 @@
 ## 接力
 
 请Muse/Luna沿本切片处理R1–R3最小修复及上述受影响定向补证，固定新SHA、更新对应CI后交回差量复核；不另开重复功能、不推进下一切片。R1产品展示定性与创始人最终验收仍由有权者完成。切片1已记录的限定风险接受不被此文重写为技术验证通过；H5、真实资金、保险及生产授权边界不变。本次只新增独立评审文档，无代码、规则或运行环境变更。
+
+
+## 2026-10-28 06:56 CST 巡检差量：aac590ac（尚非通过结论）
+
+固定实现：[aac590ac9874d9707833c0b5c14282e764bfeab1](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/aac590ac9874d9707833c0b5c14282e764bfeab1)。Dot 已静态读取这次 4 文件差量及数据库 CI 原始日志；没有自行运行测试或修改实现。该提交尚不含新正式送审回执，以下反馈直接针对已收到的实际代码，不等待转述。
+
+- **R2：修复方向及定向用例已收到，暂不关闭。** 预览页新增生成标记及 PopScope，在生成后 AppBar/系统返回时传回 true；中心原有 changed==true 刷新逻辑因此可被触发。新增 widget 用例覆盖生成后两种返回，以及未生成返回不刷新。此刻同 SHA Flutter run [40598302378](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40598302378) 仍运行中，不将代码存在等同测试通过；也不将 widget 返回测试等同原生手势实测。
+- **R3：原静态反例的修复方向已收到，执行证据尚未成立。** 候选查询改为按 departure_at、id 降序 keyset 分页，继续匹配实际乘客，直到收集 100 个合格航次或候选耗尽，不再被全局首 100 条直接截断。新夹具包含本人旧航次由另一账号代订、100 条他人较新航次，检查旧航次仍可见。仍逐候选读取事实，未做规模性能验证。
+- **证书来源补证：** 新脚本已加入 certificate touch→claim、重复领取、自荐排除及首单佣金来源/比例/冻结状态断言；这是已读测试代码，不是本次已执行通过的结果。
+
+### 本轮已确认的 CI 阻点（请沿原回修任务处理）
+
+同 SHA 数据库 run [40598302377](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40598302377)，原始 job [122519733488](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40598302377/job/122519733488) 已失败。checkout 日志明确为 aac590ac；前序 Step4 710、Step5 133、live 77、promotion 334、refund migration 33 断言通过，但 certificate 脚本在第 279 行首次 makeUser（第 57 行 INSERT）即报 PostgreSQL 23505：users_identity_number_hash_unique_idx 冲突。因此不能引用旧 33 断言或新增断言数量为本次证书通过证据，后面的 R3/归因新增用例也未执行到。
+
+此次 makeUser 新增写入 identity_number_hash，而身份号仍来自脚本内递增序列。请检查共享验收数据库中测试身份的命名空间/隔离与清理，使夹具与既存唯一约束兼容；**不要删改真实身份唯一约束以让测试通过**。这里只确认实际冲突及其发生位置，不据此推断线上身份或计佣逻辑已坏。沿原任务提交修正后的固定 SHA 和对应 CI 即可，不新增整套无关复测要求。
+
+R1 展示选择与 1/4/5 来源行、同鱼多来源、真实成图边界证据仍按原评审，未见本次决定或实现；Dot 不代选。整体仍暂不技术通过。切片 1 的风险接受口径不变，不作下一切片或生产许可。

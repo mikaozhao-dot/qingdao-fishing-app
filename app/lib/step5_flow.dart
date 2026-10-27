@@ -300,13 +300,15 @@ class _CatchItemEditor extends StatelessWidget {
 class Step5AnglerReportPage extends StatefulWidget {
   const Step5AnglerReportPage({
     required this.departureId,
-    required this.orderId,
+    this.orderId,
     required this.token,
+    this.readOnly = false,
     super.key,
   });
   final String departureId;
-  final String orderId;
+  final String? orderId;
   final String token;
+  final bool readOnly;
 
   @override
   State<Step5AnglerReportPage> createState() => _Step5AnglerReportPageState();
@@ -414,6 +416,7 @@ class _Step5AnglerReportPageState extends State<Step5AnglerReportPage> {
   }
 
   Future<void> _saveSources() async {
+    if (widget.readOnly) return;
     setState(() {
       _saving = true;
       _error = null;
@@ -454,13 +457,14 @@ class _Step5AnglerReportPageState extends State<Step5AnglerReportPage> {
   }
 
   Future<void> _saveReview() async {
-    if (_reviewSaved) return;
+    final orderId = widget.orderId;
+    if (widget.readOnly || orderId == null || _reviewSaved) return;
     setState(() {
       _saving = true;
       _error = null;
     });
     try {
-      await Step1Api.post('/step5/orders/${widget.orderId}/review', {
+      await Step1Api.post('/step5/orders/$orderId/review', {
         'captainTags': _captainTags.toList(),
         'boatTags': _boatTags.toList(),
         'body': _reviewController.text.trim(),
@@ -507,7 +511,7 @@ class _Step5AnglerReportPageState extends State<Step5AnglerReportPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('返港记录与评价'),
+      title: Text(widget.readOnly ? '本航次渔获详情' : '返港记录与评价'),
       actions: [
         IconButton(
           tooltip: '预览本航渔获证书',
@@ -517,6 +521,13 @@ class _Step5AnglerReportPageState extends State<Step5AnglerReportPage> {
               builder: (_) => Step6CertificatePreviewPage(
                 departureId: widget.departureId,
                 token: widget.token,
+                catchDetailsPageBuilder: (routeContext, departureId, token) =>
+                    Step5AnglerReportPage(
+                      departureId: departureId,
+                      orderId: null,
+                      token: token,
+                      readOnly: true,
+                    ),
               ),
             ),
           ),
@@ -554,7 +565,34 @@ class _Step5AnglerReportPageState extends State<Step5AnglerReportPage> {
                   ),
                 ),
               const SizedBox(height: 10),
-              if (_trip['ownReport'] == null) ...[
+              if (widget.readOnly) ...[
+                const SizedBox(height: 10),
+                if (_trip['ownReport'] == null)
+                  const _Step5Card(title: '本人渔获记录', body: '尚未回填')
+                else
+                  _ReportSummary(
+                    report: _map(_trip['ownReport']),
+                    title: '本人渔获记录',
+                  ),
+                if (_map(_trip['captainResponse']).isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  if (_map(_trip['captainResponse'])['action'] == 'supplement')
+                    _ReportSummary(
+                      report: {
+                        'outcome': 'caught',
+                        'items': _maps(_map(_trip['captainResponse'])['items']),
+                      },
+                      title: '本人补充渔获',
+                    )
+                  else
+                    _Step5Card(
+                      title: '本人回应',
+                      body: _responseLabel(
+                        '${_map(_trip['captainResponse'])['action']}',
+                      ),
+                    ),
+                ],
+              ] else if (_trip['ownReport'] == null) ...[
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   value: _reportOwnCatch,
@@ -576,7 +614,8 @@ class _Step5AnglerReportPageState extends State<Step5AnglerReportPage> {
                   report: _map(_trip['ownReport']),
                   title: '本人已提交记录',
                 ),
-              if (_trip['captainReport'] != null &&
+              if (!widget.readOnly &&
+                  _trip['captainReport'] != null &&
                   _trip['captainResponse'] == null) ...[
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
@@ -597,65 +636,68 @@ class _Step5AnglerReportPageState extends State<Step5AnglerReportPage> {
                 if (_response == 'supplement')
                   _itemsEditor(_supplementItems, captain: false),
               ],
-              if (_trip['captainResponse'] != null)
+              if (!widget.readOnly && _trip['captainResponse'] != null)
                 Text(
                   '已提交回应：${_responseLabel('${_map(_trip['captainResponse'])['action']}')}（原回应保留）',
                   style: const TextStyle(color: FishingTokens.secondary),
                 ),
-              if ((_trip['ownReport'] == null && _reportOwnCatch) ||
-                  (_response != 'none' &&
-                      _trip['captainResponse'] == null)) ...[
+              if (!widget.readOnly &&
+                  ((_trip['ownReport'] == null && _reportOwnCatch) ||
+                      (_response != 'none' &&
+                          _trip['captainResponse'] == null))) ...[
                 const SizedBox(height: 8),
                 FilledButton(
                   onPressed: _saving ? null : _saveSources,
                   child: Text(_saving ? '提交中…' : '提交渔获与回应'),
                 ),
               ],
-              const SizedBox(height: 24),
-              const Text(
-                '返港评价',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 5),
-              const Text(
-                '分别记录船长服务和船况，不计算星级或综合分。',
-                style: TextStyle(color: FishingTokens.secondary),
-              ),
-              const SizedBox(height: 12),
-              _TagPicker(
-                title: '船长服务',
-                tags: _captainTagLabels,
-                selected: _captainTags,
-                onChanged: (value) =>
-                    setState(() => _captainTags.toggle(value)),
-              ),
-              const SizedBox(height: 10),
-              _TagPicker(
-                title: '船况体验',
-                tags: _boatTagLabels,
-                selected: _boatTags,
-                onChanged: (value) => setState(() => _boatTags.toggle(value)),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _reviewController,
-                maxLength: 1000,
-                maxLines: 4,
-                decoration: const InputDecoration(
-                  labelText: '补充文字（可选）',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              if (_reviewSaved)
+              if (!widget.readOnly) ...[
+                const SizedBox(height: 24),
                 const Text(
-                  '该订单评价已提交，原始评价保留。',
-                  style: TextStyle(color: FishingTokens.success),
-                )
-              else
-                FilledButton.tonal(
-                  onPressed: _saving ? null : _saveReview,
-                  child: Text(_saving ? '保存中…' : '提交返港评价'),
+                  '返港评价',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
                 ),
+                const SizedBox(height: 5),
+                const Text(
+                  '分别记录船长服务和船况，不计算星级或综合分。',
+                  style: TextStyle(color: FishingTokens.secondary),
+                ),
+                const SizedBox(height: 12),
+                _TagPicker(
+                  title: '船长服务',
+                  tags: _captainTagLabels,
+                  selected: _captainTags,
+                  onChanged: (value) =>
+                      setState(() => _captainTags.toggle(value)),
+                ),
+                const SizedBox(height: 10),
+                _TagPicker(
+                  title: '船况体验',
+                  tags: _boatTagLabels,
+                  selected: _boatTags,
+                  onChanged: (value) => setState(() => _boatTags.toggle(value)),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _reviewController,
+                  maxLength: 1000,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    labelText: '补充文字（可选）',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                if (_reviewSaved)
+                  const Text(
+                    '该订单评价已提交，原始评价保留。',
+                    style: TextStyle(color: FishingTokens.success),
+                  )
+                else
+                  FilledButton.tonal(
+                    onPressed: _saving ? null : _saveReview,
+                    child: Text(_saving ? '保存中…' : '提交返港评价'),
+                  ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 8),
                 _Step5Error(_error!),

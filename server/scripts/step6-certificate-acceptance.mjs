@@ -356,6 +356,13 @@ try {
     { departureId: personalTrip.departureId }, 201);
   check(created.body.created, true, 'first generation freezes a certificate snapshot');
   const certificateId = created.body.certificate.id;
+  check(created.body.certificate.departureId, personalTrip.departureId,
+    'owner certificate response exposes the authorized departure detail route');
+  check(Object.keys(created.body.certificate).some((key) => /order|passenger/i.test(key)),
+    false, 'owner certificate response omits internal order and passenger references');
+  const ownerCertificates = await expect('GET', '/step6/certificates/me', owner.token, undefined, 200);
+  check(ownerCertificates.body.certificates.find((item) => item.id === certificateId)?.departureId,
+    personalTrip.departureId, 'saved certificate list retains the authorized departure detail route');
   const frozenName = created.body.certificate.snapshot.boatName;
   const promotionCode = created.body.certificate.snapshot.promotionCode;
   check(created.body.certificate.snapshot.displayName, '海风钓友', 'snapshot omits real identity fields');

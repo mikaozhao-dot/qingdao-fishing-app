@@ -10,6 +10,7 @@ import 'promotion_flow.dart';
 import 'step1_flow.dart';
 import 'step2_flow.dart';
 import 'step4_flow.dart';
+import 'step5_flow.dart';
 import 'step6_certificate_flow.dart';
 
 void main() {
@@ -260,6 +261,13 @@ class _AppShellState extends State<AppShell> {
                     Navigator.of(pageContext).pop();
                     setState(() => _selectedIndex = 3);
                   },
+                  catchDetailsPageBuilder: (routeContext, departureId, token) =>
+                      Step5AnglerReportPage(
+                        departureId: departureId,
+                        orderId: null,
+                        token: token,
+                        readOnly: true,
+                      ),
                 ),
               ),
             ),

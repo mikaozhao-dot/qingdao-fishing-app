@@ -238,6 +238,7 @@ async function ensureMemberPromotionCode(client, userId) {
 function publicCertificate(row) {
   return {
     id: row.id,
+    departureId: row.departure_id,
     templateVersion: row.template_version,
     generatedAt: row.generated_at,
     hidden: row.hidden_at != null,
@@ -257,7 +258,7 @@ export function registerStep6CertificateRoutes(app, { pool, config, requireUser 
       try {
         return await transaction(pool, async (client) => {
           const existing = await client.query(
-            `SELECT id,template_version,generated_at,hidden_at,snapshot
+            `SELECT id,departure_id,template_version,generated_at,hidden_at,snapshot
              FROM step6_certificates WHERE owner_user_id=$1 AND hidden_at IS NULL
              ORDER BY generated_at DESC,id DESC`, [request.user.id],
           );
@@ -327,7 +328,7 @@ export function registerStep6CertificateRoutes(app, { pool, config, requireUser 
       try {
         const result = await transaction(pool, async (client) => {
           const existing = await client.query(
-            `SELECT id,template_version,generated_at,hidden_at,snapshot
+            `SELECT id,departure_id,template_version,generated_at,hidden_at,snapshot
              FROM step6_certificates WHERE owner_user_id=$1 AND departure_id=$2`,
             [request.user.id, departureId],
           );
@@ -368,7 +369,7 @@ export function registerStep6CertificateRoutes(app, { pool, config, requireUser 
       try {
         const result = await transaction(pool, async (client) => {
           const existing = await client.query(
-            `SELECT id,template_version,generated_at,hidden_at,snapshot
+            `SELECT id,departure_id,template_version,generated_at,hidden_at,snapshot
              FROM step6_certificates WHERE owner_user_id=$1 AND departure_id=$2 FOR UPDATE`,
             [request.user.id, departureId],
           );
@@ -396,7 +397,7 @@ export function registerStep6CertificateRoutes(app, { pool, config, requireUser 
                 promotion_code_snapshot,template_version,source_refs,snapshot,generated_at)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::timestamptz)
              ON CONFLICT (owner_user_id,departure_id) DO NOTHING
-             RETURNING id,template_version,generated_at,hidden_at,snapshot`,
+               RETURNING id,departure_id,template_version,generated_at,hidden_at,snapshot`,
             [request.user.id, departureId, facts.orderId, facts.passengerId, promotion.id,
               promotion.code, TEMPLATE_VERSION, JSON.stringify(facts.sourceRefs),
               JSON.stringify(snapshot), generatedAt],
@@ -405,7 +406,7 @@ export function registerStep6CertificateRoutes(app, { pool, config, requireUser 
             return { certificate: publicCertificate(inserted.rows[0]), created: true };
           }
           const raced = await client.query(
-            `SELECT id,template_version,generated_at,hidden_at,snapshot
+            `SELECT id,departure_id,template_version,generated_at,hidden_at,snapshot
              FROM step6_certificates WHERE owner_user_id=$1 AND departure_id=$2`,
             [request.user.id, departureId],
           );

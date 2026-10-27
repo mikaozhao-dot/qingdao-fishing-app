@@ -16,12 +16,16 @@ List<Map<String, dynamic>> _certificateMaps(Object? value) => value is List
     ? value.whereType<Map<String, dynamic>>().toList()
     : <Map<String, dynamic>>[];
 
+typedef CertificateCatchDetailsPageBuilder =
+    Widget Function(BuildContext context, String departureId, String token);
+
 class Step6CertificateCenterPage extends StatefulWidget {
   const Step6CertificateCenterPage({
     required this.token,
     required this.onRequireLogin,
     this.shareImage,
     this.imageEncoder,
+    this.catchDetailsPageBuilder,
     super.key,
   });
 
@@ -30,6 +34,7 @@ class Step6CertificateCenterPage extends StatefulWidget {
   final Future<void> Function(ShareParams params)? shareImage;
   final Future<Uint8List?> Function(RenderRepaintBoundary boundary)?
   imageEncoder;
+  final CertificateCatchDetailsPageBuilder? catchDetailsPageBuilder;
 
   @override
   State<Step6CertificateCenterPage> createState() =>
@@ -99,6 +104,7 @@ class _Step6CertificateCenterPageState
           token: token,
           shareImage: widget.shareImage,
           imageEncoder: widget.imageEncoder,
+          catchDetailsPageBuilder: widget.catchDetailsPageBuilder,
         ),
       ),
     );
@@ -110,8 +116,9 @@ class _Step6CertificateCenterPageState
       MaterialPageRoute<void>(
         builder: (_) => Step6CertificatePreviewPage(
           token: widget.token ?? '',
-          departureId: '',
+          departureId: '${certificate['departureId'] ?? ''}',
           initialCertificate: certificate,
+          catchDetailsPageBuilder: widget.catchDetailsPageBuilder,
         ),
       ),
     );
@@ -222,6 +229,7 @@ class Step6CertificatePreviewPage extends StatefulWidget {
     this.initialCertificate,
     this.shareImage,
     this.imageEncoder,
+    this.catchDetailsPageBuilder,
     super.key,
   });
 
@@ -231,6 +239,7 @@ class Step6CertificatePreviewPage extends StatefulWidget {
   final Future<void> Function(ShareParams params)? shareImage;
   final Future<Uint8List?> Function(RenderRepaintBoundary boundary)?
   imageEncoder;
+  final CertificateCatchDetailsPageBuilder? catchDetailsPageBuilder;
 
   @override
   State<Step6CertificatePreviewPage> createState() =>
@@ -374,6 +383,17 @@ class _Step6CertificatePreviewPageState
     }
   }
 
+  void _openCatchDetails() {
+    final builder = widget.catchDetailsPageBuilder;
+    if (builder == null || widget.departureId.isEmpty) return;
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (routeContext) =>
+            builder(routeContext, widget.departureId, widget.token),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope<bool>(
@@ -423,6 +443,15 @@ class _Step6CertificatePreviewPageState
                       child: CertificateArtwork(snapshot: _snapshot),
                     ),
                   ),
+                  if (widget.departureId.isNotEmpty &&
+                      widget.catchDetailsPageBuilder != null) ...[
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: _openCatchDetails,
+                      icon: const Icon(Icons.fact_check_outlined),
+                      label: const Text('查看本航次渔获详情'),
+                    ),
+                  ],
                   if (_error != null) ...[
                     const SizedBox(height: 12),
                     _CertificateNotice(text: _error!),
@@ -467,8 +496,11 @@ class CertificateArtwork extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fishItems = _certificateMaps(snapshot['fishItems']);
+    final visibleFishItems = fishItems.take(4).toList(growable: false);
+    final omittedCount = fishItems.length - visibleFishItems.length;
     final date = _shortDate(snapshot['departureAt']);
     return Container(
+      key: const ValueKey('certificate-artwork'),
       width: 360,
       height: 552,
       clipBehavior: Clip.antiAlias,
@@ -596,7 +628,7 @@ class CertificateArtwork extends StatelessWidget {
                 Expanded(
                   child: Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(13, 8, 13, 8),
+                    padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: .055),
                       borderRadius: BorderRadius.circular(14),
@@ -611,63 +643,54 @@ class CertificateArtwork extends StatelessWidget {
                               style: TextStyle(color: Color(0xFFB6CED2)),
                             ),
                           )
-                        : ListView.separated(
-                            padding: EdgeInsets.zero,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: fishItems.length > 4
-                                ? 4
-                                : fishItems.length,
-                            separatorBuilder: (_, _) => Divider(
-                              height: 1,
-                              color: Colors.white.withValues(alpha: .08),
-                            ),
-                            itemBuilder: (context, index) {
-                              final item = fishItems[index];
-                              final detail = _sizeDetail(item);
-                              return Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 7,
+                        : Column(
+                            children: [
+                              for (
+                                var index = 0;
+                                index < visibleFishItems.length;
+                                index++
+                              ) ...[
+                                if (index > 0)
+                                  Divider(
+                                    height: 1,
+                                    color: Colors.white.withValues(alpha: .08),
+                                  ),
+                                _CertificateFishRow(
+                                  item: visibleFishItems[index],
+                                  index: index,
                                 ),
-                                child: Row(
+                              ],
+                              if (omittedCount > 0) const Spacer(),
+                              if (omittedCount > 0) ...[
+                                const SizedBox(height: 6),
+                                Column(
+                                  key: const ValueKey(
+                                    'certificate-omission-summary',
+                                  ),
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            '${item['fishName'] ?? item['fishCode'] ?? '渔获'}',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w800,
-                                            ),
-                                          ),
-                                          Text(
-                                            '${item['source'] ?? '本人记录'}${detail.isEmpty ? '' : ' · $detail'}',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                              color: Color(0xFF9CB9BF),
-                                              fontSize: 9,
-                                            ),
-                                          ),
-                                        ],
+                                    Text(
+                                      '共 ${fishItems.length} 条渔获记录 · 本图展示前 4 条 · 另有 $omittedCount 条未展示',
+                                      style: const TextStyle(
+                                        color: Color(0xFFDDEEF0),
+                                        fontSize: 8,
+                                        height: 1.1,
+                                        fontWeight: FontWeight.w700,
                                       ),
                                     ),
-                                    Text(
-                                      '× ${item['quantity'] ?? 0}',
-                                      style: const TextStyle(
-                                        color: Color(0xFFB8F500),
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w900,
+                                    const SizedBox(height: 1),
+                                    const Text(
+                                      '完整明细见 App 内本航次渔获详情',
+                                      style: TextStyle(
+                                        color: Color(0xFFB6CED2),
+                                        fontSize: 8,
+                                        height: 1.1,
                                       ),
                                     ),
                                   ],
                                 ),
-                              );
-                            },
+                              ],
+                            ],
                           ),
                   ),
                 ),
@@ -724,6 +747,56 @@ class CertificateArtwork extends StatelessWidget {
                   ],
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CertificateFishRow extends StatelessWidget {
+  const _CertificateFishRow({required this.item, required this.index});
+
+  final Map<String, dynamic> item;
+  final int index;
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = _sizeDetail(item);
+    return Padding(
+      key: ValueKey('certificate-fish-row-$index'),
+      padding: const EdgeInsets.symmetric(vertical: 1.5),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${item['fishName'] ?? item['fishCode'] ?? '渔获'}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  '${item['source'] ?? '本人记录'}${detail.isEmpty ? '' : ' · $detail'}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Color(0xFF9CB9BF), fontSize: 8),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            '× ${item['quantity'] ?? 0}',
+            style: const TextStyle(
+              color: Color(0xFFB8F500),
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
             ),
           ),
         ],

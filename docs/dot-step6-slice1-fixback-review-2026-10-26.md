@@ -1,6 +1,6 @@
 # Dot 独立定点复核：Step 6 切片 1 修复回单（2026-10-26）
 
-> 最新状态见文末“R4 留存证据差量复核：dcdd6fdb”：新增请求/DB导出对应性通过；原生PID、精确APK来源及iOS关联仍无法核验，R4/切片1不关闭。此前R1/R2/R3与B-R1/B-E1限定关闭保持。
+> 最新状态见文末“R4 代理摘要源码摘录限定答复：f0b12b97”：算法可读性通过，原本机文件哈希及历史运行来源无法独立核验。前轮请求/DB导出对应性通过保持；Android完整链、R4/切片1仍开放，不进切片2。
 
 
 ## 结论：暂不整体通过，R1 迁移漏项与 R4 原生链路补证仍开放
@@ -362,3 +362,24 @@ Android新增内容只是执行方截图目检，未新增可读取claim日志�
 此次已交的两份脱敏导出及冷热顺序说明不再重复索要。已经明确未留存的历史PID、构建provenance或恢复输出，不要求凭记忆重造，也不自动要求重跑测试、构建、doctor、数据库或完整iOS流程。若执行方另有可定位的既有进程记录/构建原始记录/代理源码，按已有范围只补那个来源；否则保留无法复核项，交负责人说明可行的后续选项，由有权者另定安排或明确接受保留风险，不能将未验改写为通过。授权时间核对单列，不与技术通过混为一谈。
 
 Dot本轮仅实读提交、两份导出、关联源码、提交差异及Actions产物元数据，未重跑设备或数据库。H5免下载交易链仍不在本差量范围；本结论不是产品验收，不批准切片2、真实资金或生产。
+
+
+## R4 代理摘要源码摘录限定答复：f0b12b97（2026-10-27）
+
+**本次新请求已答：摘要算法及字段生成代码可读性通过；原本机文件逐字摘录准确性、文件SHA与历史进程加载关系无法独立复核。** 此项补证不关闭Android完整链、R4或切片1。
+
+已实读固定[f0b12b977a548305a3e41d41ecf897b11e4bf2e3源码摘录](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/f0b12b977a548305a3e41d41ecf897b11e4bf2e3/docs/evidence/step6-slice1-r4/android-claim-hash-logic-source-excerpt.md)及[限定请求](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/75ad98fb7ae9097ca490472b803296ccff11c660/docs/dot-review-request-step6-slice1-r4-proxy-source-excerpt-2026-10-27.md)。本次复核前main为75ad98fb7ae9097ca490472b803296ccff11c660；请求截止为2026-10-28 18:30北京时间，无需再等截止或重复前轮请求/DB一致性复核。
+
+| 请求项 | 结论 | 实读依据及限制 |
+| --- | --- | --- |
+| 1. 摘录是否逐字对应本机文件、SHA是否相符 | 无法复核 | 只取得仓内摘录；执行方路径/tmp/qf-r4-android-runtime/proxy.mjs在Dot当前执行环境不存在。d329a822cf6d5b10c9a789f79f35dcf5ce1c9630a368d2398adc8563ba345d42是执行方报告的当前文件SHA，未取得完整文件不能重算；更不能将摘录自身哈希当作原文件哈希。不是发现伪造或代码错误。 |
+| 2. 算法/截断及visitor方法对应 | 通过静态可读性复核 | token字段为createHash('sha256').update(token).digest('hex').slice(0,16)，对字符串的UTF-8输入生成小写hex前16位；visitor字段先调用promotionVisitorId(token)，有效时再调用promotionVisitorHash(visitorId).toString('hex').slice(0,16)，无效时为null。与[security.js](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/75ad98fb7ae9097ca490472b803296ccff11c660/server/src/security.js#L41-L55)的promotion-visitor签名检查及promotion-key HMAC-SHA256输入相容。claimed字段使用response?.claimed===true，reason缺失为null，与已交JSONL字段形式一致。 |
+| 3. 具体摘要与运行来源边界 | 无法复核，限制保持 | 未取得token/密钥，不重算两条摘要，也不索取敏感值。摘录展示record构造但未展示调用、日志写入或模块实例来源，不能独立证明该进程实际加载此文件及持久化此record；这属于来源限制，不是要求扩大提交整套系统或重跑。 |
+
+本次只补上此前“未实读代理算法源码”的可读性缺口，不声称已核验完整代理源文件或运行时来源。PID、确切APK构建来源、历史配置恢复、许可证时间顺序及iOS对应关系的前轮限制均不变，已通过的截图及请求/DB导出对应性不重开。
+
+### 给Muse / Luna的接力确认
+
+已读[Muse对73abc1b4的评审](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/75ad98fb7ae9097ca490472b803296ccff11c660/docs/ui-design-review-73abc1b4.md)：该文明确接收前轮独立结论；本节处理的是新增代理摘录请求，而非重发旧回复。另作事实区分：73abc1b4本身只改Dot复核文档，README同步属于该评审合并区间其他提交，不影响技术结论。
+
+代理摘录请求在上述层级已完成，无需继续等待Dot重复审相同材料。已经标注未留存的历史证据，不制造、不反复追索、不以文字补成通过；如无新可定位来源，现阶段保持未验边界，由负责方整理可行后续选项交有权者决定。本答复不批准任何新代码、重新构建、测试/设备重跑、风险豁免、产品验收、切片2或生产。

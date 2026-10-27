@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-**Android SDK 七个计划组件已安装且校验通过，Temurin JDK 21 已安装，API 36 ARM64 模拟器已启动；Android Chrome 已实际打开沙盒推广 H5，截图已保存为 `docs/evidence/step6-slice1-r4/android-h5-promotion-page.png`（1080×2400，492 KB）。Android App 尚未构建或安装：Gradle 需要 CMake 3.22.1，且 Android SDK 许可证尚未接受；当前等待用户决定是否授权接受。** iOS 既有材料只有冷/热页面截图和文字说明，仓库与本地留存库未找到可将原请求、访客哈希与归因记录对应起来的凭证，因此 iOS 映射仍缺。未完成 Android 冷/热真机链路，**不宣称 R4 或切片关闭**。本回执仅执行 Muse 工单 `docs/muse-to-luna-step6-slice1-r4-evidence-brief-2026-10-27.md`，不改运行时代码、规格正本、费率、价格、奖励，不扩做 H5 免下载首单。
+**Android 冷启动与热启动原生深链均已在 API 36 ARM64 模拟器上走通：实际点击 H5 CTA、App 收到链接、保留访客 token 至登录、提交 claim，并按请求中的脱敏访客哈希核对到隔离 PostgreSQL 的 claimed touch 与 attribution。** APK 为本地 debug 包；沙盒 API、Redis、数据库均隔离，未使用真实资金、保险或生产数据。Android 截图与逐条映射见下文。iOS 既有材料目前仍缺冷/热 claim 请求与数据库归因的可核验对应关系；已在本回执如实列出。Android 证据待 Dot 定点复核、iOS 映射待补，因此**R4 与切片 1 均未关闭**。本回执仅执行 Muse 工单 `docs/muse-to-luna-step6-slice1-r4-evidence-brief-2026-10-27.md`，不改运行时代码、规格正本、费率、价格、奖励，不扩做 H5 免下载首单。
 
 ## 安装前环境确认
 
@@ -46,14 +46,44 @@
 
 Flutter `doctor -v` 确认 SDK、平台和构建工具已识别，Xcode 项通过；JDK 安装后用本次构建进程的 `JAVA_HOME` 使用，未改全局 Java 设置。**JDK 安装结果：**Temurin JDK 21.0.13+9、macOS Apple Silicon；归档来自 TUNA 镜像，199,754,598 字节，SHA-256 `bf036b35b071bfb2f54f2c0af8ee8d88afa95ee6eb3dce02c0f94cfc2524d04a` 与 Adoptium 官方发布侧文件一致；安装位置 `~/Library/Java/JavaVirtualMachines/temurin-21.0.13+9.jdk/Contents/Home`，`java -version` 返回 OpenJDK 21.0.13 LTS。
 
-## 构建实测与当前门槛
+## 构建与 Android 冷/热深链实测
 
-- 通过 `avdmanager` 创建并启动 `qingdao-r4-api36`（Android 16 / API 36，Google APIs，ARM64，1080×2400）；启动后 `sys.boot_completed=1`，ADB 设备状态为 `device`。模拟器内确认 Chrome 已安装。
-- Android Chrome 经本地隔离代理打开沙盒推广页 `/p/D6A060475BB1C8BC`，页面 CTA 显示“打开约钓者继续”；页面截图为 `docs/evidence/step6-slice1-r4/android-h5-promotion-page.png`。本次尚未点 CTA，因 APK 未成功构建安装。
-- 首次 APK 构建发现插件 `jni` / `jni_flutter` 固定使用 API 35；本机仅有 API 36 平台且没有接受 SDK 许可证。为只验证当前应用，尝试在 Pub 缓存中临时将这两个插件编译 API 调整为 36，构建结束后已逐字节恢复缓存文件，未改仓库源码、依赖锁文件或 Flutter 全局配置。
-- Android 构建随后进入 `jni` 的 CMake 原生构建，并因缺少已接受的 `android-sdk-license` 停止。没有执行 `sdkmanager --licenses`，没有创建任何许可证文件，也没有替用户接受协议。
-- **在下载或安装前记录的后续依赖计划：**CMake 3.22.1，macOS 归档 `cmake-3.22.1-darwin.zip`，腾讯云 Android SDK 主镜像 `https://mirrors.cloud.tencent.com/AndroidSDK/repository2-3.xml`，归档大小 38,223,266 字节（约 36.5 MiB），SHA-1 `8604eeef9adadb626dbb70a7ff58a87e6a7b967a`；镜像 XML 声明使用 `android-sdk-license`。本机许可证目录不存在，Gradle 明确要求许可证先接受。**CMake 尚未下载或安装；等待用户授权接受许可证后再继续。**
+- 通过 `avdmanager` 创建并启动 `qingdao-r4-api36`（Android 16 / API 36，Google APIs，ARM64，1080×2400）；开机后 `sys.boot_completed=1`、ADB 状态为 `device`，模拟器内安装 Chrome。
+- 用户明确授权接受 Android SDK 许可证后，通过 Android CLI 安装 CMake 3.22.1；`flutter doctor -v` 检查输出显示 Android toolchain、Xcode 均通过，且所有 Android 许可证已接受。CMake 官方归档地址为 `https://dl.google.com/android/repository/cmake-3.22.1-darwin.zip`；镜像索引记录的归档大小 38,223,266 字节、SHA-1 `8604eeef9adadb626dbb70a7ff58a87e6a7b967a`。安装位置 `~/Library/Android/sdk/cmake/3.22.1`。
+- Android debug APK 构建成功，应用 ID `com.qingdao.fishing.qingdao_fishing_app`，APK 160,600,758 字节，SHA-256 `60354cf72be2ec1100cadc776dcacdd92c2ceb9fcac68f8adbbdeacf0e06ed0d`；安装并运行于上述模拟器。API 地址在本次构建中指向本机隔离代理 `http://10.0.2.2:13001`。
+- 工程依赖 `jni` 1.1.0 与 `jni_flutter` 1.0.4+1 的缓存构建配置将 compile SDK 固定为 35，而本机仅安装 API 36。为了只验证当前代码，本次构建期间在 Pub 缓存中临时将这两个依赖的 compile SDK 对齐为 36，构建后逐字节恢复；没有改仓库源码、依赖锁文件或 Flutter 全局配置。直接 Maven Central 握手失败后，本次 Gradle 依赖解析通过一次性 Aliyun Google/Maven 镜像配置完成，该配置已移除。APK 为本地 debug 产物，不作为发布包。
+- 沙盒推广码 `D6A060475BB1C8BC`；两个最终记录使用了不同的访客 token 和不同的访客哈希。原始 token、手机号、用户 ID 均不入库/入仓；只记录请求 ID、SHA 前缀、哈希前缀、touch ID 与 attribution ID。时间统一为 Asia/Shanghai。
+
+### 冷启动（本次作为主证据）
+
+- 操作：确认 App 进程已 `force-stop`；清空模拟器 Chrome 数据以生成新的访客 token；Chrome 打开真实 H5 推广页并点击“打开约钓者继续”；未运行的 App 冷启动至登录页。登录后 App 提交 claim。启动后的 App PID 为 `6351`。
+- 截图：`android-cold-h5-promotion-page.png`（H5 CTA）、`android-cold-link-login.png`（冷启动登录页）、`android-cold-claim-account.png`（claim 后登录态；不含手机号或用户标识）。三张均为模拟器原始 PNG，均小于 1 MB。
+- 脱敏请求与数据库逐项对应：
+
+| 字段 | 值 |
+| --- | --- |
+| Claim 请求 | `mvqczvkw-jg38fxrc`，2026-10-27 15:23:32.384 |
+| Token SHA-256 前缀 / visitor 哈希前缀 | `006e65838bbb54e9` / `246362d13ca379b4` |
+| HTTP / claim 结果 | `200` / `claimed=true` |
+| PostgreSQL touch | `5fe509bd-5ec3-40da-8f0b-3283b9abfa63`，`claimed`，触点时间 15:19:56 |
+| PostgreSQL attribution | `c680f712-60ee-4ba8-adb5-b257497e935b`，`qualification_status=pending`，归因时间 15:19:56 |
+
+### 热启动
+
+- 操作：冷启动链完成后退出测试账号但不结束 App；通过 Chrome 清除 Cookie 后打开新的访客推广页并点击 CTA；同一 App 进程接收热启动 intent、进入登录页；登录后提交 claim。链接点击前后 App PID 均为 `5285`，证明复用已运行进程。
+- 截图：`android-hot-h5-promotion-page.png`（H5 CTA）、`android-hot-link-login.png`（热启动登录页）、`android-hot-claim-account.png`（claim 后登录态；不含手机号或用户标识）。三张均为模拟器原始 PNG，均小于 1 MB。
+- 脱敏请求与数据库逐项对应：
+
+| 字段 | 值 |
+| --- | --- |
+| Claim 请求 | `mvqcry9s-zgmepa4p`，2026-10-27 15:17:22.624 |
+| Token SHA-256 前缀 / visitor 哈希前缀 | `ea423c5aae2bbe8a` / `2c9401e3faab87b7` |
+| HTTP / claim 结果 | `200` / `claimed=true` |
+| PostgreSQL touch | `e86bc407-b300-49bb-9b31-bc75ed1032f9`，`claimed`，触点时间 15:16:05 |
+| PostgreSQL attribution | `dd849109-77a5-4653-a1e9-ae5a295a3014`，`qualification_status=pending`，归因时间 15:16:05 |
+
+两条记录的 claim 请求均位于隔离代理日志 `/tmp/qf-r4-android-runtime/claim-events.jsonl`；数据库均来自隔离实例 `qingdao_step6_android_r4_20261027`。实现以 H5 首次触点时间写入 `attributed_at`，因此上表请求时间晚于 touch/attribution 时间；相同 visitor 哈希前缀将请求与对应数据库行唯一关联。另有一条较早的冷启动排练请求 `mvqcmez1-imyg9x4d`（同为 200/claimed）；主证据采用浏览器数据清理后复跑的冷启动记录，以减少页面访问与 claim 的时间间隔。
 
 ## iOS 对应凭证缺口
 
-现有 iOS 冷/热截图和 `docs/step6-slice1-r1-r4-followup-2026-10-27.md` 只有路径叙述，没有请求 ID、脱敏 visitor/token 哈希或数据库行 ID。现有可访问沙盒数据库中，截图展示的旧推广码只有 `scanned` touch，没有对应 attribution；因此不能把这张旧页面截图与任何已 claim 的请求/数据库行强行配对。等待 Muse/Dot 提供既有运行的脱敏请求及数据库映射，或确认允许重跑最小 iOS 对应步骤。
+现有 iOS 冷/热截图和 `docs/step6-slice1-r1-r4-followup-2026-10-27.md` 只有路径叙述，没有请求 ID、脱敏 visitor/token 哈希或数据库行 ID。旧 H5 截图中的沙盒推广码 `5E6EF8806BECB0CB` 在可访问留存库中只能对应一条 `scanned` 的 `link` touch，时间为 2026-10-26 16:27:30（UTC），且 attribution 行数为 0；因此不能把这张旧页面截图与已 claim 的请求/数据库行配对。请 Dot 查看是否能从既有 iOS 运行记录补出脱敏映射；本任务不重跑完整 iOS 链路。该缺口解决前，不关闭 R4 或切片 1。

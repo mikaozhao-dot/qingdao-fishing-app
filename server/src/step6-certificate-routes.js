@@ -4,6 +4,8 @@ import { FISH_CATALOG } from './step2-catalog.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TEMPLATE_VERSION = 'qd-cert-v1';
+const CANDIDATE_PAGE_SIZE = 100;
+const MAX_ELIGIBLE_DEPARTURES = 100;
 const FISH_BY_CODE = new Map(FISH_CATALOG.map((fish) => [fish.code, fish]));
 const sendError = (reply, statusCode, message) => reply.code(statusCode).send({ error: message });
 
@@ -262,37 +264,53 @@ export function registerStep6CertificateRoutes(app, { pool, config, requireUser 
           const certificates = existing.rows.map(publicCertificate);
           const identityResult = await readVerifiedIdentity(client, request.user.id, security);
           if (identityResult.error) return { certificates, eligibleDepartures: [] };
-          const candidates = await client.query(
-            `SELECT DISTINCT d.id,d.departure_at
-             FROM departures d
-             JOIN booking_orders o ON o.departure_id=d.id AND o.status IN ('paid','completed')
-             JOIN order_passengers op ON op.order_id=o.id
-             JOIN departure_passenger_gate_decisions gate
-               ON gate.departure_id=d.id AND gate.passenger_id=op.id AND gate.decision='allowed'
-             WHERE d.status='completed'
-               AND EXISTS (SELECT 1 FROM departure_checkins dc WHERE dc.departure_id=d.id
-                           AND dc.event='departed' AND dc.captain_user_id=d.captain_user_id)
-               AND EXISTS (SELECT 1 FROM departure_checkins rc WHERE rc.departure_id=d.id
-                           AND rc.event='returned' AND rc.captain_user_id=d.captain_user_id)
-             ORDER BY d.departure_at DESC LIMIT 100`,
-          );
           const eligibleDepartures = [];
-          for (const candidate of candidates.rows) {
-            const alreadyGenerated = await client.query(
-              'SELECT 1 FROM step6_certificates WHERE owner_user_id=$1 AND departure_id=$2',
-              [request.user.id, candidate.id],
+          let cursor = null;
+          while (eligibleDepartures.length < MAX_ELIGIBLE_DEPARTURES) {
+            const cursorClause = cursor
+              ? 'AND (d.departure_at,d.id)<($1::timestamptz,$2::uuid)'
+              : '';
+            const limitParameter = cursor ? '$3' : '$1';
+            const values = cursor
+              ? [cursor.departure_at, cursor.id, CANDIDATE_PAGE_SIZE]
+              : [CANDIDATE_PAGE_SIZE];
+            const candidates = await client.query(
+              `SELECT DISTINCT d.id,d.departure_at
+               FROM departures d
+               JOIN booking_orders o ON o.departure_id=d.id AND o.status IN ('paid','completed')
+               JOIN order_passengers op ON op.order_id=o.id
+               JOIN departure_passenger_gate_decisions gate
+                 ON gate.departure_id=d.id AND gate.passenger_id=op.id AND gate.decision='allowed'
+               WHERE d.status='completed'
+                 AND EXISTS (SELECT 1 FROM departure_checkins dc WHERE dc.departure_id=d.id
+                             AND dc.event='departed' AND dc.captain_user_id=d.captain_user_id)
+                 AND EXISTS (SELECT 1 FROM departure_checkins rc WHERE rc.departure_id=d.id
+                             AND rc.event='returned' AND rc.captain_user_id=d.captain_user_id)
+                 ${cursorClause}
+               ORDER BY d.departure_at DESC,d.id DESC LIMIT ${limitParameter}`,
+              values,
             );
-            if (alreadyGenerated.rowCount) continue;
-            const facts = await loadCertificateFacts(client, candidate.id, request.user.id, security);
-            if (facts.error) continue;
-            eligibleDepartures.push({
-              departureId: facts.departureId,
-              departureAt: facts.departure.departure_at,
-              boatName: facts.departure.boat_name,
-              captainName: facts.departure.captain_name,
-              displayName: facts.displayName,
-              fishSummary: facts.items.map((item) => `${item.fishName} × ${item.quantity}`),
-            });
+            if (!candidates.rows.length) break;
+            for (const candidate of candidates.rows) {
+              const alreadyGenerated = await client.query(
+                'SELECT 1 FROM step6_certificates WHERE owner_user_id=$1 AND departure_id=$2',
+                [request.user.id, candidate.id],
+              );
+              if (alreadyGenerated.rowCount) continue;
+              const facts = await loadCertificateFacts(client, candidate.id, request.user.id, security);
+              if (facts.error) continue;
+              eligibleDepartures.push({
+                departureId: facts.departureId,
+                departureAt: facts.departure.departure_at,
+                boatName: facts.departure.boat_name,
+                captainName: facts.departure.captain_name,
+                displayName: facts.displayName,
+                fishSummary: facts.items.map((item) => `${item.fishName} × ${item.quantity}`),
+              });
+              if (eligibleDepartures.length >= MAX_ELIGIBLE_DEPARTURES) break;
+            }
+            if (candidates.rows.length < CANDIDATE_PAGE_SIZE) break;
+            cursor = candidates.rows.at(-1);
           }
           return { certificates, eligibleDepartures };
         });

@@ -57,10 +57,10 @@ async function makeUser(name, { captain = false } = {}) {
   await pool.query(
     `INSERT INTO users
        (id,phone_ciphertext,phone_hash,display_name,legal_name_ciphertext,
-        identity_number_ciphertext,identity_verified_at,identity_status)
-     VALUES ($1,$2,$3,$4,$5,$6,now(),'verified')`,
+        identity_number_ciphertext,identity_number_hash,identity_verified_at,identity_status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,now(),'verified')`,
     [id, security.encrypt(phone), security.phoneHash(phone), name,
-      security.encrypt(name), security.encrypt(identity)],
+      security.encrypt(name), security.encrypt(identity), security.identityHash(identity)],
   );
   await pool.query(
     `INSERT INTO user_sessions (token_hash,user_id,expires_at)
@@ -75,10 +75,17 @@ async function makeUser(name, { captain = false } = {}) {
   return { id, token, identity, name };
 }
 
-async function makeTrip({ owner, captain, status = 'completed', returned = true }) {
+async function makeTrip({
+  owner,
+  buyer = owner,
+  captain,
+  status = 'completed',
+  returned = true,
+  departureAt: requestedDepartureAt,
+}) {
   const boatId = randomUUID();
   const departureId = randomUUID();
-  const departureAt = new Date(Date.now() - 7 * 86400000);
+  const departureAt = requestedDepartureAt ?? new Date(Date.now() - 7 * 86400000);
   const returnAt = new Date(departureAt.getTime() + 6 * 3600000);
   const seatId = randomUUID();
   const orderId = randomUUID();
@@ -118,7 +125,7 @@ async function makeTrip({ owner, captain, status = 'completed', returned = true 
         seat_fee_fen,discount_fen,platform_fee_fen,total_amount_fen,paid_at)
      VALUES ($1,$2,$3,$4,$5,'completed',10000,0,0,10000,now())`,
     [orderId, `CERT-${departureId.replaceAll('-', '').slice(0, 20)}`,
-      departureId, seatId, owner.id],
+      departureId, seatId, buyer.id],
   );
   await pool.query(
     `INSERT INTO order_passengers
@@ -347,11 +354,86 @@ try {
 
   const scanned = await request('GET', `/p/${promotionCode}?source=certificate`, null);
   check(scanned.status, 200, 'certificate QR resolves to the existing H5 promotion landing');
+  const visitorToken = String(scanned.body).match(/ref=([A-Za-z0-9_.-]+)/)?.[1];
+  assert.ok(visitorToken, 'certificate H5 landing exposes the existing signed claim token');
+  assertions += 1;
+  const visitorId = security.promotionVisitorId(visitorToken);
+  const visitorKeyHash = security.promotionVisitorHash(visitorId);
   const visitor = await pool.query(
     `SELECT source_channel FROM promotion_touch_events
-     WHERE promotion_code_id=(SELECT id FROM promotion_codes WHERE code=$1)`, [promotionCode],
+     WHERE visitor_key_hash=$1
+       AND promotion_code_id=(SELECT id FROM promotion_codes WHERE code=$2)`,
+    [visitorKeyHash, promotionCode],
   );
   check(visitor.rows[0]?.source_channel, 'certificate', 'certificate marks the touch source without changing attribution rules');
+  const certificateReferralGuest = await makeUser('证书来源扫码会员');
+  const certificateClaim = await expect(
+    'POST', '/promotions/attribution/claim', certificateReferralGuest.token,
+    { visitorToken }, 200,
+  );
+  check(certificateClaim.body.claimed, true,
+    'a visitor from the certificate landing can claim through the existing attribution endpoint');
+  const certificateAttribution = await pool.query(
+    `SELECT a.source_channel,a.qualification_status,t.status AS touch_status
+     FROM promotion_attributions a
+     JOIN promotion_touch_events t ON t.visitor_key_hash=a.attribution_key_hash
+     WHERE a.attributed_user_id=$1`, [certificateReferralGuest.id],
+  );
+  check(certificateAttribution.rows[0]?.source_channel, 'certificate',
+    'the claimed attribution retains the certificate source');
+  check(certificateAttribution.rows[0]?.qualification_status, 'pending',
+    'certificate claim follows existing pending qualification before a valid first order');
+  check(certificateAttribution.rows[0]?.touch_status, 'claimed',
+    'existing claim flow marks the certificate touch as claimed');
+  const repeatedCertificateClaim = await expect(
+    'POST', '/promotions/attribution/claim', certificateReferralGuest.token,
+    { visitorToken }, 200,
+  );
+  check(repeatedCertificateClaim.body.claimed, false,
+    'reclaiming a certificate visitor does not create another attribution');
+  check(repeatedCertificateClaim.body.reason, 'already_attributed',
+    'certificate visitors retain the existing one-attribution-per-user rule');
+
+  const selfScanned = await request('GET', `/p/${promotionCode}?source=certificate`, null);
+  const selfVisitorToken = String(selfScanned.body).match(/ref=([A-Za-z0-9_.-]+)/)?.[1];
+  assert.ok(selfVisitorToken, 'a second certificate scan creates an independent visitor token');
+  assertions += 1;
+  const selfCertificateClaim = await expect(
+    'POST', '/promotions/attribution/claim', owner.token,
+    { visitorToken: selfVisitorToken }, 200,
+  );
+  check(selfCertificateClaim.body.claimed, false,
+    'claiming the owner’s own certificate code remains excluded');
+  check(selfCertificateClaim.body.reason, 'self_referral',
+    'certificate self-claims use the existing self-referral rule');
+  check((await pool.query(
+    'SELECT count(*)::integer AS count FROM promotion_attributions WHERE attributed_user_id=$1',
+    [owner.id],
+  )).rows[0]?.count, 0, 'certificate self-claim creates no attribution');
+
+  const certificateReferralTrip = await makeTrip({
+    owner: certificateReferralGuest,
+    captain,
+  });
+  await expect('GET', '/promotions/me', certificateReferralGuest.token, undefined, 200);
+  const certificateCommission = await pool.query(
+    `SELECT a.source_channel,a.qualification_status,l.status AS commission_status,
+            l.amount_fen,l.rate_basis_points
+     FROM promotion_attributions a
+     JOIN commission_ledger l ON l.promotion_attribution_id=a.id
+     WHERE a.attributed_user_id=$1 AND l.booking_order_id=$2`,
+    [certificateReferralGuest.id, certificateReferralTrip.orderId],
+  );
+  check(certificateCommission.rows[0]?.source_channel, 'certificate',
+    'certificate attribution source survives first-order commission creation');
+  check(certificateCommission.rows[0]?.qualification_status, 'qualified',
+    'certificate attribution qualifies through the existing valid first-order rule');
+  check(certificateCommission.rows[0]?.commission_status, 'pending_unlock',
+    'certificate referral uses the existing post-return commission hold state');
+  check(Number(certificateCommission.rows[0]?.amount_fen), 500,
+    'certificate referral uses the existing five-percent commission calculation');
+  check(Number(certificateCommission.rows[0]?.rate_basis_points), 500,
+    'certificate referral keeps the existing commission rate');
 
   const hidden = await expect('DELETE', `/step6/certificates/${certificateId}`, owner.token, undefined, 200);
   check(hidden.body.hidden, true, 'deleting a certificate only hides its list item');
@@ -407,6 +489,33 @@ try {
 
   const noAuth = await request('GET', '/step6/certificates/me', null);
   check(noAuth.status, 401, 'certificate list requires an authenticated owner');
+
+  const oldOwner = await makeUser('旧航次本人乘客');
+  const bookingBuyer = await makeUser('代订账号');
+  const oldTrip = await makeTrip({
+    owner: oldOwner,
+    buyer: bookingBuyer,
+    captain,
+    departureAt: new Date(Date.now() - 200 * 86400000),
+  });
+  await addFacts(oldTrip, {
+    ownOutcome: 'caught', ownItems: [{ fishCode: 'sea_bass', quantity: 1 }],
+  });
+  const newerOtherOwner = await makeUser('较新航次他人乘客');
+  for (let index = 0; index < 100; index += 1) {
+    await makeTrip({
+      owner: newerOtherOwner,
+      captain,
+      departureAt: new Date(Date.now() - (100 - index) * 86400000),
+    });
+  }
+  const oldOwnerList = await expect('GET', '/step6/certificates/me', oldOwner.token, undefined, 200);
+  check(oldOwnerList.body.eligibleDepartures.some((trip) => trip.departureId === oldTrip.departureId),
+    true, 'an owner’s old eligible trip survives 100 newer departures belonging to other passengers');
+  check(oldOwnerList.body.eligibleDepartures.every((trip) => trip.displayName === oldOwner.name),
+    true, 'paginated eligibility never returns another passenger’s trip data');
+  check(oldOwnerList.body.eligibleDepartures[0]?.departureId, oldTrip.departureId,
+    'actual passenger matching retains an eligible trip booked by another account');
 
   console.log(`Step 6 slice 2 certificate acceptance passed: ${assertions} assertions.`);
 } finally {

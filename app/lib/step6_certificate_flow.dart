@@ -245,6 +245,8 @@ class _Step6CertificatePreviewPageState
   bool _loading = true;
   bool _generating = false;
   bool _sharing = false;
+  bool _createdCertificate = false;
+  bool _allowGeneratedCertificatePop = false;
   String? _error;
 
   @override
@@ -303,6 +305,7 @@ class _Step6CertificatePreviewPageState
       setState(() {
         _certificateId = certificate['id']?.toString();
         _snapshot = _certificateMap(certificate['snapshot']);
+        _createdCertificate = _certificateId != null;
       });
     } catch (error) {
       if (!mounted) return;
@@ -373,73 +376,85 @@ class _Step6CertificatePreviewPageState
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('证书预览')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null && _snapshot.isEmpty
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: _CertificateEmptyState(
-                  icon: Icons.info_outline,
-                  title: '暂时不能生成',
-                  detail: _error!,
-                  action: '返回重试',
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ),
-            )
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 30),
-              children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(4, 0, 4, 12),
-                  child: Text(
-                    '以下内容由已确认的航次记录拼装，生成后会冻结为证书快照。',
-                    style: TextStyle(
-                      color: FishingTokens.secondary,
-                      height: 1.45,
-                    ),
+    return PopScope<bool>(
+      canPop: !_createdCertificate || _allowGeneratedCertificatePop,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop || !_createdCertificate || _allowGeneratedCertificatePop) {
+          return;
+        }
+        setState(() => _allowGeneratedCertificatePop = true);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) Navigator.of(context).pop(true);
+        });
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('证书预览')),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null && _snapshot.isEmpty
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: _CertificateEmptyState(
+                    icon: Icons.info_outline,
+                    title: '暂时不能生成',
+                    detail: _error!,
+                    action: '返回重试',
+                    onPressed: () => Navigator.pop(context),
                   ),
                 ),
-                Center(
-                  child: RepaintBoundary(
-                    key: _certificateKey,
-                    child: CertificateArtwork(snapshot: _snapshot),
-                  ),
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 12),
-                  _CertificateNotice(text: _error!),
-                ],
-                const SizedBox(height: 18),
-                if (_certificateId == null)
-                  FilledButton.icon(
-                    onPressed: _generating ? null : _generate,
-                    icon: const Icon(Icons.verified_outlined),
-                    label: Text(_generating ? '生成中…' : '生成并保存证书快照'),
-                  )
-                else
-                  FilledButton.icon(
-                    onPressed: _sharing ? null : _share,
-                    icon: const Icon(Icons.ios_share_rounded),
-                    label: Text(_sharing ? '准备图片…' : '保存或分享图片'),
-                  ),
-                if (_certificateId != null)
+              )
+            : ListView(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 30),
+                children: [
                   const Padding(
-                    padding: EdgeInsets.only(top: 8),
+                    padding: EdgeInsets.fromLTRB(4, 0, 4, 12),
                     child: Text(
-                      '将通过系统分享面板导出 PNG 图片，可选择保存到设备或发送给朋友。',
-                      textAlign: TextAlign.center,
+                      '以下内容由已确认的航次记录拼装，生成后会冻结为证书快照。',
                       style: TextStyle(
                         color: FishingTokens.secondary,
-                        fontSize: 12,
+                        height: 1.45,
                       ),
                     ),
                   ),
-              ],
-            ),
+                  Center(
+                    child: RepaintBoundary(
+                      key: _certificateKey,
+                      child: CertificateArtwork(snapshot: _snapshot),
+                    ),
+                  ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    _CertificateNotice(text: _error!),
+                  ],
+                  const SizedBox(height: 18),
+                  if (_certificateId == null)
+                    FilledButton.icon(
+                      onPressed: _generating ? null : _generate,
+                      icon: const Icon(Icons.verified_outlined),
+                      label: Text(_generating ? '生成中…' : '生成并保存证书快照'),
+                    )
+                  else
+                    FilledButton.icon(
+                      onPressed: _sharing ? null : _share,
+                      icon: const Icon(Icons.ios_share_rounded),
+                      label: Text(_sharing ? '准备图片…' : '保存或分享图片'),
+                    ),
+                  if (_certificateId != null)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text(
+                        '将通过系统分享面板导出 PNG 图片，可选择保存到设备或发送给朋友。',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: FishingTokens.secondary,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+      ),
     );
   }
 }

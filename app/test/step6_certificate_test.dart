@@ -33,6 +33,101 @@ Map<String, dynamic> _snapshot() => {
   'landingUrl': 'https://promotion.example/p/FISH2026?source=certificate',
 };
 
+Future<void> _verifyCenterAfterPreviewReturn(
+  WidgetTester tester, {
+  required bool useSystemBack,
+  required bool generate,
+}) async {
+  var listRequests = 0;
+  var generated = false;
+  Step1Api.clientOverride = MockClient((request) async {
+    if (request.url.path == '/step6/certificates/me') {
+      listRequests += 1;
+      return http.Response(
+        jsonEncode({
+          'certificates': generated
+              ? [
+                  {
+                    'id': _certificateId,
+                    'templateVersion': 'qd-cert-v1',
+                    'generatedAt': '2026-10-27T12:00:00.000Z',
+                    'hidden': false,
+                    'snapshot': _snapshot(),
+                  },
+                ]
+              : [],
+          'eligibleDepartures': generated
+              ? []
+              : [
+                  {
+                    'departureId': _departureId,
+                    'departureAt': '2026-10-20T03:00:00.000Z',
+                    'boatName': '海风号',
+                    'captainName': '张船长',
+                    'displayName': '海边钓友',
+                    'fishSummary': ['小黄鱼 × 3'],
+                  },
+                ],
+        }),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    }
+    if (request.url.path ==
+        '/step6/certificates/departures/$_departureId/preview') {
+      return http.Response(
+        jsonEncode({'preview': _snapshot()}),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    }
+    if (request.url.path == '/step6/certificates' && request.method == 'POST') {
+      generated = true;
+      return http.Response(
+        jsonEncode({
+          'created': true,
+          'certificate': {'id': _certificateId, 'snapshot': _snapshot()},
+        }),
+        201,
+        headers: {'content-type': 'application/json'},
+      );
+    }
+    fail('Unexpected request: ${request.method} ${request.url}');
+  });
+
+  await tester.binding.setSurfaceSize(const Size(390, 844));
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Step6CertificateCenterPage(token: _token, onRequireLogin: () {}),
+    ),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('预览证书'));
+  await tester.pumpAndSettle();
+  if (generate) {
+    await tester.tap(find.text('生成并保存证书快照'));
+    await tester.pumpAndSettle();
+  }
+
+  if (useSystemBack) {
+    await tester.binding.handlePopRoute();
+  } else {
+    await tester.tap(find.byType(BackButton));
+  }
+  await tester.pumpAndSettle();
+
+  expect(listRequests, generate ? 2 : 1);
+  if (generate) {
+    expect(find.text('还没有证书'), findsNothing);
+    expect(find.text('预览证书'), findsNothing);
+    expect(find.textContaining('1 条记录'), findsOneWidget);
+  } else {
+    expect(find.text('还没有证书'), findsOneWidget);
+    expect(find.text('预览证书'), findsOneWidget);
+  }
+  await tester.binding.setSurfaceSize(null);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   tearDown(() => Step1Api.clientOverride = null);
@@ -128,4 +223,34 @@ void main() {
       await tester.binding.setSurfaceSize(null);
     },
   );
+
+  testWidgets('generated certificate refreshes center after AppBar back', (
+    tester,
+  ) async {
+    await _verifyCenterAfterPreviewReturn(
+      tester,
+      useSystemBack: false,
+      generate: true,
+    );
+  });
+
+  testWidgets('generated certificate refreshes center after system back', (
+    tester,
+  ) async {
+    await _verifyCenterAfterPreviewReturn(
+      tester,
+      useSystemBack: true,
+      generate: true,
+    );
+  });
+
+  testWidgets('returning without generation keeps the original list state', (
+    tester,
+  ) async {
+    await _verifyCenterAfterPreviewReturn(
+      tester,
+      useSystemBack: false,
+      generate: false,
+    );
+  });
 }

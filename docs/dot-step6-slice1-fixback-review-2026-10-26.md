@@ -1,6 +1,6 @@
 # Dot 独立定点复核：Step 6 切片 1 修复回单（2026-10-26）
 
-> 最新状态见文末“补证终轮定点复核：db9972ab”：R1 限定升级缺陷已关闭，R2/R3 维持关闭；R4 原生证据尚未完整收口。此前各轮结论保留为历史。
+> 最新增量见文末“退款重订 B 增量定点复核 — 4b628710”：B 批次暂不整体技术通过，存在 B-R1 静态行为缺陷及024升级补证缺口。此前 R1/R2/R3 限定关闭保持；R4 原生证据仍开放。
 
 
 ## 结论：暂不整体通过，R1 迁移漏项与 R4 原生链路补证仍开放
@@ -171,3 +171,84 @@ Muse 对 R1 夹具、双端证据边界与本次结论基本一致；但 AppShel
 
 双方均未目检 1.81MB H5 图，不能将其记为已验证；即使补看单张 H5 图，也不能单独证明完整冷/热启动及 claim 链。R4 剩余收口仍按上述已有实测关联和 Android 原生证据办理。退款重订 A/B 仍由创始人决定，转述评审不构成该业务选择或下一切片授权。
 
+
+
+## 退款重订 B 增量定点复核 — 4b628710
+
+审阅时间：2026-10-26 23:40 UTC。初次核对 main 为 `2de9faeae8f634b49ae0741dff374649e374a6ce`；2026-10-27 04:03 UTC 再核 main 为 `2532fc183a691f8567e8a859462b79daef1a1b40`，其后只有 README 与复核追单文档变动，未新增修复代码、024夹具或原生证据。
+
+### 结论
+
+暂不作本批 B 技术整体通过：主路径代码和 304 项同 SHA CI 已核实，但发现“身份更正失败 + 已有后续订单 + 原首单全退”会跳过旧佣金冲正的确定静态路径；另有 migration 024 有数据升级及失败回滚未实际验证的独立证据缺口。前者是行为缺陷，后者是验证缺口，不混写。
+
+比较基准为仓内 [B 决定单](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/2de9faeae8f634b49ae0741dff374649e374a6ce/docs/founder-decision-step6-slice1-refund-reorder-b-2026-10-27.md)，不由本技术审阅确认侧聊创始人授权真实性、代选业务口径或批准生产。受审代码 4b6287109352e8b77753f7a832afd25059317e96；[交付回执](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/f7f402aeb5153d107787d8f08c2310f9d6766835/docs/step6-slice1-refund-reorder-b-delivery-receipt-2026-10-27.md)；[Muse 巡检](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/2de9faeae8f634b49ae0741dff374649e374a6ce/docs/ui-design-review-f7f402ae.md)。
+
+### B-R1：旧单已全退，身份守卫仍可阻断旧账本冲正（需最小修复）
+
+[服务层 114–119 行](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4b6287109352e8b77753f7a832afd25059317e96/server/src/promotion-service.js#L114-L119) 在新选中的有效订单存在、当前用户非 verified/无摘要时，更新归因为 pending 后直接返回；[旧账本冲正在 154 行](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4b6287109352e8b77753f7a832afd25059317e96/server/src/promotion-service.js#L154)，位于该返回之后。
+
+确定静态反例（本次未运行）：
+1. A 实名有效，先支付 O1，产生冻结佣金；在 O1 仍未取消时支付 O2，O2 不另计佣。
+2. A 再提交校验格式合法、沙盒序列 999 的实名样例，返回 rejected；[身份适配器](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4b6287109352e8b77753f7a832afd25059317e96/server/src/identity-adapter.js#L21-L23) 与 [实名接口 329–339 行](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4b6287109352e8b77753f7a832afd25059317e96/server/src/step1-routes.js#L329-L339) 会清空当前身份 hash，失败时不触发佣金同步。
+3. A 在满足全退窗口时取消 O1（例如出航前超过72小时）。[真实取消接口](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4b6287109352e8b77753f7a832afd25059317e96/server/src/step3-waitlist-routes.js#L237-L328) 只要求合法会话/订单状态，不要求当前 verified；先将 O1 cancelled、全额 ticket_refunded，再调用 sync。
+4. B 选单逻辑转而取 O2，但身份守卫先返回，O1 旧账本仍 frozen、金额非零，未按全退归零。
+5. 如果 O1 对应航次随后正常完成，[返航同步](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4b6287109352e8b77753f7a832afd25059317e96/server/src/promotion-service.js#L306-L322) 仍按该历史订单找到 frozen/pending_unlock 账本；该查询及 syncCompletedCommission 不核订单取消/净票款，可把这一笔无效佣金推进待解冻/可用。
+
+需要修复的是：旧订单全退的账务纠正不应依赖后续订单能否通过新资格守卫；未实名时不可创建新佣金，但也不可保留旧全退佣金。请用上述真实 API 顺序补反例，至少验证旧账本归零/反转、未实名 O2 不新增佣金、原航次返航不会恢复旧佣金；重新实名后本人合格重订可正常计佣。不得以禁止实名更正、取消实名要求或改费率解决。
+
+此身份守卫与退款同步的弱点在旧代码也存在，本结论不宣称“完全由 B 新引入”。但它直接落在本批订单顺延、旧账本冲正受影响路径，违反新回执“旧全退佣金保持归零”的承诺。不是重新打开已关闭的 R1 历史身份消费去重问题。
+
+### B-E1：migration 024 静态设计可理解，但缺有数据升级实证
+
+[024](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4b6287109352e8b77753f7a832afd25059317e96/server/migrations/024_step6_refund_reorder_commission_orders.sql) 在 BEGIN/COMMIT 内完成：增加 booking_order_id；按旧 attribution.order_id 回填；如仍为 NULL 则 RAISE EXCEPTION；再设 NOT NULL、每订单唯一、每归因至多一份非 reversed。
+
+旧模型每归因至多一条账本，且旧服务将 order_id 固定，故用既有归因订单回填具有合理静态依据。零额历史账本仍有固定旧订单，换用 l.booking_order_id 后不随新首单漂移。无法映射时是在提交前抛异常；[Node pg 迁移入口](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/4b6287109352e8b77753f7a832afd25059317e96/server/src/migrate.js) 报错后 finally 关闭连接，不是 psql 脚本。事务设计意图为失败不提交结构/回填变更；本次没有实际触发失败证明回滚。
+
+本次 CI 是新库先跑 001–024，再造验收数据。脚本仍只删除/重跑 023 的迁移记录，未执行“有旧账本的023库→024”、未造无法映射历史行。因而不能以 024 Applied + 304 项通过宣称历史回填与失败回滚都经过实测。
+
+建议仅补一组隔离的 024 升级 fixture：023 状态下准备正额、reversed 零额、已解冻账本，执行真实024并核订单对应/金额/事件保留与索引；另一个隔离无映射样例应失败且回读确认没有部分应用和024版本记录；随后验证修正数据可正常升级。无需重做已通过的023资格回填，也不是要求因陈旧README重复跑原测试。
+
+### 本轮已认可的实现与证据
+
+- 首单按 paid_at/created_at/id 排序，排除 cancelled/refunded 与净额≤0；部分退款净额>0保持原单；正常第二单不增加佣金。
+- 无合格订单会清空当前归因订单、冲正旧冻结账本；有合格重订则旧行保留、新行固定关联新订单，5% 向下取整未改。
+- 归因行 FOR UPDATE + 数据库每归因非reversed部分唯一索引，配合每订单唯一，保护顺延的单份有效账本。已有测试验证正常重复并发读取下仅一份账本与一次创建事件；不把这一测试解释为穷尽所有交错。
+- 已解冻/提现或已有退款异常的账本先被保护选择，不把资格顺延给后单，维持不追缴、不扣款；本次断言覆盖后来已有付款订单仍不生成第二份账本。
+- 原身份HMAC消费事实保留；A/X全退更正Y后，B/X仍被拒而A/Y本人重订成功，304项中有对应真实接口/数据库断言。
+- 看板、返航、释放 JOIN 已由 attribution.order_id 改到 ledger.booking_order_id，避免显示/退款基线随归因首单变动。
+- 仅服务端4个文件变更；无App、价格、奖励、提现规则、设计正本或生产配置改动。
+
+### 独立实读 CI
+
+[run 40419191571 / job 121909058650](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40419191571/job/121909058650)：原始 checkout 精确为 4b6287109352e8b77753f7a832afd25059317e96；迁移024应用；Step4 **709**、Step5 **133**、直播 **77**、Step6 **304**项通过。本地 npm check/npm test10项是 Luna 回执，未冒充 Dot 独立运行。
+
+304项未覆盖 B-R1 的“身份失败后退款且已有后续有效订单”，也未覆盖 B-E1 的024历史升级/失败回滚，不因总数增加视作已证明。
+
+### R4及授权边界
+
+从已发布8da4d5c9到当前2de9faea的全量差异无App代码或原生证据文件变化。Android H5冷/热→实际claim仍待实测；iOS仍是已报告实测+已看登录态截图，脱敏请求/数据库关联待补；本批B的服务端CI不补齐这些缺口。不给本批要求无影响的Flutter构建。
+
+本次只读审查与CI原始日志核查，未独立启动数据库/服务端/设备，行为反例为源码确定路径、不是运行复现。本次仅写入独立评审文档，未修改代码、未代批B决定/产品验收/切片2/生产。
+
+
+
+### 给 Muse / Luna 的同片接力
+
+此前 R1（历史身份消费升级）、R2、R3 的限定关闭结论保持，不因本次新增 B 代码审阅改写历史。此处 B-R1 是新增受影响退款路径编号，不是原 S6-S1-R1 重开。请沿当前 B 交付修复上述最小行为缺陷、补对应反例，并补限定的024升级证据后交回定点复核；不另开重复工单、不执行下一切片。R4仍按已有证据边界继续收口；本评审不批准产品验收或生产。
+
+
+
+### 对 2532fc18 六项追单的逐项回应（2026-10-27 04:03 UTC）
+
+[最新追单](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/2532fc183a691f8567e8a859462b79daef1a1b40/docs/dot-review-request-step6-refund-reorder-b-2026-10-27.md)仍指向同一代码 `4b628710`，以下复用上文已完成的独立源码/原始CI复核，不冒称重新执行测试。
+
+| 追单项 | 本轮状态 | 证据与限制 |
+| --- | --- | --- |
+| 1. 024迁移兼容 | 未完成技术验收；静态保护方向认可 | B-E1：缺有存量账本升级、无法映射时回滚的实际fixture；不是已证实迁移失败 |
+| 2. B首单规则 | 常规路径通过；受影响组合暂不通过 | 304项支持全退无重订/本人重订/部分退款/正常第二单；B-R1实名失效组合未覆盖且有静态缺陷 |
+| 3. 历史与新账本 | 暂不通过完整承诺 | 正常关联、并发单份有证据；B-R1可使旧已全退账本保持正额，须最小修复 |
+| 4. 实名边界 | 原X→Y成功更正及跨账号拒绝路径通过 | 既有断言已核；不等同实名更正失败后退款路径通过，后者见B-R1 |
+| 5. R3已解冻边界 | 本批规定路径通过 | 现有已释放账本保护与“后续单无第二份佣金”断言已核；不追缴/不扣款/布尔异常范围未改 |
+| 6. 范围 | 代码差异核查通过 | 服务端4文件，未改费率/奖励/App/规格正本/生产配置；不由此推导产品验收或授权 |
+
+本表不改变上文结论：本批B暂不整体技术通过；需要B-R1最小修复及B-E1限定补证，而不是重新等待同一轮审查。此前R1/R2/R3限定关闭不回滚，R4仍按原证据边界保留。

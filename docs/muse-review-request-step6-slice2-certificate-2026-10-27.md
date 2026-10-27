@@ -4,7 +4,7 @@
 - **固定代码 SHA：** `458c4a2d626d6f88f70e598af372f32efd030830`
 - **请求时间：** 2026-10-27 23:17 CST
 - **希望给出结论：** 2026-10-28 10:00 CST 前；如无法完成，请在仓库写明预计时间与当前阻塞。
-- **当前结论：** 待 Muse 评审；没有预设通过。
+- **评审结论：** Muse 于 `109a048` 入仓有条件通过，允许按 Dot 请求草案提交定点复核；详见 `docs/ui-design-review-68d7eb59.md`。这不是 Dot 复核或创始人验收。
 
 请按正式开工令 `docs/muse-to-luna-step6-slice2-start-order-2026-10-27.md` 和任务书逐项核对本 SHA，重点检查：
 
@@ -21,4 +21,4 @@
 - 截图及缺口：`docs/evidence/step6-slice2/README.md`
 - 开工令与任务书：`docs/muse-to-luna-step6-slice2-start-order-2026-10-27.md`、`docs/muse-to-luna-step6-slice2-brief-2026-10-27.md`
 
-请将结论、固定 SHA、发现项与是否可交 Dot 复核写回仓库。Dot 的请求草案 `docs/dot-review-request-step6-slice2-certificate-2026-10-27.md` 目前尚未发出；只有 Muse 完成评审并明确可继续后才启动 Dot 定点复核。创始人验收及下一切片仍保持待办。
+Muse 的有条件通过及遗留项已写入 `docs/ui-design-review-68d7eb59.md`。Dot 定点复核请求现已入仓；创始人验收及下一切片仍保持待办。

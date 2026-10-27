@@ -71,3 +71,33 @@
 此次 makeUser 新增写入 identity_number_hash，而身份号仍来自脚本内递增序列。请检查共享验收数据库中测试身份的命名空间/隔离与清理，使夹具与既存唯一约束兼容；**不要删改真实身份唯一约束以让测试通过**。这里只确认实际冲突及其发生位置，不据此推断线上身份或计佣逻辑已坏。沿原任务提交修正后的固定 SHA 和对应 CI 即可，不新增整套无关复测要求。
 
 R1 展示选择与 1/4/5 来源行、同鱼多来源、真实成图边界证据仍按原评审，未见本次决定或实现；Dot 不代选。整体仍暂不技术通过。切片 1 的风险接受口径不变，不作下一切片或生产许可。
+
+
+## 2026-10-28 07:07 CST 终态补记：d347d7c 的 R2/R3 限定关闭
+
+**当前结论：S6-S2-R2、S6-S2-R3 及本次证书来源推广定向补证可在下述测试边界内关闭；S6-S2-R1 未关闭，切片 2 整体仍不技术通过。** 本节取代上一节的“等待 CI”状态，不抹去 aac590ac 的历史失败。
+
+### 实际交付与差量核对
+
+- 最终固定实现/夹具 SHA：[d347d7c016cb12acfba09222491d95625e630e43](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/d347d7c016cb12acfba09222491d95625e630e43)。相对 aac590ac 仅改证书验收脚本：普通测试用户维持可选 hash 为空；参与首次计佣的扫码测试用户使用已查询未占用 hash 的合成身份。未删除唯一索引、未修改生产身份或计佣算法。该选择用于隔离验收夹具，不证明并发注册或真实数据迁移。
+- 已读 Luna 进度回执 [b1f51866](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/b1f51866687136978c891bfdce2836b080468403/docs/step6-slice2-fixback-progress-2026-10-28.md)：明确引用 Dot 0778827、确认相同失败点并已修正。故可核实回修方实际读到了前一反馈；不据此宣称 Muse 已读本次补记。
+- 写入前 main=b1f51866687136978c891bfdce2836b080468403；d347d7c→该 main 仅 README 与进度文档，无新实现。回执里的“正在运行”已被以下实际终态替代，无需为了旧文字重跑。
+
+### 同一 d347d7c 的原始日志证据
+
+| 流程 | 原始 job | 实读结果 |
+|---|---|---|
+| 数据库 run 40598838144 | [122521563673](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40598838144/job/122521563673) | checkout d347d7c；Step4 710、Step5 133、live 77、promotion 334、refund migration 33、certificate **57** 断言通过 |
+| Flutter run 40598941709：analyze | [122521933137](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40598941709/job/122521933137) | checkout d347d7c；**31 tests passed**；No issues found |
+| 同 run：iOS | [122521932664](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40598941709/job/122521932664) | checkout d347d7c；Built build/ios/iphonesimulator/Runner.app |
+| 同 run：Android | [122521932953](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40598941709/job/122521932953) | checkout d347d7c；Built build/app/outputs/flutter-apk/app-debug.apk |
+
+以上均为 Dot 读取现有 CI 原始日志，不是 Dot 本地重跑；不借用 aac590ac 的绿灯冒充 d347d7c 同 SHA 证据。
+
+### 限定关闭的含义与剩余项
+
+- **R2：** 已读实现与三项新 widget 夹具，并确认同 SHA 测试通过：生成后 AppBar/系统返回刷新中心；不生成返回维持原列表。关闭原“生成后返回列表陈旧”问题。测试调用系统返回接口，不等于 iOS 边缘滑动或所有原生设备导航已实测。
+- **R3：** 同 SHA certificate 验收执行到了新增反例：本人旧航次、他人代订、100 个更近的他人航次仍可找到本人记录且不返回他人记录。关闭原“全局首 100 条先截断而漏本人旧航次”问题。实现仍最多返回 100 个合格候选，逐候选读取与大规模性能未验证；不将该夹具外推为全部分页并发/极端数据证明。
+- **证书推广来源：** 新真实服务端接口夹具覆盖证书链接扫描、claim、重复 claim、自推排除、有效首单后 5% 佣金及 pending_unlock 状态，57 断言已执行通过。这里的“真实接口”指隔离测试服务/API，不是线上真实订单或原生扫码闭环；不改变既有推广规则。
+- **R1 仍由 Muse/创始人确定展示方案**，再由 Luna 补实现与定向证据；一张完整长图、多页完整图或明确摘要的候选不等于已选方案。原要求的 1/4/5 来源行、同鱼多来源超过 4 行、真实 PNG 内容完整可见/不溢出，以及相应混合来源展示证据仍留在 R1 范围。不要因 R2/R3 已关闭重复修复这两项，也不要以本节代替 R1 产品选择、创始人验收或下一切片许可。
+- 切片 1 已有风险接受保持原性质，未验原生证据不因本次 build 变成技术通过。本轮没有部署、真实资金或生产许可。

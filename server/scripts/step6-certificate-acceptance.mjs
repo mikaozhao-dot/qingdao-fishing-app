@@ -320,7 +320,7 @@ try {
   const preview = await expect('GET', `/step6/certificates/departures/${personalTrip.departureId}/preview`,
     owner.token, undefined, 200);
   check(preview.body.preview.displayName, '海风钓友', 'certificate uses the account display name');
-  check(preview.body.preview.fishItems[0], {
+  check(preview.body.preview.fishItems.find((item) => item.fishCode === 'yellow_croaker'), {
     fishCode: 'yellow_croaker', fishName: '小黄鱼', quantity: 2,
     maxIndividualWeightGrams: 1250, maxLengthMm: 410, source: '本人记录',
   }, 'preview copies source facts without editable or synthesized values');

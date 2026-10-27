@@ -111,6 +111,7 @@ export async function syncPromotionForUser(client, userId) {
     ? 0 : calculateCommissionFen(netTicketFen);
   const isEligibleOrder = !['cancelled', 'refunded'].includes(order.status) && netTicketFen > 0;
 
+  await reverseStalePreReleaseCommissions(client, attribution.id, order.id);
   if (isEligibleOrder && (user.identity_status !== 'verified' || !user.identity_number_hash)) {
     await client.query(
       `UPDATE promotion_attributions SET qualification_status='pending' WHERE id=$1`,
@@ -151,7 +152,6 @@ export async function syncPromotionForUser(client, userId) {
     }
   }
 
-  await reverseStalePreReleaseCommissions(client, attribution.id, order.id);
   await client.query(
     `UPDATE promotion_attributions
      SET order_id=$2,qualification_status=$3,

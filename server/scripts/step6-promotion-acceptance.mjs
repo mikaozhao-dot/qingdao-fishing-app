@@ -586,6 +586,60 @@ try {
   check((await scalar('SELECT count(*)::integer AS count FROM promotion_commission_events WHERE commission_ledger_id=$1 AND event_type=\'commission_created\'',
     [reorderedLedger.id])).count, 1, 'parallel reorder sync appends only one commission creation event');
 
+  const identityResetBuyer = await makeUser('实名失效后全退订单用户');
+  await verifyIdentity(identityResetBuyer, '120');
+  const identityResetScan = await scan(firstCode.code);
+  await claim(identityResetBuyer, identityResetScan.visitorToken);
+  const identityResetFirstTrip = await makePaidOrder(identityResetBuyer, captain, 120, 10_000);
+  const identityResetSecondTrip = await makePaidOrder(identityResetBuyer, captain, 96, 12_000);
+  const rejectedIdentity = await expect('POST', '/identity', identityResetBuyer.token, {
+    legalName: '海钓验收用户', identityNumber: makeSandboxIdentityNumber('999'),
+  }, 200);
+  check(rejectedIdentity.body.status, 'rejected', 'sandbox identity rejection clears the current verified identity');
+  check((await scalar('SELECT identity_number_hash FROM users WHERE id=$1',
+    [identityResetBuyer.id])).identity_number_hash, null,
+  'a rejected identity submission leaves no current identity hash');
+  await expect('POST', `/orders/${identityResetFirstTrip.orderId}/cancel`, identityResetBuyer.token, {}, 200);
+  const rejectedBuyerOldLedger = await scalar(
+    'SELECT id,status,amount_fen FROM commission_ledger WHERE booking_order_id=$1',
+    [identityResetFirstTrip.orderId],
+  );
+  check(rejectedBuyerOldLedger.status, 'reversed',
+    'full refund of the original order reverses its frozen ledger even when the later order awaits identity');
+  check(Number(rejectedBuyerOldLedger.amount_fen), 0,
+    'identity failure cannot leave a commission balance on the fully refunded order');
+  check((await scalar('SELECT count(*)::integer AS count FROM commission_ledger WHERE booking_order_id=$1',
+    [identityResetSecondTrip.orderId])).count, 0,
+  'an unverified later eligible order does not create a new commission ledger');
+  await pool.query('UPDATE departures SET status=\'in_progress\' WHERE id=$1', [identityResetFirstTrip.id]);
+  await expect('POST', `/captain/departures/${identityResetFirstTrip.id}/checkin`, captain.token,
+    { event: 'returned' }, 200);
+  const returnedRefundLedger = await scalar(
+    'SELECT status,amount_fen FROM commission_ledger WHERE id=$1', [rejectedBuyerOldLedger.id],
+  );
+  check(returnedRefundLedger.status, 'reversed', 'the refunded original ledger cannot revive at trip return');
+  check(Number(returnedRefundLedger.amount_fen), 0, 'trip return cannot restore the refunded commission amount');
+  await verifyIdentity(identityResetBuyer, '121');
+  const reverifiedBuyerReorder = await scalar(
+    `SELECT l.booking_order_id,l.status,l.amount_fen,a.order_id
+     FROM commission_ledger l
+     JOIN promotion_attributions a ON a.id=l.promotion_attribution_id
+     WHERE l.booking_order_id=$1`, [identityResetSecondTrip.orderId],
+  );
+  check(reverifiedBuyerReorder.booking_order_id, identityResetSecondTrip.orderId,
+    're-verification permits the buyer attribution to reorder onto its own next paid order');
+  check(reverifiedBuyerReorder.order_id, identityResetSecondTrip.orderId,
+    're-verified attribution points to the same next paid order as its new ledger');
+  check(reverifiedBuyerReorder.status, 'frozen', 're-verified reorder creates a fresh frozen ledger');
+  check(Number(reverifiedBuyerReorder.amount_fen), 600,
+    're-verified reorder calculates commission only from the next order net ticket amount');
+  const originalAfterReverify = await scalar(
+    'SELECT status,amount_fen FROM commission_ledger WHERE id=$1', [rejectedBuyerOldLedger.id],
+  );
+  check(originalAfterReverify.status, 'reversed', 're-verification does not revive the refunded first-order ledger');
+  check(Number(originalAfterReverify.amount_fen), 0,
+    're-verification does not restore commission to the refunded first-order ledger');
+
   const secondLevelBuyer = await makeUser('二级场景测试会员');
   await verifyIdentity(secondLevelBuyer, '105');
   const guestCode = await getCode(guest);

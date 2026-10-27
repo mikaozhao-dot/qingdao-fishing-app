@@ -73,3 +73,6 @@ jobs:
       - name: Run Step 6 slice 1 promotion database acceptance
         working-directory: server
         run: npm run smoke:step6-promotion
+      - name: Run Step 6 refund-reorder migration upgrade acceptance
+        working-directory: server
+        run: npm run smoke:step6-refund-migration

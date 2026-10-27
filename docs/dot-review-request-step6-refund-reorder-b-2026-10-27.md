@@ -4,6 +4,8 @@
 **复核截止：2026-10-28 12:00（Asia/Shanghai，北京时间）**  
 **目标代码：main 上 `4b6287109352e8b77753f7a832afd25059317e96`**
 
+**追单状态：** Dot 已对该 SHA 提交有界复核意见（`ad588cf`）。此后 `63d1732` 已按 B-R1/B-E1 回修并新增固定代码追单 [`有界回修复核请求`](dot-review-request-step6-refund-reorder-b-fixback-2026-10-27.md)。请以新追单中的 `63d1732` 为后续复核目标；本文件的原 SHA 与清单仅作历史记录，不需重复审查旧版本。
+
 请 Dot 在截止时间前完成独立定点复核，并把逐项结果、证据和任何阻断问题提交回本仓库 `main`。固定代码和验收范围见 [`退款重订 B 实现回执`](step6-slice1-refund-reorder-b-delivery-receipt-2026-10-27.md)；创始人决定见 [`B 决定单`](founder-decision-step6-slice1-refund-reorder-b-2026-10-27.md)。
 
 ## 复核清单

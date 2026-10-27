@@ -1,6 +1,6 @@
 # Dot 独立定点复核：Step 6 切片 1 修复回单（2026-10-26）
 
-> 最新状态见文末“B 修复及024补证定点复核：63d17328”：本批B回修限定沙盒技术通过，B-R1/B-E1关闭；此前R1/R2/R3关闭保持，R4原生证据仍开放。不关单、不进切片2。
+> 最新状态见文末“R4 Android 补证定点复核：445ec07”：六张截图与回执一致性通过，原始请求/数据库/进程关联仍待可读取脱敏记录，Android未独立关闭；iOS关联仍缺。此前R1/R2/R3与B-R1/B-E1限定关闭保持，不关单、不进切片2。
 
 
 ## 结论：暂不整体通过，R1 迁移漏项与 R4 原生链路补证仍开放
@@ -290,3 +290,49 @@ Muse 对 R1 夹具、双端证据边界与本次结论基本一致；但 AppShel
 
 针对 `docs/dot-review-request-step6-refund-reorder-b-fixback-2026-10-27.md`：1冲正顺序与身份守卫、2真实API回归、3有数据023→024升级、4失败回滚与修正重试、5范围核查，均在上述证据层级下通过。**本批B回修限定沙盒技术通过，B-R1/B-E1关闭**；不再重复索要同一反例或迁移fixture。此前R1/R2/R3限定关闭保持；后续接力仅继续R4原生证据与已声明产品待办，不据此启动新切片。
 
+
+
+## R4 Android 补证定点复核：445ec07（2026-10-27）
+
+**结论：截图与回执一致性通过；Android 请求/数据库/进程原始关联目前无法独立复核，暂不关闭 Android 证据项。iOS 关联仍开放，R4及切片1不关闭。** 这不是已发现原生失败，也不要求重跑已完成的整套验收。此前R1/R2/R3及B-R1/B-E1限定关闭保持。
+
+### 固定材料与实际核查
+
+- 证据提交：[445ec07ee3644e36ece4b418f983b86df42f5d3e](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/445ec07ee3644e36ece4b418f983b86df42f5d3e)。本次核查main为45004be3866f975655a4bb4679cf6b3e55dc4f18；与上次c3c74e47比较只有文档及图片，无App/服务端源码变动。
+- 已实读[主回执](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/45004be3866f975655a4bb4679cf6b3e55dc4f18/docs/step6-slice1-r4-evidence-receipt-2026-10-27.md)、[定点请求](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/45004be3866f975655a4bb4679cf6b3e55dc4f18/docs/dot-review-request-step6-slice1-r4-android-evidence-2026-10-27.md)、上游R4补证单及Git完整文件树；实际查看[证据目录](https://github.com/mikaozhao-dot/qingdao-fishing-app/tree/445ec07ee3644e36ece4b418f983b86df42f5d3e/docs/evidence/step6-slice1-r4)中六张android-cold/hot图片像素，不是仅看文件名。
+- 冷链：H5显示3:20，登录页3:21，登录态3:23；热链：H5与登录页3:16，登录态3:17。两套H5均显示推广码D6A060475BB1C8BC及CTA，登录页为空输入，末图显示已登录/实名未提交；与回执分钟及pending归因状态相容。未见手机号、用户ID或原始token。页面“No internet connection”不等于本地10.0.2.2沙盒不可达，不能据此判失败。
+
+### 逐项判断
+
+| 项 | 判断 | 依据/边界 |
+| --- | --- | --- |
+| 冷启动截图 | 一致性通过，完整链未独立核验 | mvqczvkw-jg38fxrc、visitor前缀246362d13ca379b4、touch 5fe509bd-5ec3-40da-8f0b-3283b9abfa63、attribution c680f712-60ee-4ba8-adb5-b257497e935b目前只见回执表格；截图没有claim结果或进程记录 |
+| 热启动截图 | 一致性通过，完整链未独立核验 | mvqcry9s-zgmepa4p、visitor前缀2c9401e3faab87b7、touch e86bc407-b300-49bb-9b31-bc75ed1032f9、attribution dd849109-77a5-4653-a1e9-ae5a295a3014及前后PID5285目前只见回执表格/叙述；同PID留存输出可支持热进程，截图本身不能证明 |
+| 时间语义 | 源码核对通过 | [promotion-routes.js 352–356](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/45004be3866f975655a4bb4679cf6b3e55dc4f18/server/src/promotion-routes.js#L352-L356)把chosen.scanned_at写为attributed_at，因此归因时间早于claim并非异常；pending也不等于claim失败 |
+| 隐私与范围 | 已看图片无上述敏感值；环境仅报告级 | 未独立访问Luna本机或沙盒DB，不把回执隔离声明写成亲自核验生产边界 |
+| iOS | 仍缺对应关系 | 旧截图、旧叙述不能补出请求/归因关系；新回执所查推广码只对应scanned触点与0条归因，不能证明当时claim，也不能推导所有旧记录均不可恢复 |
+
+### 仅补留存证据，不重复整套测试
+
+1. 请沿原R4补证单，把本次已存在的两条claim日志脱敏导出入仓或提供可读取附件：时间/时区、请求ID、token摘要及visitor摘要计算口径、HTTP状态和响应claimed/attributionId；去掉原token、Authorization、Cookie、手机号、用户ID及密钥。回执指向`/tmp/qf-r4-android-runtime/claim-events.jsonl`，该路径不在Git，亦不在Dot当前执行环境，不能把路径文字当作已读日志。
+2. 附对应隔离DB只读查询及最小输出：相同visitor摘要、touch与attribution ID、推广码关联、状态和时间，核对每个摘要对应行数。无需整库导出。再附已有冷链force-stop后无进程/启动后PID，以及热链链接前后PID的带时间留存输出或等效记录，连到相应运行。若当时未留存就如实标明，不伪造历史原始日志。
+3. 标明已测APK的源码checkout SHA及构建命令/API参数，与回执APK SHA-256对应。Pub缓存中jni与jni_flutter的compile SDK35→36、一次性镜像及恢复属于已披露的本地构建差异，不直接判无效，也不等同未修改标准CI产物；补最小差异/恢复记录即可，不要求重新构建、重新安装SDK或重复全套验收。未核验APK字节及本机恢复操作。
+4. 澄清热链“冷链完成后”指哪一次冷启动：主冷链15:23晚于热链15:17，回执另有较早冷启动排练，可能只是顺序指代不清。保留真实时间，注明热链承接排练即可，不据此判定功能缺陷。
+5. iOS留存搜索已有新增结果，见下节；不再重复要求检查同一批五个库/目录。若另有明确尚未检查的既有归档，只补查该来源；没有可定位来源时保留“在已查范围未恢复”的缺口，交负责人明确下一步，不自动重跑完整iOS或数据库回归、不把不可核验改写为通过。
+
+本结论为文档、像素及源码定点复核，未在Dot环境执行Android/iOS、启动数据库或重跑CI。补齐上述现有记录后只审差量；不重开已通过技术项，不扩H5免下载交易链，不代替创始人产品验收，不授权切片2或生产。
+
+
+
+### c12e56a 留存记录补记的只读增量核查
+
+已读[截图目检与iOS留存记录补记](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/c12e56a71fdf7f5841f409a07dbbe58bd9b2e6e0/docs/step6-slice1-r4-visual-and-ios-records-addendum-2026-10-27.md)。执行方报告只读检查五个留存隔离库（qingdao_step6_fixback、qingdao_step6_r1_full、qingdao_step6_r1_full2、qingdao_step6_r1_reverify_20261027、qingdao_step6_r1_upgrade）及/private/tmp/qf-step6-*：旧H5码只在r1_full2找到scanned触点6524747b-4161-4b82-948d-6068449054a5、visitor前缀2d57d2050247eaf4、UTC2026-10-26 16:27:30.766，关联归因0；其他码下3条claimed有pending归因，但缺能绑定iOS冷/热操作的请求记录。以上为执行方查询报告，Dot未再次访问其库或本机目录，不能称独立SQL复现。
+
+Dot只搜索当前已持有的app_fixback_review本地评审归档，未找到iOS请求ID与visitor摘要映射；不读取会话保护目录，不重复执行方五库搜索。故准确结论是“在双方明确列出的既有材料范围内未能恢复iOS映射”，不是所有归档均已穷尽或历史功能失败。若无其他可定位留存来源，本项保持未验，不据此自行批准补跑、风险豁免或关单。
+
+Android新增内容只是执行方截图目检，未新增可读取claim日志、SQL导出或PID记录，原最小补证要求保持。冷H5翻译浮层未遮CTA；冷账号页细绿色外框在Dot此前实看像素中可见，未遮关键内容，无法仅凭图像确定为截图采集效果，也无证据证明是深链功能缺陷。无需为这两项重做截图或重跑流程。本节记录该次只读增量核查，不改变未验证项的状态。
+
+
+### 发布前差量核对（2026-10-27 10:08 UTC）
+
+最新main为59eab66b1f0f06ed1b9c2617390fd38e845f992a；自c12e56a仅两笔文档提交，净变化仅[ui-design-review-c12e56a7.md](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/59eab66b1f0f06ed1b9c2617390fd38e845f992a/docs/ui-design-review-c12e56a7.md)，没有新代码、截图或请求/数据库/进程原始证据。Muse的“通过”是文档巡检层结论，仍明确R4和切片1开放，且未独立目检六图。本复核已经完成像素与已持归档检查，待发布的限定判断不因该文档改变；不重复全量审核或新增实现任务。

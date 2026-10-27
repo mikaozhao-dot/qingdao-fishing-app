@@ -11,13 +11,14 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "migrate": "node src/migrate.js",
-    "check": "node --check src/server.js && node --check src/app.js && node --check src/config.js && node --check src/migrate.js && node --check src/step1-routes.js && node --check src/step2-routes.js && node --check src/step2-catalog.js && node --check src/step3-routes.js && node --check src/step3-waitlist-routes.js && node --check src/step3-waitlist.js && node --check src/step3-adapters.js && node --check src/step4-routes.js && node --check src/step5-routes.js && node --check src/promotion-routes.js && node --check src/promotion-service.js && node --check scripts/step4-acceptance.mjs && node --check scripts/step5-acceptance.mjs && node --check scripts/step5-live-acceptance.mjs && node --check scripts/step6-promotion-acceptance.mjs && node --check scripts/step6-refund-reorder-migration-acceptance.mjs && node --check src/security.js && node --check src/local-object-storage.js && node --check src/sms-adapter.js && node --check src/identity-adapter.js",
+    "check": "node --check src/server.js && node --check src/app.js && node --check src/config.js && node --check src/migrate.js && node --check src/step1-routes.js && node --check src/step2-routes.js && node --check src/step2-catalog.js && node --check src/step3-routes.js && node --check src/step3-waitlist-routes.js && node --check src/step3-waitlist.js && node --check src/step3-adapters.js && node --check src/step4-routes.js && node --check src/step5-routes.js && node --check src/step6-certificate-routes.js && node --check src/promotion-routes.js && node --check src/promotion-service.js && node --check scripts/step4-acceptance.mjs && node --check scripts/step5-acceptance.mjs && node --check scripts/step5-live-acceptance.mjs && node --check scripts/step6-promotion-acceptance.mjs && node --check scripts/step6-certificate-acceptance.mjs && node --check scripts/step6-refund-reorder-migration-acceptance.mjs && node --check src/security.js && node --check src/local-object-storage.js && node --check src/sms-adapter.js && node --check src/identity-adapter.js",
     "test": "node --test test/*.test.js",
     "smoke:step4": "node scripts/step4-acceptance.mjs",
     "smoke:step5": "node scripts/step5-acceptance.mjs",
     "smoke:step5-live": "node scripts/step5-live-acceptance.mjs",
     "smoke:step6-promotion": "node scripts/step6-promotion-acceptance.mjs",
-    "smoke:step6-refund-migration": "node scripts/step6-refund-reorder-migration-acceptance.mjs"
+    "smoke:step6-refund-migration": "node scripts/step6-refund-reorder-migration-acceptance.mjs",
+    "smoke:step6-certificates": "node scripts/step6-certificate-acceptance.mjs"
   },
   "dependencies": {
     "fastify": "5.12.7",

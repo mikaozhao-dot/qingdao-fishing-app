@@ -50,6 +50,21 @@ class Step1Api {
     return _decode(response);
   }
 
+  static Future<Map<String, dynamic>> delete(
+    String path, {
+    String? token,
+  }) async {
+    final response = await _client
+        .delete(
+          Uri.parse('$baseUrl$path'),
+          headers: token == null
+              ? const {}
+              : {'authorization': 'Bearer $token'},
+        )
+        .timeout(const Duration(seconds: 12));
+    return _decode(response);
+  }
+
   static Future<String> getText(String path, {String? token}) async {
     final response = await _client
         .get(

@@ -8,6 +8,7 @@ import { registerStep3Routes } from './step3-routes.js';
 import { registerStep4Routes } from './step4-routes.js';
 import { registerStep5Routes } from './step5-routes.js';
 import { registerPromotionRoutes } from './promotion-routes.js';
+import { registerStep6CertificateRoutes } from './step6-certificate-routes.js';
 
 const { Pool } = pg;
 
@@ -91,6 +92,7 @@ export function buildApp(runtimeConfig = config) {
   registerStep3Routes(app, { pool, redis, config: runtimeConfig, requireUser });
   registerStep4Routes(app, { pool, redis, config: runtimeConfig, requireUser });
   registerStep5Routes(app, { pool, config: runtimeConfig, requireUser });
+  registerStep6CertificateRoutes(app, { pool, config: runtimeConfig, requireUser });
 
   app.addHook('onClose', async () => {
     await pool?.end();

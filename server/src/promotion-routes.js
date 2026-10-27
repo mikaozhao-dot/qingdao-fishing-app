@@ -9,7 +9,7 @@ import {
 const sendError = (reply, statusCode, message) => reply.code(statusCode).send({ error: message });
 const VALID_CHANNELS = new Set(['member', 'hotel', 'travel_agency', 'creator', 'captain', 'marina']);
 const BUSINESS_CHANNELS = new Set(['hotel', 'travel_agency', 'marina']);
-const TOUCH_SOURCES = new Set(['qr', 'share', 'link']);
+const TOUCH_SOURCES = new Set(['qr', 'share', 'link', 'certificate']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PROMO_COOKIE = 'qd_promo_visitor';
 const VISITOR_COOKIE_MAX_AGE = 60 * 60 * 24 * 90;

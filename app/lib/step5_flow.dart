@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api_client.dart';
 import 'fishing_tokens.dart';
 import 'live_status.dart';
+import 'step6_certificate_flow.dart';
 
 const _fishNames = <String, String>{
   'yellow_croaker': '小黄鱼',
@@ -505,7 +506,23 @@ class _Step5AnglerReportPageState extends State<Step5AnglerReportPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('返港记录与评价')),
+    appBar: AppBar(
+      title: const Text('返港记录与评价'),
+      actions: [
+        IconButton(
+          tooltip: '预览本航渔获证书',
+          icon: const Icon(Icons.workspace_premium_outlined),
+          onPressed: () => Navigator.of(context).push<void>(
+            MaterialPageRoute<void>(
+              builder: (_) => Step6CertificatePreviewPage(
+                departureId: widget.departureId,
+                token: widget.token,
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
     body: _loading
         ? const Center(child: CircularProgressIndicator())
         : ListView(

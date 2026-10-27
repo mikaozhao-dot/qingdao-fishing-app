@@ -10,6 +10,7 @@ import 'promotion_flow.dart';
 import 'step1_flow.dart';
 import 'step2_flow.dart';
 import 'step4_flow.dart';
+import 'step6_certificate_flow.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -248,6 +249,21 @@ class _AppShellState extends State<AppShell> {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: '我的证书',
+            icon: const Icon(Icons.workspace_premium_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (pageContext) => Step6CertificateCenterPage(
+                  token: _sessionToken,
+                  onRequireLogin: () {
+                    Navigator.of(pageContext).pop();
+                    setState(() => _selectedIndex = 3);
+                  },
+                ),
+              ),
+            ),
+          ),
           IconButton(
             tooltip: '推广中心',
             icon: const Icon(Icons.campaign_outlined),

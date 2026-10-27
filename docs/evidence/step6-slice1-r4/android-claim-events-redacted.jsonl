@@ -1,0 +1,2 @@
+{"requestId":"mvqcry9s-zgmepa4p","at":"2026-10-27T07:17:22.624Z","method":"POST","path":"/promotions/attribution/claim","tokenSha256Prefix":"ea423c5aae2bbe8a","visitorKeyHashPrefix":"2c9401e3faab87b7","httpStatus":200,"claimed":true,"reason":null}
+{"requestId":"mvqczvkw-jg38fxrc","at":"2026-10-27T07:23:32.384Z","method":"POST","path":"/promotions/attribution/claim","tokenSha256Prefix":"006e65838bbb54e9","visitorKeyHashPrefix":"246362d13ca379b4","httpStatus":200,"claimed":true,"reason":null}

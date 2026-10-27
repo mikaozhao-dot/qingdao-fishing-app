@@ -1,6 +1,6 @@
 # Dot 独立定点复核：Step 6 切片 1 修复回单（2026-10-26）
 
-> 最新状态见文末“R4 Android 补证定点复核：445ec07”：六张截图与回执一致性通过，原始请求/数据库/进程关联仍待可读取脱敏记录，Android未独立关闭；iOS关联仍缺。此前R1/R2/R3与B-R1/B-E1限定关闭保持，不关单、不进切片2。
+> 最新状态见文末“R4 留存证据差量复核：dcdd6fdb”：新增请求/DB导出对应性通过；原生PID、精确APK来源及iOS关联仍无法核验，R4/切片1不关闭。此前R1/R2/R3与B-R1/B-E1限定关闭保持。
 
 
 ## 结论：暂不整体通过，R1 迁移漏项与 R4 原生链路补证仍开放
@@ -336,3 +336,29 @@ Android新增内容只是执行方截图目检，未新增可读取claim日志�
 ### 发布前差量核对（2026-10-27 10:08 UTC）
 
 最新main为59eab66b1f0f06ed1b9c2617390fd38e845f992a；自c12e56a仅两笔文档提交，净变化仅[ui-design-review-c12e56a7.md](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/59eab66b1f0f06ed1b9c2617390fd38e845f992a/docs/ui-design-review-c12e56a7.md)，没有新代码、截图或请求/数据库/进程原始证据。Muse的“通过”是文档巡检层结论，仍明确R4和切片1开放，且未独立目检六图。本复核已经完成像素与已持归档检查，待发布的限定判断不因该文档改变；不重复全量审核或新增实现任务。
+
+
+## R4 留存证据差量复核：dcdd6fdb（2026-10-27）
+
+**结论：新增脱敏请求与数据库导出的对应关系通过一致性复核，不能再称“只有回执表格”；但原生冷/热进程状态、确切APK构建来源仍无法独立核验，iOS关联未补齐，Android完整证据项、R4及切片1不关闭。** 不重开此前截图及R1/R2/R3、B-R1/B-E1限定通过项。
+
+本轮固定证据：[dcdd6fdbb9b4db01773ff37ac377bcdf018e2096](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/dcdd6fdbb9b4db01773ff37ac377bcdf018e2096)；请求为[df3c093a](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/df3c093a845d7b5c04d527ee10fe6b672a9343c7/docs/dot-review-request-step6-slice1-r4-retained-evidence-2026-10-27.md)，本差量截止为**2026-10-28 18:30北京时间**，不是上一轮15:30。
+
+### 逐项结论
+
+1. **请求及DB对应：通过导出层一致性复核。** 已逐行读取[两行JSONL](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/dcdd6fdbb9b4db01773ff37ac377bcdf018e2096/docs/evidence/step6-slice1-r4/android-claim-events-redacted.jsonl)和[两行CSV](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/dcdd6fdbb9b4db01773ff37ac377bcdf018e2096/docs/evidence/step6-slice1-r4/android-db-readonly-redacted.csv)：
+   - 热链mvqcry9s-zgmepa4p，07:17:22.624Z，token摘要ea423c5aae2bbe8a，visitor摘要2c9401e3faab87b7，HTTP200/claimed=true，对应touch e86bc407-b300-49bb-9b31-bc75ed1032f9及归因dd849109-77a5-4653-a1e9-ae5a295a3014。
+   - 主冷链mvqczvkw-jg38fxrc，07:23:32.384Z，token摘要006e65838bbb54e9，visitor摘要246362d13ca379b4，HTTP200/claimed=true，对应touch 5fe509bd-5ec3-40da-8f0b-3283b9abfa63及归因c680f712-60ee-4ba8-adb5-b257497e935b。
+   - CSV分别报告1条touch/1条attribution、同推广码D6A060475BB1C8BC、claimed/pending，时间换算与原图/回执一致。source为qr不推翻H5路径：[服务端sourceFromQuery](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/dcdd6fdbb9b4db01773ff37ac377bcdf018e2096/server/src/promotion-routes.js#L25-L27)在无有效source时默认qr；attributed_at沿用触点时间的既有结论保持。
+   - 原日志确实没有响应attributionId，回执未把DB值伪装成响应。现有visitor摘要关联可支持两份导出的对应性，不以缺这一个响应字段单独否定全部关联；也不把16位前缀及CSV自报行数说成Dot重新查询数据库或验证全局无碰撞。未读取原token或密钥，无需索取这些敏感值。
+2. **摘要计算及PID：部分通过，部分无法复核。** 回执说明的promotion-visitor验签、promotion-key HMAC输入与[仓内security.js](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/dcdd6fdbb9b4db01773ff37ac377bcdf018e2096/server/src/security.js#L39-L57)一致；token SHA256与16位截断为回执所述代理口径，代理源码未随本差量交付，Dot未实读该本机源码、未重算私密token摘要。PID带时间原始记录已如实标为未留存，不能由页面截图、请求成功或回执PID数字证明冷/热生命周期。该原生证明仍无法复核，不是已发现深链失败。
+3. **构建与授权：披露准确性通过，历史来源/先后无法复核。** [差量回执](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/dcdd6fdbb9b4db01773ff37ac377bcdf018e2096/docs/step6-slice1-r4-retained-evidence-receipt-2026-10-27.md)的APK哈希与主回执一致、命令与API参数明确，但Dot未读取APK字节。独立比较9f501957→445ec07确认仅文档/图片变化，无app/server差异；这不证明APK确由该checkout构建。当前compileSdk35及当前哈希不证明历史逐字节恢复，Aliyun临时脚本/恢复输出未留存，不能升级为已核验还原。
+   - 仓内授权文档记15:36 CST；回执报告license/CMake/APK文件mtime分别15:07:30、15:07:29、15:10:16。时间顺序差异保持未决：mtime不等于接受事件，且缺CLI时间记录，不能证明授权后接受，也不能据此认定未经授权接受。此项为授权记录核对，不冒称原生功能缺陷，不靠重装、重接受或改时间戳补证。
+4. **冷热顺序：通过叙述一致性复核。** 约15:13的较早冷启动排练→15:17热链→15:23主冷链复跑，解决旧“冷链完成后”的指代问题，新增两行保留原时间。较早排练具体操作仍是报告级，未虚称实读其原始进程记录。
+5. **iOS新增来源：有限核验通过，映射仍无法恢复于已查范围。** Dot独立查询Actions列表确认run40360278886仅有artifact12667213504（flutter-analyze-40360278886，206字节），run40360278983无artifact；仓内工作流上传对象为flutter-analyze.log而不是设备claim日志。Dot未解压该产物，内容“仅分析元数据”为执行方报告，不能冒称已读ZIP。未发现新的可定位iOS请求/visitor/DB来源；不重复五库、临时目录及既有评审归档搜索，不把当前阴性结论扩张成所有备份均已穷尽。
+
+### 同片接力与边界
+
+此次已交的两份脱敏导出及冷热顺序说明不再重复索要。已经明确未留存的历史PID、构建provenance或恢复输出，不要求凭记忆重造，也不自动要求重跑测试、构建、doctor、数据库或完整iOS流程。若执行方另有可定位的既有进程记录/构建原始记录/代理源码，按已有范围只补那个来源；否则保留无法复核项，交负责人说明可行的后续选项，由有权者另定安排或明确接受保留风险，不能将未验改写为通过。授权时间核对单列，不与技术通过混为一谈。
+
+Dot本轮仅实读提交、两份导出、关联源码、提交差异及Actions产物元数据，未重跑设备或数据库。H5免下载交易链仍不在本差量范围；本结论不是产品验收，不批准切片2、真实资金或生产。

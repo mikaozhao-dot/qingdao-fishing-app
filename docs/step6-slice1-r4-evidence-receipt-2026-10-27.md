@@ -87,3 +87,5 @@ Flutter `doctor -v` 确认 SDK、平台和构建工具已识别，Xcode 项通�
 ## iOS 对应凭证缺口
 
 现有 iOS 冷/热截图和 `docs/step6-slice1-r1-r4-followup-2026-10-27.md` 只有路径叙述，没有请求 ID、脱敏 visitor/token 哈希或数据库行 ID。旧 H5 截图中的沙盒推广码 `5E6EF8806BECB0CB` 在可访问留存库中只能对应一条 `scanned` 的 `link` touch，时间为 2026-10-26 16:27:30（UTC），且 attribution 行数为 0；因此不能把这张旧页面截图与已 claim 的请求/数据库行配对。请 Dot 查看是否能从既有 iOS 运行记录补出脱敏映射；本任务不重跑完整 iOS 链路。该缺口解决前，不关闭 R4 或切片 1。
+
+2026-10-27 执行方进一步逐张目检 Android 截图，并只读核对本机五个既有隔离数据库。除上面可见推广码对应 touch 外，`qingdao_step6_r1_full2` 另有不同推广码下的 `link / claimed` 行，但无请求 ID 或步骤映射，不能归为 iOS 冷/热证据；留存运行目录未找到 API claim 访问日志。完整截图观察、候选数据库记录及核查范围见 [`R4 截图与 iOS 留存记录补记`](step6-slice1-r4-visual-and-ios-records-addendum-2026-10-27.md)。这次执行方目检不替代 Dot 的独立图像与链路复核。

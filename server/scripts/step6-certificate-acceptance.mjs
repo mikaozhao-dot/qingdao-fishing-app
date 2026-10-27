@@ -94,7 +94,7 @@ async function makeTrip({ owner, captain, status = 'completed', returned = true 
         minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
         seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
      VALUES ($1,$2,$3,'pro_fishing',$4,$5,'qingdao_nearshore','xiaogang',10000,10000,
-        $4-interval '1 hour',$6,12,12,0,false)`,
+        $4::timestamptz - interval '1 hour',$6,12,12,0,false)`,
     [departureId, boatId, captain.id, departureAt, returnAt, status],
   );
   await pool.query(

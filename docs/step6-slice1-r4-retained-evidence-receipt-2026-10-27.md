@@ -15,7 +15,7 @@
 
 脱敏请求原文见 [`android-claim-events-redacted.jsonl`](evidence/step6-slice1-r4/android-claim-events-redacted.jsonl)。日志字段本身不含响应 `attributionId`，因此该字段在请求日志中**未留存**；下节的 attribution ID 是按 visitor 哈希在隔离数据库中单独查得，不能冒充为已留存的响应字段。
 
-计算口径由当时代理源码确认：
+计算口径由当时代理源码确认；脱敏代码片段与本机源文件摘要见 [`请求哈希逻辑摘录`](evidence/step6-slice1-r4/android-claim-hash-logic-source-excerpt.md)：
 
 - `tokenSha256Prefix`：对请求中的完整 `visitorToken` 字符串按 UTF-8 编码计算 SHA-256，取小写十六进制前 16 位。
 - `visitorKeyHashPrefix`：代理先用 `PHONE_HASH_KEY_HEX` 对 token 中 `promotion-visitor:${visitorId}` 验签，再以该密钥对 `promotion-key:${visitorId}` 计算 HMAC-SHA-256，取小写十六进制前 16 位。密钥值、原始 visitor ID 和 token 均未入仓。

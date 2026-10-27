@@ -48,11 +48,27 @@ async function expect(method, path, token, payload, expectedStatus) {
   return result;
 }
 
-async function makeUser(name, { captain = false } = {}) {
+async function makeUser(name, { captain = false, withIdentityHash = false } = {}) {
   userSequence += 1;
   const id = randomUUID();
   const phone = `139${String(randomInt(0, 100_000_000)).padStart(8, '0')}`;
-  const identity = makeSandboxIdentityNumber(String(userSequence).padStart(3, '0'));
+  let identity = makeSandboxIdentityNumber(String(userSequence).padStart(3, '0'));
+  if (withIdentityHash) {
+    let foundUnusedIdentity = false;
+    for (let attempt = 0; attempt < 999; attempt += 1) {
+      const sequence = randomInt(1, 1000);
+      const candidate = makeSandboxIdentityNumber(String(sequence).padStart(3, '0'));
+      const existing = await pool.query(
+        'SELECT 1 FROM users WHERE identity_number_hash=$1', [security.identityHash(candidate)],
+      );
+      if (!existing.rowCount) {
+        identity = candidate;
+        foundUnusedIdentity = true;
+        break;
+      }
+    }
+    if (!foundUnusedIdentity) throw new Error('No unused sandbox identity number is available.');
+  }
   const token = security.newToken();
   await pool.query(
     `INSERT INTO users
@@ -60,7 +76,8 @@ async function makeUser(name, { captain = false } = {}) {
         identity_number_ciphertext,identity_number_hash,identity_verified_at,identity_status)
      VALUES ($1,$2,$3,$4,$5,$6,$7,now(),'verified')`,
     [id, security.encrypt(phone), security.phoneHash(phone), name,
-      security.encrypt(name), security.encrypt(identity), security.identityHash(identity)],
+      security.encrypt(name), security.encrypt(identity),
+      withIdentityHash ? security.identityHash(identity) : null],
   );
   await pool.query(
     `INSERT INTO user_sessions (token_hash,user_id,expires_at)
@@ -366,7 +383,7 @@ try {
     [visitorKeyHash, promotionCode],
   );
   check(visitor.rows[0]?.source_channel, 'certificate', 'certificate marks the touch source without changing attribution rules');
-  const certificateReferralGuest = await makeUser('证书来源扫码会员');
+  const certificateReferralGuest = await makeUser('证书来源扫码会员', { withIdentityHash: true });
   const certificateClaim = await expect(
     'POST', '/promotions/attribution/claim', certificateReferralGuest.token,
     { visitorToken }, 200,

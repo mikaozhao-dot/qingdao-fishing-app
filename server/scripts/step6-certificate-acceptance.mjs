@@ -340,14 +340,23 @@ try {
       { fishCode: 'yellow_croaker', quantity: 2, maxWeight: 1250, maxLength: 410 },
       { fishCode: 'sea_bass', quantity: 1 },
     ],
+    captainItems: [
+      { fishCode: 'yellow_croaker', quantity: 4 },
+      { fishCode: 'blackhead', quantity: 1 },
+      { fishCode: 'hairtail', quantity: 1 },
+    ],
+    responseAction: 'confirm', reconciliation: 'confirmed',
   });
   const preview = await expect('GET', `/step6/certificates/departures/${personalTrip.departureId}/preview`,
     owner.token, undefined, 200);
   check(preview.body.preview.displayName, '海风钓友', 'certificate uses the account display name');
-  check(preview.body.preview.fishItems.find((item) => item.fishCode === 'yellow_croaker'), {
+  check(preview.body.preview.fishItems.find((item) =>
+    item.fishCode === 'yellow_croaker' && item.source === '本人记录'), {
     fishCode: 'yellow_croaker', fishName: '小黄鱼', quantity: 2,
     maxIndividualWeightGrams: 1250, maxLengthMm: 410, source: '本人记录',
   }, 'preview copies source facts without editable or synthesized values');
+  check(preview.body.preview.fishItems.length, 5,
+    'preview keeps all five source rows for presentation-layer summarization');
   assert.ok(preview.body.preview.landingUrl.includes('source=certificate'));
   assertions += 1;
   check(preview.body.preview.promotionCode.length > 0, true, 'certificate reuses the normal member promotion code');
@@ -366,6 +375,12 @@ try {
   const frozenName = created.body.certificate.snapshot.boatName;
   const promotionCode = created.body.certificate.snapshot.promotionCode;
   check(created.body.certificate.snapshot.displayName, '海风钓友', 'snapshot omits real identity fields');
+  check(created.body.certificate.snapshot.fishItems.length, 5,
+    'frozen snapshot keeps all five rows when the certificate image summarizes them');
+  check(created.body.certificate.snapshot.fishItems
+    .filter((item) => item.fishCode === 'yellow_croaker')
+    .map((item) => item.source).sort(), ['本人记录', '船长整船记录（本人确认）'],
+  'same species remains two separate source rows in the frozen snapshot');
   check(Object.keys(created.body.certificate.snapshot).some((key) => /phone|identity|order/i.test(key)),
     false, 'public certificate snapshot has no phone, identity, or order fields');
   await pool.query("UPDATE boats SET name='修改后的船名' WHERE id=$1", [personalTrip.boatId]);

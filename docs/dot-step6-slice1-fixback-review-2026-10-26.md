@@ -1,6 +1,6 @@
 # Dot 独立定点复核：Step 6 切片 1 修复回单（2026-10-26）
 
-> 最新增量见文末“退款重订 B 增量定点复核 — 4b628710”：B 批次暂不整体技术通过，存在 B-R1 静态行为缺陷及024升级补证缺口。此前 R1/R2/R3 限定关闭保持；R4 原生证据仍开放。
+> 最新状态见文末“B 修复及024补证定点复核：63d17328”：本批B回修限定沙盒技术通过，B-R1/B-E1关闭；此前R1/R2/R3关闭保持，R4原生证据仍开放。不关单、不进切片2。
 
 
 ## 结论：暂不整体通过，R1 迁移漏项与 R4 原生链路补证仍开放
@@ -252,3 +252,41 @@ Muse 对 R1 夹具、双端证据边界与本次结论基本一致；但 AppShel
 | 6. 范围 | 代码差异核查通过 | 服务端4文件，未改费率/奖励/App/规格正本/生产配置；不由此推导产品验收或授权 |
 
 本表不改变上文结论：本批B暂不整体技术通过；需要B-R1最小修复及B-E1限定补证，而不是重新等待同一轮审查。此前R1/R2/R3限定关闭不回滚，R4仍按原证据边界保留。
+
+
+## B 修复及024补证定点复核：63d17328（2026-10-27 04:19 UTC）
+
+**B-R1 与 B-E1 可在限定沙盒技术范围关闭。** 此结论只针对 `4b628710` 已指出的退款冲正路径和024升级证据；此前 R1/R2/R3 关闭保持，R4原生证据仍开放，不构成产品验收、切片关单或下一片授权。
+
+### B-R1 行为修复
+
+[固定修复提交](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/63d173282d309fb366385d4e724ac63bbebcec45) 仅将 `reverseStalePreReleaseCommissions` 提前到身份有效性与消费资格守卫之前；故旧单应冲正时不会再被后续订单当前身份失效的早退截断，新订单仍须实名和资格检查后才能计佣。
+
+[推广验收新增段](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/63d173282d309fb366385d4e724ac63bbebcec45/server/scripts/step6-promotion-acceptance.mjs#L589-L643) 使用真实沙盒 API：先有O1/O2已支付，提交999拒绝样例使身份hash空，再取消O1；断言O1 reversed/0、O2无账本；将旧航次fixture推进返航并走真实checkin，断言不复活；重新实名后O2成为600分冻结账本且旧行仍0。符合原最小反例，不用“禁止实名更正”替代修复。航次状态是隔离fixture推进，不冒称自然经过完整出航时间。
+
+### B-E1 升级证据
+
+[新迁移验收脚本](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/63d173282d309fb366385d4e724ac63bbebcec45/server/scripts/step6-refund-reorder-migration-acceptance.mjs) 在隔离schema逐个执行001–023原SQL，造 frozen正额、reversed零额、available已释放三种旧账本，随后执行原024 SQL。断言原订单关联、金额、净额、状态与事件行保留；非空列和两个唯一索引存在且部分索引仅排除reversed。
+
+另一隔离schema造无法映射行，执行024失败，显式ROLLBACK后核无024版本记录、无新增列/索引、原账本状态金额保留；修正关联后重试成功并记录一次版本。证明本次所需数据库层回填、失败回滚与恢复路径，**不再要求重复相同024 fixture**。
+
+证据层级须准确：脚本读取真实迁移SQL，用同一个pg连接和测试helper执行、自己写迁移版本记录；失败后显式ROLLBACK。它并未spawn生产 `server/src/migrate.js` 进程，故不称生产runner断连故障恢复已做独立端到端演练。原生产入口已静态实读，SQL事务边界未改；此差别不阻止本次限定数据库迁移补证收口，也不构成生产升级批准。
+
+### 实读原始CI
+
+[run40448857434 / job122006543153](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40448857434/job/122006543153) 实际checkout完整SHA `63d173282d309fb366385d4e724ac63bbebcec45`：
+- Step4 **710**、Step5 **133**、直播 **77**、推广 **334**项通过；
+- 新步骤实际执行 `npm run smoke:step6-refund-migration`，**33**项通过。
+
+工作流已纳入新增验收，不是仅本地回执自报。此次没有App或原生证据变更，不为本次服务端小修要求无影响的Flutter重跑。Dot未在本执行环境重跑数据库/设备，结论基于源代码、测试逐段核对和该SHA原始CI，不冒称独立运行复现。
+
+### 交付与接力状态
+
+入仓前已核对main为 `6186105cf4517d61e10cb32584ee289b3ce518f5`，固定代码后仅文档变化。已实读 [Luna回修回执](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/6186105cf4517d61e10cb32584ee289b3ce518f5/docs/step6-slice1-refund-reorder-b-fixback-delivery-receipt-2026-10-27.md)及 [Muse对63d17328的巡检](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/6186105cf4517d61e10cb32584ee289b3ce518f5/docs/ui-design-review-63d17328.md)：Muse明确接收此前ad588意见、已核修复并交回Dot，三方接力已发生，不能继续称无人接手。本次独立原始CI核查补齐Muse尚未读日志的部分。回执中修复前本地复现失败、npm check与10项单测为Luna报告，Dot未独立重跑；本地Step4为709、本次CI实际710，分别保留。R4仍为Android原生链路待实测及iOS已有实测脱敏关联待补；业务决定、H5排期、产品验收与下一切片不由本复核代批。
+
+
+
+### 五项追单回应及结论
+
+针对 `docs/dot-review-request-step6-refund-reorder-b-fixback-2026-10-27.md`：1冲正顺序与身份守卫、2真实API回归、3有数据023→024升级、4失败回滚与修正重试、5范围核查，均在上述证据层级下通过。**本批B回修限定沙盒技术通过，B-R1/B-E1关闭**；不再重复索要同一反例或迁移fixture。此前R1/R2/R3限定关闭保持；后续接力仅继续R4原生证据与已声明产品待办，不据此启动新切片。
+

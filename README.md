@@ -3,7 +3,7 @@
 iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录、实名状态、船长入驻与船档案审核；第 2 步支持发班与活动浏览；第 3 步接通选位、锁位、下单、沙盒支付和保险适配；第 5 步切片 1 提供返航后渔获、评价事实与个人鱼种图鉴；切片 2 大鱼榜按创始人选定的航次最大个体口径修订，获 Dot 限定沙盒技术通过并由创始人限定范围验收关闭；切片 3 直播状态的 F1/F2 与补证已完成，Dot 于 2026-10-26 独立定点复核限定沙盒技术通过（S5-S3-R1/R2 关闭），创始人已于同日按限定沙盒范围产品验收通过、切片 3 关单；第 6 步切片 1 退款重订 B 初版 `4b628710` 经 Dot 于 `ad588cf` 指出 B-R1 与 B-E1 两项有界回修；修复代码 SHA `63d1732` 已通过本地回归及 GitHub Actions run `40448857434`，Dot 于 2026-10-27 04:19 UTC 对 B-R1/B-E1 作限定沙盒技术通过并关闭这两项（记录见 `docs/dot-step6-slice1-fixback-review-2026-10-26.md`）。Dot 终轮复核 `8da4d5c` 在限定沙盒范围关闭 R1/R2/R3 技术项，认可 R4 配置、widget 与服务端幂等补证；Android 冷热请求及数据库导出经 Dot 于 2026-10-27 19:44 CST 对应性复核通过，但原生 PID 与 APK 精确来源无法核验，iOS 映射仍缺；Android 完整证据项与 R4 继续开放。Dot 已完成代理哈希逻辑摘录的限定复核：算法与字段生成口径通过静态可读性审查，本机源文件 SHA 与历史运行加载关系无法独立复核；许可证接受时间仍未留存，文件时间顺序差异未决。退款重订 B 的 B-R1/B-E1 已获限定沙盒技术通过；原生 PID 与 APK 精确来源、许可证时间顺序、iOS R4 映射、H5 免下载首单和创始人产品验收仍待办，切片未关闭、不进切片 2。真实资金、保险和生产部署仍未授权。
 
 
-第 6 步切片 1 R4 留存证据差量已导出脱敏 claim 日志与隔离数据库只读映射。Dot 已确认两份导出之间的一致性；代理哈希逻辑摘录的静态口径审查通过，但本机源文件 SHA 与历史运行加载关系无法独立核验。原生 PID、APK 精确来源、iOS 映射及许可证时间顺序差异仍未解决，R4 和切片 1 继续开放。复核详情见差量回执及 Dot 独立复核回执。
+第 6 步切片 1 R4 留存证据差量已导出脱敏 claim 日志与隔离数据库只读映射。Dot 已确认两份导出之间的一致性；代理哈希逻辑摘录的静态口径审查通过，但本机源文件 SHA 与历史运行加载关系无法独立核验。原生 PID、APK 精确来源、iOS 映射及许可证时间顺序差异仍未解决，R4 和切片 1 继续开放。复核详情见差量回执及 Dot 独立复核回执。未核验项的后续处理选项见 `docs/founder-options-step6-slice1-r4-evidence-gaps-2026-10-27.md`；当前未作风险接受或重跑授权。
 
 ## 仓库结构
 
@@ -69,6 +69,7 @@ flutter run
 - `docs/dot-review-request-step6-refund-reorder-b-2026-10-27.md`：Dot 对退款重订 B 固定代码 SHA `4b628710` 的定点复核追单，截止时间为 2026-10-28 12:00（北京时间）。
 - `docs/dot-review-request-step6-refund-reorder-b-fixback-2026-10-27.md`：Dot 对有界回修固定代码 SHA `63d1732` 的定点复核请求，截止时间原为 2026-10-28 12:00（北京时间）；Dot 已于 2026-10-27 04:19 UTC 入仓结论，限定沙盒技术通过并关闭 B-R1/B-E1。
 - `docs/dot-review-request-step6-slice1-r4-proxy-source-excerpt-2026-10-27.md`：Dot 对 R4 代理哈希逻辑源码摘录的限定复核请求。
+- `docs/founder-options-step6-slice1-r4-evidence-gaps-2026-10-27.md`：R4 剩余未核验项的只读查档、重新取证和风险记录选项，待有权负责人决定。
 - `docs/evidence/step6-slice1-r4/android-claim-events-redacted.jsonl`、`docs/evidence/step6-slice1-r4/android-db-readonly-redacted.csv`、`docs/evidence/step6-slice1-r4/android-claim-hash-logic-source-excerpt.md`：R4 Android 既有请求日志脱敏导出、隔离数据库最小只读映射与代理哈希逻辑源码摘录。
 - `docs/codex-seat-map-v04-rework-order-2026-10-24.md`、`docs/muse-seat-premium-scope-reply-2026-10-24.md`、`docs/codex-seat-map-implementation-order-2026-10-24.md`：V04 草图返工、船尾四位同额加价和当前执行边界；2026-10-25 创始人最新选位参考追加在 V04 返工令末尾。
 - `docs/seat-map-v04-implementation-receipt-2026-10-24.md`、`docs/seat-map-spatial-redesign-status-2026-10-24.md`、`docs/step3-build-notes.md`、`docs/step3-review-request-2026-10-24.md`：选位页历史回执、当前返工进度、构建证据与 dot 复核请求。

@@ -342,10 +342,13 @@ try {
     ],
     captainItems: [
       { fishCode: 'yellow_croaker', quantity: 4 },
+    ],
+    responseAction: 'supplement', reconciliation: 'supplemented',
+    responseItems: [
+      { fishCode: 'yellow_croaker', quantity: 3 },
       { fishCode: 'blackhead', quantity: 1 },
       { fishCode: 'hairtail', quantity: 1 },
     ],
-    responseAction: 'confirm', reconciliation: 'confirmed',
   });
   const preview = await expect('GET', `/step6/certificates/departures/${personalTrip.departureId}/preview`,
     owner.token, undefined, 200);
@@ -379,8 +382,14 @@ try {
     'frozen snapshot keeps all five rows when the certificate image summarizes them');
   check(created.body.certificate.snapshot.fishItems
     .filter((item) => item.fishCode === 'yellow_croaker')
-    .map((item) => item.source).sort(), ['本人记录', '船长整船记录（本人确认）'],
+    .map((item) => item.source).sort(), ['本人记录', '本人补充'],
   'same species remains two separate source rows in the frozen snapshot');
+  check(created.body.certificate.snapshot.fishItems
+    .filter((item) => item.source === '本人记录').length, 2,
+  'frozen snapshot keeps both own-report source rows');
+  check(created.body.certificate.snapshot.fishItems
+    .filter((item) => item.source === '本人补充').length, 3,
+  'frozen snapshot keeps all three own-supplement source rows');
   check(Object.keys(created.body.certificate.snapshot).some((key) => /phone|identity|order/i.test(key)),
     false, 'public certificate snapshot has no phone, identity, or order fields');
   await pool.query("UPDATE boats SET name='修改后的船名' WHERE id=$1", [personalTrip.boatId]);

@@ -1,6 +1,6 @@
 # G 投保失败处理：Muse 评审与 Dot 定点复核请求
 
-- 状态：本请求针对初版 `0040af6a45c6e8bbf29e20f31cab64f23e71f564` 的首轮评审已回仓。Muse 有条件通过，Dot 提出 G-R1–R4 有界回修；修复版 `d3e0ab3c` 已获 Dot 限定沙盒技术通过，当前等待 Muse 独立对账。此初版请求不表示 Muse 已通过修复版。
+- 状态：本请求针对初版 `0040af6a45c6e8bbf29e20f31cab64f23e71f564` 的首轮评审已回仓。Muse 有条件通过，Dot 提出 G-R1–R4 有界回修；修复版 `d3e0ab3c` 已获 Dot 限定沙盒技术通过，并由 Muse 于 `a25360cf` 独立复核通过（仅限限定沙盒/API 技术行为）。此初版请求不表示创始人产品验收；该验收仍待明确决定。
 - 固定实现 SHA：`0040af6a45c6e8bbf29e20f31cab64f23e71f564`。
 - 回执：`docs/g-insurance-failure-delivery-receipt-2026-10-28.md`。
 - 依据：创始人决定 `docs/founder-decision-g-insurance-failure-2026-10-28.md`；队列工单 `docs/muse-to-luna-remaining-development-order-2026-10-28.md`。
@@ -22,4 +22,4 @@
 
 ## 初版请求状态回注（2026-10-28）
 
-本请求所指初版已收到 Muse 的有条件评审及 Dot 的独立技术复核。Muse 于 `387b735` 对 `aa57247a` 的实读确认 Dot 所列三项补正，并要求补正由 Muse 复核后再送 Dot；Dot 后已于 `1e3a2d5` 对固定补正 SHA 作限定沙盒技术通过。当前仍待 Muse 对补正及 Dot 结论独立复核/对账；请求见 [`补正复核请求`](muse-review-request-g-insurance-failure-fixback-2026-10-28.md)。初版请求在此结束，未将条件通过写成 G 整体验收、补正已获 Muse 通过或创始人产品验收。
+本请求所指初版已收到 Muse 的有条件评审及 Dot 的独立技术复核。Muse 于 `387b735` 对 `aa57247a` 的实读确认 Dot 所列三项补正，并要求补正由 Muse 复核后再送 Dot；Dot 后于 `1e3a2d5` 对固定补正 SHA 作限定沙盒技术通过，Muse 再于 `a25360cf` 完成补正复核并在限定范围通过（仅限沙盒/API 技术行为）。补正请求见 [`补正复核请求`](muse-review-request-g-insurance-failure-fixback-2026-10-28.md)。初版请求在此结束，未将有条件通过写成创始人产品验收。

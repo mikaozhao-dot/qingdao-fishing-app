@@ -2,7 +2,7 @@
 
 - 请求时间：2026-10-28 15:38 CST（Asia/Shanghai）。
 - 初次请求所指 `aa57247a` 已由 Dot 于 `032bf0d` 作部分关闭复核，并由 Muse 于 `387b735` 作有条件通过；该轮请求已结束。
-- **本文件不再发起 `aa57247a` 复核。** Dot 已在 `1e3a2d5` 对补正 SHA `d3e0ab3c27326c0cdf8a3bcc63df10fd6cd12219` 写回限定沙盒技术通过；本轮不重复催 Dot。Muse 对补正及 Dot 结论的独立复核/对账仍待回仓。
+- **本文件不再发起 `aa57247a` 复核。** Dot 已在 `1e3a2d5` 对补正 SHA `d3e0ab3c27326c0cdf8a3bcc63df10fd6cd12219` 写回限定沙盒技术通过；Muse 后于 `a25360cf` 完成独立复核并在限定范围通过。本轮不重复催 Dot 或 Muse；创始人产品验收仍待明确决定。
 - 本文件历史固定 SHA：`aa57247a9ef3eacdcd0e5fd8fb8bf3c5c5438c03`。
 - 原始 Dot 评审与 G-R1–R4：[`docs/dot-g-insurance-failure-review-2026-10-28.md`](dot-g-insurance-failure-review-2026-10-28.md)。
 - 初版评审状态：Muse 对 `0040af6a45c6e8bbf29e20f31cab64f23e71f564` 有条件通过；Dot 对同一初版提出四项有界回修。当前请求只要求核对修复差量，不重复请求初版评审。

@@ -1663,18 +1663,27 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         return sendError(reply, 400, '最终投保结果必须提供有效 attemptKey');
       }
       const result = await withTransaction(pool, async (client) => {
-        const order = await client.query(
-          `SELECT departure_id,status FROM booking_orders
+        const orderLookup = await client.query(
+          `SELECT departure_id FROM booking_orders
            WHERE id=$1 AND buyer_user_id=$2`,
           [request.params.id, request.user.id],
         );
-        if (!order.rowCount) {
+        if (!orderLookup.rowCount) {
           return { error: [404, '已支付订单中的乘客投保记录不存在'] };
         }
         const departure = await client.query(
-          'SELECT status FROM departures WHERE id=$1 FOR UPDATE', [order.rows[0].departure_id],
+          'SELECT status FROM departures WHERE id=$1 FOR UPDATE', [orderLookup.rows[0].departure_id],
         );
         if (!departure.rowCount) return { error: [404, '班次不存在'] };
+        const order = await client.query(
+          `SELECT departure_id,status FROM booking_orders
+           WHERE id=$1 AND buyer_user_id=$2 FOR UPDATE`,
+          [request.params.id, request.user.id],
+        );
+        if (!order.rowCount) return { error: [404, '已支付订单中的乘客投保记录不存在'] };
+        if (order.rows[0].departure_id !== orderLookup.rows[0].departure_id) {
+          return { error: [409, '订单所属班次已变化，请刷新后重试'] };
+        }
         const coverage = await client.query(
           `SELECT c.id,c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,
                   c.verified_at,c.insurer_rejection_streak,op.id AS passenger_id,
@@ -1837,19 +1846,28 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         return sendError(reply, 400, '需确认同订单家长/监护关系并提供有效 requestKey');
       }
       const result = await withTransaction(pool, async (client) => {
-        const order = await client.query(
-          `SELECT departure_id,status FROM booking_orders WHERE id=$1 AND buyer_user_id=$2`,
+        const orderLookup = await client.query(
+          `SELECT departure_id FROM booking_orders WHERE id=$1 AND buyer_user_id=$2`,
           [orderId, request.user.id],
         );
-        if (!order.rowCount) {
+        if (!orderLookup.rowCount) {
           return { error: [404, '已支付订单中的监护人乘客记录不存在'] };
         }
         const departure = await client.query(
-          'SELECT status FROM departures WHERE id=$1 FOR UPDATE', [order.rows[0].departure_id],
+          'SELECT status FROM departures WHERE id=$1 FOR UPDATE', [orderLookup.rows[0].departure_id],
         );
         if (!departure.rowCount) return { error: [404, '班次不存在'] };
+        const order = await client.query(
+          `SELECT departure_id,status FROM booking_orders WHERE id=$1 AND buyer_user_id=$2 FOR UPDATE`,
+          [orderId, request.user.id],
+        );
+        if (!order.rowCount) return { error: [404, '已支付订单中的监护人乘客记录不存在'] };
+        if (order.rows[0].departure_id !== orderLookup.rows[0].departure_id) {
+          return { error: [409, '订单所属班次已变化，请刷新后重试'] };
+        }
         const prior = await client.query(
-          `SELECT child_passenger_id,guardian_passenger_id FROM insurance_guardian_exit_decisions
+          `SELECT child_passenger_id,guardian_passenger_id,refund_fen,departure_cancelled
+           FROM insurance_guardian_exit_decisions
            WHERE order_id=$1 AND request_key=$2`, [orderId, requestKey],
         );
         if (prior.rowCount) {
@@ -1857,20 +1875,22 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
               || prior.rows[0].guardian_passenger_id !== guardianPassengerId) {
             return { error: [409, 'requestKey 已用于不同监護人退出决定'] };
           }
-          const refund = await client.query(
-            `SELECT amount_fen FROM refund_obligations
-             WHERE passenger_id=$1 AND reason='insurance_failure' AND request_key=$2`,
-            [guardianPassengerId, `insurance-guardian-exit:${guardianPassengerId}`],
-          );
           return {
             guardianExited: true,
             idempotentReplay: true,
-            refundFen: Number(refund.rows[0]?.amount_fen ?? 0),
+            refundFen: Number(prior.rows[0].refund_fen),
             departureId: order.rows[0].departure_id,
             waitlistEligible: false,
             releasedHolds: [],
-            departureCancelled: false,
+            departureCancelled: prior.rows[0].departure_cancelled,
           };
+        }
+        const priorChildDecision = await client.query(
+          `SELECT request_key,guardian_passenger_id FROM insurance_guardian_exit_decisions
+           WHERE child_passenger_id=$1`, [childPassengerId],
+        );
+        if (priorChildDecision.rowCount) {
+          return { error: [409, '该孩子已有家长随同退出决定，不能重复申请'] };
         }
         if (order.rows[0].status !== 'paid'
             || ['in_progress','completed','cancelled','weather_cancelled'].includes(departure.rows[0].status)) {
@@ -1905,12 +1925,6 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
             || ageOnDate(guardianIdentity, now) === null || ageOnDate(guardianIdentity, now) < 18) {
           return { error: [409, '孩子必须未满十八周岁，家长/监护人必须已满十八周岁'] };
         }
-        await client.query(
-          `INSERT INTO insurance_guardian_exit_decisions
-             (order_id,child_passenger_id,guardian_passenger_id,request_key,relationship_confirmed)
-           VALUES ($1,$2,$3,$4,true)`,
-          [orderId, childPassengerId, guardianPassengerId, requestKey],
-        );
         const cancellation = await cancelInsurancePassenger(client, guardian, {
           bookingStatus: 'guardian_exit',
           cancellationReason: 'child_insurance_failure_guardian_opt_out',
@@ -1919,6 +1933,14 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
           waitlistEligible: true,
         });
         const tripResult = await cancelDepartureAfterInsuranceFailure(client, order.rows[0].departure_id, now);
+        await client.query(
+          `INSERT INTO insurance_guardian_exit_decisions
+             (order_id,child_passenger_id,guardian_passenger_id,request_key,relationship_confirmed,
+              refund_fen,departure_cancelled)
+           VALUES ($1,$2,$3,$4,true,$5,$6)`,
+          [orderId, childPassengerId, guardianPassengerId, requestKey,
+            cancellation.ticketRefundFen, tripResult.departureCancelled],
+        );
         return {
           guardianExited: true,
           idempotentReplay: false,

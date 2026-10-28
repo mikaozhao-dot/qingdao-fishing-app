@@ -53,8 +53,11 @@ export async function loadFormationAccounts(client, departureId) {
        ),0)::bigint AS platform_ticket_net_fen,
        COALESCE((SELECT SUM(a.amount_fen) FROM departure_formation_adjustments a
          WHERE a.departure_id=d.id AND a.adjustment_type='penalty_pool'),0)::bigint AS penalty_pool_fen,
-       COALESCE((SELECT SUM(a.amount_fen) FROM departure_formation_adjustments a
-         WHERE a.departure_id=d.id AND a.adjustment_type='successful_supplement'),0)::bigint AS successful_supplement_fen,
+       COALESCE((SELECT SUM(CASE
+         WHEN a.adjustment_type='successful_supplement' THEN a.amount_fen
+         WHEN a.adjustment_type='successful_supplement_refund' THEN -a.amount_fen
+         ELSE 0 END)
+         FROM departure_formation_adjustments a WHERE a.departure_id=d.id),0)::bigint AS successful_supplement_fen,
        COALESCE((
          SELECT SUM(amount_delta_fen)
          FROM departure_offline_ledger_entries e
@@ -190,6 +193,19 @@ export async function closeSupplementRoundsForInsuranceGroupFailure(client, depa
        ON CONFLICT (payment_transaction_id,reason) DO NOTHING`, [round.id],
     );
     await client.query(
+      `INSERT INTO departure_formation_adjustments
+         (departure_id,adjustment_type,amount_fen,source_reference)
+       SELECT r.departure_id,'successful_supplement_refund',SUM(t.amount_fen)::integer,
+         'supplement-refund:'||r.id
+       FROM departure_supplement_rounds r
+       JOIN departure_supplement_participants p ON p.round_id=r.id
+       JOIN payment_transactions t ON t.supplement_participant_id=p.id AND t.status='succeeded'
+       WHERE r.id=$1
+       GROUP BY r.departure_id,r.id
+       HAVING SUM(t.amount_fen)>0
+       ON CONFLICT (departure_id,adjustment_type,source_reference) DO NOTHING`, [round.id],
+    );
+    await client.query(
       `UPDATE departure_supplement_participants p SET payment_status='refund_pending',updated_at=now()
        WHERE p.round_id=$1 AND EXISTS (
          SELECT 1 FROM payment_transactions t
@@ -202,40 +218,62 @@ export async function closeSupplementRoundsForInsuranceGroupFailure(client, depa
 
 async function refundSupplementDecliners(client, roundId) {
   const exited = await client.query(
-    `SELECT p.order_id,o.buyer_user_id,o.seat_fee_fen,o.discount_fen
+    `SELECT p.order_id,o.buyer_user_id,o.seat_fee_fen,o.discount_fen,o.platform_fee_fen,
+            o.ticket_refunded_fen,o.cancelled_refund_fen
      FROM departure_supplement_participants p
      JOIN booking_orders o ON o.id=p.order_id
      WHERE p.round_id=$1 AND p.consent_status IN ('rejected','timed_out') AND o.status='paid'
      FOR UPDATE OF p,o`, [roundId],
   );
   if (!exited.rowCount) return 0;
-  const orderIds = exited.rows.map((row) => row.order_id);
-  await client.query(
-    `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),
-       cancelled_refund_fen=total_amount_fen,cancellation_penalty_fen=0,
-       ticket_refunded_fen=seat_fee_fen-discount_fen,updated_at=now()
-     WHERE id=ANY($1::uuid[]) AND status='paid'`, [orderIds],
-  );
-  await client.query(
-    `UPDATE booking_order_seats SET status='released'
-     WHERE order_id=ANY($1::uuid[]) AND status='paid'`, [orderIds],
-  );
-  await client.query(
-    `UPDATE seat_inventory SET status='available',hold_id=NULL,hold_expires_at=NULL,
-       waitlist_released_at=NULL,updated_at=now()
-     WHERE id IN (SELECT seat_inventory_id FROM booking_order_seats
-       WHERE order_id=ANY($1::uuid[])) AND status='booked'`, [orderIds],
-  );
-  await client.query(
-    `INSERT INTO refund_obligations
-       (order_id,payment_transaction_id,amount_fen,reason,status,request_key)
-     SELECT o.id,
-       (SELECT t.id FROM payment_transactions t
-        WHERE t.order_id=o.id AND t.status='succeeded' ORDER BY t.completed_at DESC,t.id DESC LIMIT 1),
-       o.total_amount_fen,'customer_cancellation','pending','supplement-exit:'||o.id
-     FROM booking_orders o WHERE o.id=ANY($1::uuid[]) AND o.total_amount_fen>0
-     ON CONFLICT (request_key) DO NOTHING`, [orderIds],
-  );
+  const orders = new Map(exited.rows.map((row) => [row.order_id, row]));
+  for (const order of orders.values()) {
+    const remainingTicketPrincipal = Number(order.seat_fee_fen)
+      - Number(order.discount_fen) - Number(order.ticket_refunded_fen ?? 0);
+    if (!Number.isSafeInteger(remainingTicketPrincipal) || remainingTicketPrincipal < 0) {
+      throw new Error('Supplement exit found an invalid remaining ticket principal.');
+    }
+    const refundFen = remainingTicketPrincipal + Number(order.platform_fee_fen);
+    const seats = await client.query(
+      `SELECT os.seat_inventory_id
+       FROM booking_order_seats os
+       JOIN seat_inventory s ON s.id=os.seat_inventory_id
+       WHERE os.order_id=$1 AND os.status='paid' AND s.status='booked'
+       ORDER BY os.seat_number FOR UPDATE OF os,s`, [order.order_id],
+    );
+    const seatIds = seats.rows.map((row) => row.seat_inventory_id);
+    await client.query(
+      `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),
+         cancelled_refund_fen=COALESCE(cancelled_refund_fen,0)+$2,cancellation_penalty_fen=0,
+         ticket_refunded_fen=ticket_refunded_fen+$3,updated_at=now()
+       WHERE id=$1 AND status='paid'`, [order.order_id, refundFen, remainingTicketPrincipal],
+    );
+    if (seatIds.length) {
+      await client.query(
+        `UPDATE booking_order_seats SET status='released'
+         WHERE order_id=$1 AND seat_inventory_id=ANY($2::uuid[]) AND status='paid'`,
+        [order.order_id, seatIds],
+      );
+      await client.query(
+        `UPDATE seat_inventory SET status='available',hold_id=NULL,hold_expires_at=NULL,
+           waitlist_released_at=NULL,updated_at=now()
+         WHERE id=ANY($1::uuid[]) AND status='booked'`, [seatIds],
+      );
+    }
+    if (refundFen > 0) {
+      await client.query(
+        `INSERT INTO refund_obligations
+           (order_id,payment_transaction_id,amount_fen,reason,status,request_key)
+         VALUES ($1,
+           (SELECT t.id FROM payment_transactions t
+            WHERE t.order_id=$1 AND t.status='succeeded' ORDER BY t.completed_at DESC,t.id DESC LIMIT 1),
+           $2,'customer_cancellation','pending',$3)
+         ON CONFLICT (request_key) DO NOTHING`,
+        [order.order_id, refundFen, `supplement-exit:${order.order_id}`],
+      );
+    }
+  }
+  const orderIds = [...orders.keys()];
   await client.query(
     `UPDATE departure_waitlist_entries SET status='closed',updated_at=now()
      WHERE order_id=ANY($1::uuid[]) AND status='converted'`, [orderIds],
@@ -1389,7 +1427,10 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       `LEFT JOIN LATERAL (
         SELECT
           COALESCE(SUM(a.amount_fen) FILTER (WHERE a.adjustment_type='penalty_pool'),0)::bigint AS penalty_pool_fen,
-          COALESCE(SUM(a.amount_fen) FILTER (WHERE a.adjustment_type='successful_supplement'),0)::bigint AS successful_supplement_fen
+          COALESCE(SUM(CASE
+            WHEN a.adjustment_type='successful_supplement' THEN a.amount_fen
+            WHEN a.adjustment_type='successful_supplement_refund' THEN -a.amount_fen
+            ELSE 0 END),0)::bigint AS successful_supplement_fen
         FROM departure_formation_adjustments a WHERE a.departure_id=d.id
       ) formation_adjustments ON TRUE ` +
       'WHERE o.id=$1 AND o.buyer_user_id=$2',

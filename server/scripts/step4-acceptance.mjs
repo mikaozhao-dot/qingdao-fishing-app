@@ -8,8 +8,10 @@ import { config } from '../src/config.js';
 import { createSecurity, makeSandboxIdentityNumber } from '../src/security.js';
 import { createSandboxPaymentAdapter } from '../src/step3-adapters.js';
 import {
+  loadFormationAccounts,
   processConfirmedChecklists,
   processFormationChecks,
+  processSupplementDeadlines,
   processSandboxRefundObligations,
 } from '../src/step4-routes.js';
 import {
@@ -1633,6 +1635,53 @@ async function main() {
     'SELECT status FROM passenger_insurance_coverages WHERE passenger_id=$1', [departureFirstPassenger.id],
   )).status, 'failed', 'a queued verification update cannot alter the departed coverage snapshot');
 
+  const cancelledOrderRace = await makeConfirmedDeparture(captain.id, boatId);
+  const cancelledOrderRaceId = await makePaidOrder(angler.id, cancelledOrderRace.id, cancelledOrderRace.seat);
+  const cancelledOrderRacePassenger = await scalar(
+    'SELECT id FROM order_passengers WHERE order_id=$1', [cancelledOrderRaceId],
+  );
+  const cancelledOrderRaceLock = await holdDepartureRow(cancelledOrderRace.id);
+  const staleInsuranceRequest = request(
+    'POST', `/orders/${cancelledOrderRaceId}/passengers/${cancelledOrderRacePassenger.id}/insurance/sandbox`,
+    angler.token, { status: 'failed', failureReason: 'data_error', attemptKey: 'cancelled-order-lock-race' },
+  );
+  let cancelledOrderRaceLockCommitted = false;
+  try {
+    check(await waitForLockedQuery('SELECT status FROM departures WHERE id=$1 FOR UPDATE'), true,
+      'insurance verification blocks behind the departure cancellation lock');
+    await cancelledOrderRaceLock.query("UPDATE departures SET status='cancelled' WHERE id=$1", [cancelledOrderRace.id]);
+    await cancelledOrderRaceLock.query(
+      "UPDATE booking_orders SET status='cancelled',ticket_refunded_fen=seat_fee_fen,"
+        + "cancelled_refund_fen=total_amount_fen WHERE id=$1",
+      [cancelledOrderRaceId],
+    );
+    await cancelledOrderRaceLock.query(
+      "UPDATE booking_order_seats SET status='released' WHERE order_id=$1 AND status='paid'",
+      [cancelledOrderRaceId],
+    );
+    await cancelledOrderRaceLock.query("UPDATE seat_inventory SET status='available' WHERE id=$1",
+      [cancelledOrderRace.seat.id]);
+    await cancelledOrderRaceLock.query('COMMIT');
+    cancelledOrderRaceLockCommitted = true;
+  } catch (error) {
+    if (!cancelledOrderRaceLockCommitted) await cancelledOrderRaceLock.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    cancelledOrderRaceLock.release();
+  }
+  const staleInsuranceResult = await staleInsuranceRequest;
+  check(staleInsuranceResult.status, 409,
+    'insurance verification rereads the cancelled order after the departure lock');
+  check((await scalar('SELECT status FROM passenger_insurance_coverages WHERE passenger_id=$1',
+    [cancelledOrderRacePassenger.id])).status, 'effective',
+  'a stale insurance request cannot modify coverage after the order is cancelled');
+  check((await scalar('SELECT count(*)::integer AS count FROM passenger_insurance_attempts WHERE order_id=$1',
+    [cancelledOrderRaceId])).count, 0,
+  'a stale insurance request cannot append an attempt after the order is cancelled');
+  check((await scalar('SELECT count(*)::integer AS count FROM refund_obligations WHERE order_id=$1',
+    [cancelledOrderRaceId])).count, 0,
+  'the rejected stale insurance request creates no extra refund');
+
   const shiftedWindowDeparture = await makeConfirmedDeparture(captain.id, boatId);
   const shiftedWindowOrder = await makePaidOrder(angler.id, shiftedWindowDeparture.id, shiftedWindowDeparture.seat);
   const issuedPolicy = await expect('POST', `/orders/${shiftedWindowOrder}/insurance/sandbox`, angler.token,
@@ -1757,17 +1806,23 @@ async function main() {
     [companionOrder.orderId])).count, 3, 'a fourth attempt is rejected without changing the attempt history');
 
   const guardianDeparture = await makeConfirmedDeparture(captain.id, boatId);
-  await pool.query('UPDATE departures SET minimum_sailing_total_fen=4000 WHERE id=$1', [guardianDeparture.id]);
+  await pool.query('UPDATE departures SET minimum_sailing_total_fen=8000 WHERE id=$1', [guardianDeparture.id]);
   const guardianSeat = (await pool.query(
     `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
      VALUES ($1,2,5000,'starboard','mid','booked') RETURNING id,seat_number,price_fen`,
     [guardianDeparture.id],
   )).rows[0];
+  const guardianThirdSeat = (await pool.query(
+    `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
+     VALUES ($1,3,5000,'port','stern','booked') RETURNING id,seat_number,price_fen`,
+    [guardianDeparture.id],
+  )).rows[0];
   const guardianOrder = await makeMultiPassengerPaidOrder(
-    secondAngler.id, guardianDeparture.id, [guardianDeparture.seat, guardianSeat],
+    secondAngler.id, guardianDeparture.id, [guardianDeparture.seat, guardianSeat, guardianThirdSeat],
     [
       { name: '未成年乘客', identity: makeIdentityForBirthDate('20160801', '993') },
       { name: '家长乘客', identity: makeIdentityForBirthDate('19850101', '994') },
+      { name: '同行乘客', identity: makeIdentityForBirthDate('19870101', '995') },
     ],
   );
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -1806,11 +1861,14 @@ async function main() {
   check((await scalar('SELECT booking_status FROM order_passengers WHERE id=$1',
     [guardianOrder.passengerIds[1]])).booking_status, 'guardian_exit',
   'the guardian opt-out is separately recorded');
+  check((await scalar('SELECT booking_status FROM order_passengers WHERE id=$1',
+    [guardianOrder.passengerIds[2]])).booking_status, 'departure_cancelled',
+  'a remaining passenger is cancelled when the guardian exit takes the trip below threshold');
   check((await scalar('SELECT status FROM departures WHERE id=$1', [guardianDeparture.id])).status,
     'cancelled', 'insurance-driven threshold failure cancels the departure');
   check((await scalar('SELECT ticket_refunded_fen,status FROM booking_orders WHERE id=$1',
-    [guardianOrder.orderId])), { ticket_refunded_fen: 10000, status: 'cancelled' },
-  'child and guardian ticket principals are each refunded once');
+    [guardianOrder.orderId])), { ticket_refunded_fen: 15000, status: 'cancelled' },
+  'child, guardian, and remaining passenger ticket principals are each refunded once');
   const guardianReplay = await expect(
     'POST', `/orders/${guardianOrder.orderId}/passengers/${guardianOrder.passengerIds[0]}/insurance/guardian-exit/sandbox`,
     secondAngler.token, {
@@ -1819,8 +1877,210 @@ async function main() {
     },
   );
   check(guardianReplay.idempotentReplay, true, 'guardian exit replay does not issue another refund');
+  check(guardianReplay.ticketRefundFen, 5000, 'guardian exit replay returns its original refund amount');
+  check(guardianReplay.departureCancelled, true, 'guardian exit replay returns its original departure outcome');
   check((await scalar('SELECT count(*)::integer AS count FROM refund_obligations WHERE order_id=$1',
-    [guardianOrder.orderId])).count, 2, 'child and guardian exits each have exactly one refund obligation');
+    [guardianOrder.orderId])).count, 3, 'each of the three passengers has exactly one refund obligation');
+  const conflictingGuardianReplay = await request(
+    'POST', `/orders/${guardianOrder.orderId}/passengers/${guardianOrder.passengerIds[0]}/insurance/guardian-exit/sandbox`,
+    secondAngler.token, {
+      guardianPassengerId: guardianOrder.passengerIds[2], requestKey: 'guardian-exit-second-key',
+      relationshipConfirmed: true,
+    },
+  );
+  check(conflictingGuardianReplay.status, 409,
+    'a new request key cannot create a second guardian decision for the same child');
+  check((await scalar('SELECT count(*)::integer AS count FROM insurance_guardian_exit_decisions WHERE order_id=$1',
+    [guardianOrder.orderId])).count, 1, 'a conflicting guardian choice does not add a decision');
+  check((await scalar('SELECT count(*)::integer AS count FROM refund_obligations WHERE order_id=$1',
+    [guardianOrder.orderId])).count, 3, 'a conflicting guardian choice creates no additional refund');
+
+  const insuranceExitDeparture = await makeConfirmedDeparture(captain.id, boatId);
+  await pool.query(
+    "UPDATE departures SET status='open',minimum_sailing_total_fen=18000 WHERE id=$1",
+    [insuranceExitDeparture.id],
+  );
+  const insuranceExitSeats = await pool.query(
+    `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
+     VALUES ($1,2,5000,'starboard','mid','booked'),($1,3,5000,'port','stern','booked'),
+       ($1,4,5000,'starboard','stern','booked'),($1,5,5000,'port','stern','booked')
+     RETURNING id,seat_number,price_fen`, [insuranceExitDeparture.id],
+  );
+  const insuranceExitSeatsByNumber = [insuranceExitDeparture.seat, ...insuranceExitSeats.rows]
+    .sort((left, right) => left.seat_number - right.seat_number);
+  const insuranceExitAngler = await makeUser('保险失败后补差退出原订单');
+  const insuranceExitOther = await makeUser('保险失败后补差退出其他订单');
+  const insuranceExitRebooker = await makeUser('保险释放座位重新购买');
+  const insuranceExitOrder = await makeMultiPassengerPaidOrder(
+    insuranceExitAngler.id, insuranceExitDeparture.id, insuranceExitSeatsByNumber.slice(0, 3),
+    [
+      { name: '保障失败钓友', identity: makeIdentityForBirthDate('19900101', '996') },
+      { name: '原订单同行一', identity: makeIdentityForBirthDate('19910101', '997') },
+      { name: '原订单同行二', identity: makeIdentityForBirthDate('19920101', '998') },
+    ],
+  );
+  const insuranceExitOtherOrder = await makeMultiPassengerPaidOrder(
+    insuranceExitOther.id, insuranceExitDeparture.id, insuranceExitSeatsByNumber.slice(3),
+    [
+      { name: '另一订单乘客一', identity: makeIdentityForBirthDate('19930101', '999') },
+      { name: '另一订单乘客二', identity: makeIdentityForBirthDate('19940101', '001') },
+    ],
+  );
+  const insuranceExitAccountsClient = await pool.connect();
+  let insuranceExitInitialAccounts;
+  try {
+    insuranceExitInitialAccounts = await loadFormationAccounts(insuranceExitAccountsClient, insuranceExitDeparture.id);
+  } finally {
+    insuranceExitAccountsClient.release();
+  }
+  check(insuranceExitInitialAccounts.platform.meetsThreshold, true,
+    'the five booked seats initially cover the insurance-exit fixture threshold');
+  let insuranceExitFailure;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    insuranceExitFailure = await expect(
+      'POST', `/orders/${insuranceExitOrder.orderId}/passengers/${insuranceExitOrder.passengerIds[0]}/insurance/sandbox`,
+      insuranceExitAngler.token, {
+        status: 'failed', failureReason: 'insurer_rejected', attemptKey: `g-seat-rejection-${attempt}`,
+      },
+    );
+  }
+  check(insuranceExitFailure.insurance.departureCancelled, false,
+    'the original two remaining seats and the second order keep the trip at threshold after G');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1 AND seat_inventory_id=$2',
+    [insuranceExitOrder.orderId, insuranceExitDeparture.seat.id])).status, 'released',
+  'the G-rejected seat leaves the original order roster');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1',
+    [insuranceExitDeparture.seat.id])).status, 'available', 'the G-rejected seat is released for resale');
+  const insuranceExitRebookedOrder = await makePaidOrder(
+    insuranceExitRebooker.id, insuranceExitDeparture.id, insuranceExitDeparture.seat,
+  );
+  await pool.query("UPDATE seat_inventory SET status='booked' WHERE id=$1", [insuranceExitDeparture.seat.id]);
+  await expect('POST', `/orders/${insuranceExitOtherOrder.orderId}/cancel`, insuranceExitOther.token, {});
+  const insuranceExitDepartureAt = new Date((await scalar(
+    'SELECT departure_at FROM departures WHERE id=$1', [insuranceExitDeparture.id],
+  )).departure_at);
+  const insuranceExitCloseout = new Date(
+    formationConfirmationAt(insuranceExitDepartureAt).getTime() + 10 * 60 * 1000,
+  );
+  await pool.query('UPDATE departures SET waitlist_window_closed_at=$2 WHERE id=$1',
+    [insuranceExitDeparture.id, insuranceExitCloseout]);
+  const insuranceExitCheckpoint = await processFormationChecks(pool, insuranceExitCloseout);
+  check(insuranceExitCheckpoint.checked > 0, true,
+    'the other order cancellation creates a frozen shortfall after the cutoff');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [insuranceExitDeparture.id])).status,
+    'handling_shortfall', 'the post-G cancellation shortfall can open one supplement round');
+  const insuranceExitRound = await expect(
+    'POST', `/captain/departures/${insuranceExitDeparture.id}/supplement-rounds`, captain.token,
+    { responseDeadlineAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }, 201,
+  );
+  const insuranceExitOrderParticipant = insuranceExitRound.round.participants
+    .find((participant) => participant.orderId === insuranceExitOrder.orderId);
+  assert.ok(insuranceExitOrderParticipant, 'the partially refunded original order participates in supplement');
+  const insuranceExitChoice = await expect(
+    'POST', `/orders/${insuranceExitOrder.orderId}/supplement-rounds/${insuranceExitRound.round.id}/decision`,
+    insuranceExitAngler.token, { action: 'reject' },
+  );
+  check(insuranceExitChoice.round.status, 'failed',
+    'the original order can exit when it rejects the supplement round');
+  check((await scalar('SELECT status,ticket_refunded_fen,cancelled_refund_fen FROM booking_orders WHERE id=$1',
+    [insuranceExitOrder.orderId])), { status: 'cancelled', ticket_refunded_fen: 15000, cancelled_refund_fen: 15000 },
+  'G partial refund plus supplement exit refunds the original three-seat order exactly once');
+  check((await scalar(
+    `SELECT COALESCE(SUM(amount_fen),0)::integer AS amount FROM refund_obligations
+     WHERE order_id=$1 AND reason='customer_cancellation'`, [insuranceExitOrder.orderId],
+  )).amount, 10000, 'supplement exit refunds only the two ticket principals still outstanding');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1',
+    [insuranceExitDeparture.seat.id])).status, 'booked',
+  'supplement exit does not free the G-released seat after another order rebooks it');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1 AND seat_inventory_id=$2',
+    [insuranceExitRebookedOrder, insuranceExitDeparture.seat.id])).status, 'paid',
+  'the replacement order keeps the rebooked seat active');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1',
+    [insuranceExitRebookedOrder])).status, 'paid', 'the replacement buyer remains booked after the original exits');
+
+  const insuranceTimeoutDeparture = await makeConfirmedDeparture(captain.id, boatId);
+  await pool.query(
+    "UPDATE departures SET status='open',minimum_sailing_total_fen=13500 WHERE id=$1",
+    [insuranceTimeoutDeparture.id],
+  );
+  const insuranceTimeoutSeats = await pool.query(
+    `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
+     VALUES ($1,2,5000,'starboard','mid','booked'),($1,3,5000,'port','stern','booked'),
+       ($1,4,5000,'starboard','stern','booked') RETURNING id,seat_number,price_fen`,
+    [insuranceTimeoutDeparture.id],
+  );
+  const insuranceTimeoutSeatsByNumber = [insuranceTimeoutDeparture.seat, ...insuranceTimeoutSeats.rows]
+    .sort((left, right) => left.seat_number - right.seat_number);
+  const insuranceTimeoutAngler = await makeUser('保险部分退款后补差超时原订单');
+  const insuranceTimeoutOther = await makeUser('保险部分退款后补差超时其他订单');
+  const insuranceTimeoutRebooker = await makeUser('保险部分退款后补差超时重订人');
+  const insuranceTimeoutOrder = await makeMultiPassengerPaidOrder(
+    insuranceTimeoutAngler.id, insuranceTimeoutDeparture.id, insuranceTimeoutSeatsByNumber.slice(0, 2),
+    [
+      { name: '超时原订单保障失败', identity: makeIdentityForBirthDate('19900101', '002') },
+      { name: '超时原订单同行', identity: makeIdentityForBirthDate('19910101', '003') },
+    ],
+  );
+  const insuranceTimeoutOtherOrder = await makeMultiPassengerPaidOrder(
+    insuranceTimeoutOther.id, insuranceTimeoutDeparture.id, insuranceTimeoutSeatsByNumber.slice(2),
+    [
+      { name: '超时其他订单乘客一', identity: makeIdentityForBirthDate('19920101', '004') },
+      { name: '超时其他订单乘客二', identity: makeIdentityForBirthDate('19930101', '005') },
+    ],
+  );
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await expect(
+      'POST', `/orders/${insuranceTimeoutOrder.orderId}/passengers/${insuranceTimeoutOrder.passengerIds[0]}/insurance/sandbox`,
+      insuranceTimeoutAngler.token, {
+        status: 'failed', failureReason: 'insurer_rejected', attemptKey: `g-timeout-seat-rejection-${attempt}`,
+      },
+    );
+  }
+  const insuranceTimeoutRebookedOrder = await makePaidOrder(
+    insuranceTimeoutRebooker.id, insuranceTimeoutDeparture.id, insuranceTimeoutDeparture.seat,
+  );
+  await pool.query("UPDATE seat_inventory SET status='booked' WHERE id=$1", [insuranceTimeoutDeparture.seat.id]);
+  await expect('POST', `/orders/${insuranceTimeoutOtherOrder.orderId}/cancel`, insuranceTimeoutOther.token, {});
+  const insuranceTimeoutDepartureAt = new Date((await scalar(
+    'SELECT departure_at FROM departures WHERE id=$1', [insuranceTimeoutDeparture.id],
+  )).departure_at);
+  const insuranceTimeoutCloseout = new Date(
+    formationConfirmationAt(insuranceTimeoutDepartureAt).getTime() + 10 * 60 * 1000,
+  );
+  await pool.query('UPDATE departures SET waitlist_window_closed_at=$2 WHERE id=$1',
+    [insuranceTimeoutDeparture.id, insuranceTimeoutCloseout]);
+  await processFormationChecks(pool, insuranceTimeoutCloseout);
+  const insuranceTimeoutRound = await expect(
+    'POST', `/captain/departures/${insuranceTimeoutDeparture.id}/supplement-rounds`, captain.token,
+    { responseDeadlineAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }, 201,
+  );
+  const insuranceTimeoutRebookerParticipant = insuranceTimeoutRound.round.participants
+    .find((participant) => participant.orderId === insuranceTimeoutRebookedOrder);
+  assert.ok(insuranceTimeoutRebookerParticipant, 'the replacement buyer participates in the timeout fixture');
+  await expect(
+    'POST', `/orders/${insuranceTimeoutRebookedOrder}/supplement-rounds/${insuranceTimeoutRound.round.id}/decision`,
+    insuranceTimeoutRebooker.token, { action: 'accept' },
+  );
+  await pool.query("UPDATE departure_supplement_rounds SET response_deadline_at=now()-interval '1 second' WHERE id=$1",
+    [insuranceTimeoutRound.round.id]);
+  const insuranceTimeoutProcessed = await processSupplementDeadlines(pool, new Date());
+  check(insuranceTimeoutProcessed.expired, 1,
+    'supplement timeout exits only the pending original order in the insurance fixture');
+  check((await scalar('SELECT consent_status FROM departure_supplement_participants WHERE round_id=$1 AND order_id=$2',
+    [insuranceTimeoutRound.round.id, insuranceTimeoutOrder.orderId])).consent_status, 'timed_out',
+  'the partially refunded original order is recorded as timed out');
+  check((await scalar('SELECT status,ticket_refunded_fen,cancelled_refund_fen FROM booking_orders WHERE id=$1',
+    [insuranceTimeoutOrder.orderId])), { status: 'cancelled', ticket_refunded_fen: 10000, cancelled_refund_fen: 10000 },
+  'G partial refund plus supplement timeout refunds the two-seat order exactly once');
+  check((await scalar(
+    `SELECT COALESCE(SUM(amount_fen),0)::integer AS amount FROM refund_obligations
+     WHERE order_id=$1 AND reason='customer_cancellation'`, [insuranceTimeoutOrder.orderId],
+  )).amount, 5000, 'supplement timeout refunds only the remaining active ticket principal');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1',
+    [insuranceTimeoutDeparture.seat.id])).status, 'booked',
+  'supplement timeout preserves a G-released seat after another order rebooks it');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1',
+    [insuranceTimeoutRebookedOrder])).status, 'paid', 'the timeout fixture replacement buyer remains booked');
 
   const thresholdDeparture = await makeConfirmedDeparture(captain.id, boatId);
   await pool.query('UPDATE departures SET minimum_sailing_total_fen=8000 WHERE id=$1', [thresholdDeparture.id]);
@@ -2417,6 +2677,90 @@ async function main() {
   )).count, 1, 'duplicate callback adds the supplement ledger once');
   check((await scalar('SELECT status FROM departures WHERE id=$1', [duplicateCallback.departureId])).status,
     'confirmed', 'all successful supplement funds pass server formation recheck');
+
+  const successfulSupplementInsuranceFailure = await makeMultiSupplementFixture(
+    captain, quotaBoatId, '成功补差后保险整班失败', { participantCount: 2, shortfallFen: 5000 },
+  );
+  for (const participant of successfulSupplementInsuranceFailure.round.participants) {
+    await expect(
+      'POST', `/orders/${participant.orderId}/supplement-rounds/${successfulSupplementInsuranceFailure.round.id}/decision`,
+      successfulSupplementInsuranceFailure.user.token, { action: 'accept' },
+    );
+  }
+  for (const participant of successfulSupplementInsuranceFailure.round.participants) {
+    await expect(
+      'POST', `/orders/${participant.orderId}/supplement-rounds/${successfulSupplementInsuranceFailure.round.id}/payment-intents`,
+      successfulSupplementInsuranceFailure.user.token, {}, 201,
+    );
+    await expect(
+      'POST', `/orders/${participant.orderId}/supplement-rounds/${successfulSupplementInsuranceFailure.round.id}/sandbox-payment`,
+      successfulSupplementInsuranceFailure.user.token, { outcome: 'success' },
+    );
+  }
+  check((await scalar('SELECT status FROM departure_supplement_rounds WHERE id=$1',
+    [successfulSupplementInsuranceFailure.round.id])).status, 'succeeded',
+  'all accepted supplement funds first enter the successful formation ledger');
+  const successfulSupplementBeforeInsurance = await expect(
+    'GET', `/captain/departures/${successfulSupplementInsuranceFailure.departureId}/formation-accounts`, captain.token,
+  );
+  check(successfulSupplementBeforeInsurance.accounts.platform.successfulSupplementFen, 5000,
+    'the formation view exposes the successful supplement before insurance cancellation');
+  const refundedSupplementOrder = successfulSupplementInsuranceFailure.orders[0];
+  const refundedSupplementPassenger = await scalar(
+    'SELECT id FROM order_passengers WHERE order_id=$1', [refundedSupplementOrder],
+  );
+  let successfulSupplementInsuranceResult;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    successfulSupplementInsuranceResult = await expect(
+      'POST', `/orders/${refundedSupplementOrder}/passengers/${refundedSupplementPassenger.id}/insurance/sandbox`,
+      successfulSupplementInsuranceFailure.user.token, {
+        status: 'failed', failureReason: 'insurer_rejected',
+        attemptKey: `successful-supplement-insurance-failure-${attempt}`,
+      },
+    );
+  }
+  check(successfulSupplementInsuranceResult.insurance.departureCancelled, true,
+    'insurance failure after a successful supplement cancels the underfunded departure');
+  check((await scalar('SELECT status FROM departure_supplement_rounds WHERE id=$1',
+    [successfulSupplementInsuranceFailure.round.id])).status, 'failed',
+  'whole-departure insurance failure marks the previously successful supplement round failed');
+  check((await scalar(
+    `SELECT COALESCE(SUM(amount_fen),0)::integer AS amount FROM refund_obligations
+     WHERE order_id=ANY($1::uuid[]) AND reason='supplement_failure'`,
+    [successfulSupplementInsuranceFailure.orders],
+  )).amount, 5000, 'the previously successful supplement has its full refund obligation recorded');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departure_formation_adjustments
+     WHERE departure_id=$1 AND adjustment_type='successful_supplement_refund'
+       AND source_reference=$2 AND amount_fen=5000`,
+    [successfulSupplementInsuranceFailure.departureId,
+      `supplement-refund:${successfulSupplementInsuranceFailure.round.id}`],
+  )).count, 1, 'the supplement refund is offset in the auditable formation ledger');
+  const successfulSupplementAccountsClient = await pool.connect();
+  let successfulSupplementAfterInsurance;
+  try {
+    successfulSupplementAfterInsurance = await loadFormationAccounts(
+      successfulSupplementAccountsClient, successfulSupplementInsuranceFailure.departureId,
+    );
+  } finally {
+    successfulSupplementAccountsClient.release();
+  }
+  check(successfulSupplementAfterInsurance.platform.successfulSupplementFen, 0,
+    'formation accounts net the refunded supplement to zero');
+  const successfulSupplementReplay = await expect(
+    'POST', `/orders/${refundedSupplementOrder}/passengers/${refundedSupplementPassenger.id}/insurance/sandbox`,
+    successfulSupplementInsuranceFailure.user.token, {
+      status: 'failed', failureReason: 'insurer_rejected',
+      attemptKey: 'successful-supplement-insurance-failure-3',
+    },
+  );
+  check(successfulSupplementReplay.insurance.idempotentReplay, true,
+    'replaying the final insurance decision does not re-run supplement refunds');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departure_formation_adjustments
+     WHERE departure_id=$1 AND adjustment_type='successful_supplement_refund'`,
+    [successfulSupplementInsuranceFailure.departureId],
+  )).count, 1, 'replayed insurance decisions do not duplicate the ledger offset');
 
   const lateWaitlist = await makeWaitlistPaymentFixture(captain, quotaBoatId, '候补迟到到账');
   const nextWaitlistCandidate = await makeUser('候补迟到到账下一位');

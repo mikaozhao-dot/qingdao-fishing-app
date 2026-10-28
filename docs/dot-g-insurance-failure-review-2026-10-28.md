@@ -1,5 +1,7 @@
 # Dot 独立复核：G 投保失败处理（2026-10-28）
 
+> 最新裁定（08:07 UTC）：固定 d3e0ab3c 的本轮 G-R1～G-R4 与窄修项已限定沙盒技术关闭，详见末节；前文保留历史审查过程，不代表仍待重复修复。产品验收、历史保留范围及真实通道边界不变。
+
 ## 结论与固定范围
 
 **暂不通过，需以下有界回修；不是要求整套重做。** 固定实现 `0040af6a45c6e8bbf29e20f31cab64f23e71f564`，送审 `172d54eb81f828400aa4d158722d8a945a1a56f9`。依据 G 决定、剩余开发工单及本次正式请求。
@@ -130,3 +132,31 @@ G-R2 的关闭限于本版新执行路径：027 未回补旧版本已失败轮�
 Luna 继续本次有界补正；Dot 收到实际差量后复核。R1 多图尚无本轮实现差量，不抢先验收；不启动包船/F/会员、不操作真实资金/保险或生产。
 
 固定证据：[修复提交](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/aa57247a9ef3eacdcd0e5fd8fb8bf3c5c5438c03) · [迁移 027](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/aa57247a9ef3eacdcd0e5fd8fb8bf3c5c5438c03/server/migrations/027_g_insurance_failure_review_fixback.sql) · [夹具](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/aa57247a9ef3eacdcd0e5fd8fb8bf3c5c5438c03/server/scripts/step4-acceptance.mjs)
+
+## 2026-10-28 08:07 UTC 终轮窄复核：d3e0ab3c（限定沙盒技术通过）
+
+**固定实现 `d3e0ab3c27326c0cdf8a3bcc63df10fd6cd12219`，本轮 G-R1～G-R4 及 07:38 所列一个升级缺陷、两个夹具补正均已在下述范围关闭。** 不再要求重复这些已足够的补证。不等待另发回执才承认实际已交代码与同 SHA 原始日志。
+
+### 实际证据
+
+已读迁移 028、路由少量差量、独立升级脚本、两条修正负例及真实 API 历史回放夹具，并核对 [CI run 40654110138](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40654110138) / [job 122700881003](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40654110138/job/122700881003) 原始日志。checkout 为上述完整 SHA，迁移 028 成功；Step4 **853**、G guardian 专项升级 **4**、Step5 **133**、live **77**、promotion **334**、退款重订迁移 **33**、证书 **70** 断言均通过。本轮仍没有由 Dot 新执行测试或操作真实服务。
+
+### 三个剩余点逐项关闭
+
+1. **旧家长金额回放**：028 按家长 passenger_id、insurance_failure reason 与精确 `insurance-guardian-exit:<guardian>` 退款键回填历史金额；新增已知结果标志，历史班次结果不可可靠恢复时，API 返回 **null（未知）** 而非默认 false。新操作明确保存 known=true，继续准确重放 true/false。保留的不确定性是如实建模，不是声称恢复了不存在的历史证据。
+   - 独立升级脚本在单一数据库连接的隔离 schema 内真实应用 001–025→026，建立 026 形状的决定与 5000 分退款义务，再应用 027 验出 0/false，应用 028 验出 5000/unknown，并重放 028 验证幂等，共 4 项。
+   - Step4 另有真实 API 同键回放夹具，断言回放 5000、历史结果 null、没有第二笔退款。两组证据合用，未把 SQL 读取冒充 API 调用，也未把新建 schema 演练冒充现存生产库升级。
+2. **订单取消并发负例**：保留班次 confirmed，只取消订单/席位并释放班次锁；排队保险请求返回 409，保障不变，无新增尝试/退款，且明确断言班次仍 confirmed。原来被整班取消掩盖的问题已经消除。
+3. **第二家长冲突负例**：四乘客夹具在第一家长退出后保持订单 paid、班次 confirmed、第二家长 active，再以同孩子不同 key 请求，断言 409、只有原决定、无新增退款且剩余乘客/班次不变。现已针对原唯一约束冲突，而不是依赖班次终态拒绝。
+
+此前 aa57247a 已验证的 G-R1/G-R2 新执行路径在本次同 SHA 全套相关回归中继续通过；此增量不重开已关业务或证书事实项。
+
+### 通过范围与下一责任人
+
+- 通过范围是本次送审的**沙盒/API、迁移与所交夹具覆盖的技术行为**，不是 G 创始人产品关单、真实保单/退款验证、生产迁移许可或队列下一项开工授权。
+- 前文 G-R2 关于旧版已失败轮次历史正向补差账的保留说明不变：未证明已清理所有留存库，不把新流程通过扩大为历史全量修复；该说明不是新增待重复测试命令。
+- 监护关系真实核验、保险方书面规则与时效、对外文案、真实资金/保险/生产边界仍不变。
+- Muse 已在 `docs/ui-design-review-aa57247a.md` 明确接收 07:38 差量结论并安排三个窄修；本节交 Muse/Luna 对账，由 Muse 汇总产品验收材料并按既有决策链推进。**本节发布不代表对方已实际读取本节。**
+- R1 新多图呈现仍待其实际实现与送审；FishingBooker 尚未交付可复核样本/拆解报告，均不由 G 技术通过代替。
+
+[固定窄修](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/d3e0ab3c27326c0cdf8a3bcc63df10fd6cd12219) · [迁移028](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/d3e0ab3c27326c0cdf8a3bcc63df10fd6cd12219/server/migrations/028_g_insurance_guardian_legacy_replay_backfill.sql) · [升级夹具](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/d3e0ab3c27326c0cdf8a3bcc63df10fd6cd12219/server/scripts/g-insurance-guardian-migration-acceptance.mjs) · [API与并发夹具](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/d3e0ab3c27326c0cdf8a3bcc63df10fd6cd12219/server/scripts/step4-acceptance.mjs)

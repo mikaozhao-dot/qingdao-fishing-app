@@ -1866,7 +1866,8 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
           return { error: [409, '订单所属班次已变化，请刷新后重试'] };
         }
         const prior = await client.query(
-          `SELECT child_passenger_id,guardian_passenger_id,refund_fen,departure_cancelled
+          `SELECT child_passenger_id,guardian_passenger_id,refund_fen,departure_cancelled,
+                  departure_outcome_known
            FROM insurance_guardian_exit_decisions
            WHERE order_id=$1 AND request_key=$2`, [orderId, requestKey],
         );
@@ -1882,7 +1883,8 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
             departureId: order.rows[0].departure_id,
             waitlistEligible: false,
             releasedHolds: [],
-            departureCancelled: prior.rows[0].departure_cancelled,
+            departureCancelled: prior.rows[0].departure_outcome_known
+              ? prior.rows[0].departure_cancelled : null,
           };
         }
         const priorChildDecision = await client.query(
@@ -1936,8 +1938,8 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         await client.query(
           `INSERT INTO insurance_guardian_exit_decisions
              (order_id,child_passenger_id,guardian_passenger_id,request_key,relationship_confirmed,
-              refund_fen,departure_cancelled)
-           VALUES ($1,$2,$3,$4,true,$5,$6)`,
+              refund_fen,departure_cancelled,departure_outcome_known)
+           VALUES ($1,$2,$3,$4,true,$5,$6,true)`,
           [orderId, childPassengerId, guardianPassengerId, requestKey,
             cancellation.ticketRefundFen, tripResult.departureCancelled],
         );

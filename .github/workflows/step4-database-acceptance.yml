@@ -65,6 +65,9 @@ jobs:
       - name: Run Step 4 database acceptance
         working-directory: server
         run: npm run smoke:step4
+      - name: Run G guardian migration upgrade acceptance
+        working-directory: server
+        run: npm run smoke:g-guardian-migration
       - name: Run Step 5 slice 1 database acceptance
         working-directory: server
         run: npm run smoke:step5

@@ -1648,8 +1648,7 @@ async function main() {
   let cancelledOrderRaceLockCommitted = false;
   try {
     check(await waitForLockedQuery('SELECT status FROM departures WHERE id=$1 FOR UPDATE'), true,
-      'insurance verification blocks behind the departure cancellation lock');
-    await cancelledOrderRaceLock.query("UPDATE departures SET status='cancelled' WHERE id=$1", [cancelledOrderRace.id]);
+      'insurance verification blocks behind the confirmed departure row lock');
     await cancelledOrderRaceLock.query(
       "UPDATE booking_orders SET status='cancelled',ticket_refunded_fen=seat_fee_fen,"
         + "cancelled_refund_fen=total_amount_fen WHERE id=$1",
@@ -1671,7 +1670,9 @@ async function main() {
   }
   const staleInsuranceResult = await staleInsuranceRequest;
   check(staleInsuranceResult.status, 409,
-    'insurance verification rereads the cancelled order after the departure lock');
+    'insurance verification rereads the cancelled order after the confirmed departure lock');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [cancelledOrderRace.id])).status,
+    'confirmed', 'the race fixture keeps the departure active so only the order state can reject the request');
   check((await scalar('SELECT status FROM passenger_insurance_coverages WHERE passenger_id=$1',
     [cancelledOrderRacePassenger.id])).status, 'effective',
   'a stale insurance request cannot modify coverage after the order is cancelled');
@@ -1894,6 +1895,134 @@ async function main() {
     [guardianOrder.orderId])).count, 1, 'a conflicting guardian choice does not add a decision');
   check((await scalar('SELECT count(*)::integer AS count FROM refund_obligations WHERE order_id=$1',
     [guardianOrder.orderId])).count, 3, 'a conflicting guardian choice creates no additional refund');
+
+  const guardianConflictDeparture = await makeConfirmedDeparture(captain.id, boatId);
+  await pool.query('UPDATE departures SET minimum_sailing_total_fen=8000 WHERE id=$1',
+    [guardianConflictDeparture.id]);
+  const guardianConflictSeats = await pool.query(
+    `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
+     VALUES ($1,2,5000,'starboard','mid','booked'),($1,3,5000,'port','stern','booked'),
+       ($1,4,5000,'starboard','stern','booked') RETURNING id,seat_number,price_fen`,
+    [guardianConflictDeparture.id],
+  );
+  const guardianConflictSeatsByNumber = [guardianConflictDeparture.seat, ...guardianConflictSeats.rows]
+    .sort((left, right) => left.seat_number - right.seat_number);
+  const guardianConflictOrder = await makeMultiPassengerPaidOrder(
+    secondAngler.id, guardianConflictDeparture.id, guardianConflictSeatsByNumber,
+    [
+      { name: '冲突路径未成年乘客', identity: makeIdentityForBirthDate('20160801', '996') },
+      { name: '首位选择退出的家长', identity: makeIdentityForBirthDate('19850101', '997') },
+      { name: '仍在订单中的第二家长', identity: makeIdentityForBirthDate('19870101', '998') },
+      { name: '保持班次有效的同行', identity: makeIdentityForBirthDate('19900101', '999') },
+    ],
+  );
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await expect(
+      'POST', `/orders/${guardianConflictOrder.orderId}/passengers/${guardianConflictOrder.passengerIds[0]}/insurance/sandbox`,
+      secondAngler.token, {
+        status: 'failed', failureReason: 'insurer_rejected', attemptKey: `guardian-conflict-rejection-${attempt}`,
+      },
+    );
+  }
+  const firstGuardianDecision = await expect(
+    'POST', `/orders/${guardianConflictOrder.orderId}/passengers/${guardianConflictOrder.passengerIds[0]}/insurance/guardian-exit/sandbox`,
+    secondAngler.token, {
+      guardianPassengerId: guardianConflictOrder.passengerIds[1],
+      requestKey: 'guardian-conflict-first-guardian', relationshipConfirmed: true,
+    },
+  );
+  check(firstGuardianDecision.departureCancelled, false,
+    'the first guardian exit keeps enough other paid passengers to preserve the confirmed departure');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [guardianConflictOrder.orderId])).status,
+    'paid', 'the order remains paid while the second guardian and another passenger stay active');
+  check((await scalar('SELECT booking_status FROM order_passengers WHERE id=$1',
+    [guardianConflictOrder.passengerIds[2]])).booking_status, 'active',
+  'the second guardian remains active before the conflicting choice');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [guardianConflictDeparture.id])).status,
+    'confirmed', 'the conflict fixture keeps the departure confirmed');
+  const refundsBeforeGuardianConflict = (await scalar(
+    `SELECT COALESCE(SUM(amount_fen),0)::integer AS amount FROM refund_obligations WHERE order_id=$1`,
+    [guardianConflictOrder.orderId],
+  )).amount;
+  const secondGuardianConflict = await request(
+    'POST', `/orders/${guardianConflictOrder.orderId}/passengers/${guardianConflictOrder.passengerIds[0]}/insurance/guardian-exit/sandbox`,
+    secondAngler.token, {
+      guardianPassengerId: guardianConflictOrder.passengerIds[2],
+      requestKey: 'guardian-conflict-second-guardian', relationshipConfirmed: true,
+    },
+  );
+  check(secondGuardianConflict.status, 409,
+    'a different active guardian cannot add a second decision for the same child on a still-valid trip');
+  check((await scalar('SELECT count(*)::integer AS count FROM insurance_guardian_exit_decisions WHERE order_id=$1',
+    [guardianConflictOrder.orderId])).count, 1,
+  'the active-trip conflict path retains only the first guardian decision');
+  check((await scalar('SELECT booking_status FROM order_passengers WHERE id=$1',
+    [guardianConflictOrder.passengerIds[2]])).booking_status, 'active',
+  'the rejected second guardian choice leaves that guardian active');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [guardianConflictOrder.orderId])).status,
+    'paid', 'the rejected second guardian choice leaves the order paid');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [guardianConflictDeparture.id])).status,
+    'confirmed', 'the rejected second guardian choice leaves the departure confirmed');
+  check((await scalar(
+    `SELECT COALESCE(SUM(amount_fen),0)::integer AS amount FROM refund_obligations WHERE order_id=$1`,
+    [guardianConflictOrder.orderId],
+  )).amount, refundsBeforeGuardianConflict,
+  'the rejected second guardian choice adds no refund obligation');
+
+  const legacyGuardianDeparture = await makeConfirmedDeparture(captain.id, boatId);
+  const legacyGuardianSeats = await pool.query(
+    `INSERT INTO seat_inventory (departure_id,seat_number,price_fen,seat_side,seat_section,status)
+     VALUES ($1,2,5000,'starboard','mid','booked') RETURNING id,seat_number,price_fen`,
+    [legacyGuardianDeparture.id],
+  );
+  const legacyGuardianOrder = await makeMultiPassengerPaidOrder(
+    secondAngler.id, legacyGuardianDeparture.id, [legacyGuardianDeparture.seat, legacyGuardianSeats.rows[0]],
+    [
+      { name: '历史记录孩子', identity: makeIdentityForBirthDate('20160801', '981') },
+      { name: '历史记录家长', identity: makeIdentityForBirthDate('19850101', '982') },
+    ],
+  );
+  const legacyGuardianRequestKey = 'legacy-guardian-exit-replay';
+  const legacyGuardianRefundRequestKey = `insurance-guardian-exit:${legacyGuardianOrder.passengerIds[1]}`;
+  await pool.query(
+    `UPDATE order_passengers SET booking_status='insurance_rejected'
+     WHERE id=$1`, [legacyGuardianOrder.passengerIds[0]],
+  );
+  await pool.query(
+    `INSERT INTO insurance_guardian_exit_decisions
+       (order_id,child_passenger_id,guardian_passenger_id,request_key,relationship_confirmed,
+        refund_fen,departure_cancelled,departure_outcome_known)
+     VALUES ($1,$2,$3,$4,true,0,false,false)`,
+    [legacyGuardianOrder.orderId, legacyGuardianOrder.passengerIds[0],
+      legacyGuardianOrder.passengerIds[1], legacyGuardianRequestKey],
+  );
+  await pool.query(
+    `INSERT INTO refund_obligations
+       (order_id,passenger_id,amount_fen,reason,status,request_key)
+     VALUES ($1,$2,5000,'insurance_failure','sandbox_succeeded',$3)`,
+    [legacyGuardianOrder.orderId, legacyGuardianOrder.passengerIds[1], legacyGuardianRefundRequestKey],
+  );
+  await pool.query(await readFile(
+    new URL('../migrations/028_g_insurance_guardian_legacy_replay_backfill.sql', import.meta.url), 'utf8',
+  ));
+  check((await scalar('SELECT refund_fen FROM insurance_guardian_exit_decisions WHERE order_id=$1',
+    [legacyGuardianOrder.orderId])).refund_fen, 5000,
+  'migration 028 backfills the original guardian refund from its linked legacy obligation');
+  const legacyGuardianReplay = await expect(
+    'POST', `/orders/${legacyGuardianOrder.orderId}/passengers/${legacyGuardianOrder.passengerIds[0]}/insurance/guardian-exit/sandbox`,
+    secondAngler.token, {
+      guardianPassengerId: legacyGuardianOrder.passengerIds[1], requestKey: legacyGuardianRequestKey,
+      relationshipConfirmed: true,
+    },
+  );
+  check(legacyGuardianReplay.idempotentReplay, true,
+    'a legacy guardian exit replays through the API after its refund backfill');
+  check(legacyGuardianReplay.ticketRefundFen, 5000,
+    'legacy replay returns the historical refund amount instead of migration 027 zero');
+  check(legacyGuardianReplay.departureCancelled, null,
+    'legacy replay reports an unknown historical departure outcome as unknown');
+  check((await scalar('SELECT count(*)::integer AS count FROM refund_obligations WHERE order_id=$1',
+    [legacyGuardianOrder.orderId])).count, 1, 'legacy guardian replay does not add a second refund');
 
   const insuranceExitDeparture = await makeConfirmedDeparture(captain.id, boatId);
   await pool.query(

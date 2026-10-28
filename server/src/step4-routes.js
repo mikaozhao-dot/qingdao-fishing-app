@@ -103,6 +103,52 @@ export async function loadFormationAccounts(client, departureId) {
   };
 }
 
+/** The Stage 3 residual-seat window is open only after B1 is absent or terminal. */
+export async function isResidualSalesOpen(db, departureId, now = new Date(), enabled = true) {
+  if (!enabled) return false;
+  const result = await db.query(
+    `SELECT d.status,d.departure_at,s.outcome,
+       EXISTS (SELECT 1 FROM departure_supplement_rounds r
+         WHERE r.departure_id=d.id AND r.status IN ('collecting_consent','collecting_payment')) AS b1_active
+     FROM departures d LEFT JOIN departure_formation_snapshots s ON s.departure_id=d.id
+     WHERE d.id=$1`, [departureId],
+  );
+  if (!result.rowCount) return false;
+  const row = result.rows[0];
+  return row.status === 'handling_shortfall' && row.outcome === 'shortfall'
+    && new Date(row.departure_at) > new Date(now) && !row.b1_active;
+}
+
+export async function confirmResidualDepartureIfMet(client, departureId, now = new Date(), enabled = true) {
+  if (!await isResidualSalesOpen(client, departureId, now, enabled)) return { status: 'unchanged' };
+  const accounts = await loadFormationAccounts(client, departureId);
+  if (!accounts?.platform.meetsThreshold) {
+    return { status: 'handling_shortfall', remainingFen: accounts?.platform.remainingFen ?? null };
+  }
+  const updated = await client.query(
+    `UPDATE departures SET status='confirmed',updated_at=now()
+     WHERE id=$1 AND status='handling_shortfall' RETURNING id`, [departureId],
+  );
+  return { status: updated.rowCount ? 'confirmed' : 'unchanged',
+    platformVerifiableFen: accounts.platform.verifiableTotalFen,
+    thresholdFen: accounts.thresholdFen };
+}
+
+async function residualSalesAlreadyStarted(client, departureId, now) {
+  const result = await client.query(
+    `SELECT s.checked_at,
+       EXISTS (SELECT 1 FROM booking_orders o
+         WHERE o.departure_id=d.id AND o.created_at>s.checked_at) AS has_residual_order,
+       EXISTS (SELECT 1 FROM seat_holds h
+         WHERE h.departure_id=d.id AND h.created_at>s.checked_at
+           AND h.status='active' AND h.expires_at>$2) AS has_residual_hold
+     FROM departures d JOIN departure_formation_snapshots s ON s.departure_id=d.id
+     WHERE d.id=$1`, [departureId, now],
+  );
+  return result.rowCount > 0
+    && (result.rows[0].has_residual_order || result.rows[0].has_residual_hold);
+}
+
 export function refundRetryStatus(attemptNumber, succeeded, maxAttempts = 3) {
   if (succeeded) return 'sandbox_succeeded';
   return attemptNumber >= maxAttempts ? 'manual_required' : 'pending';
@@ -546,12 +592,148 @@ async function markFormationOverdue(client, departureId) {
   );
 }
 
+async function closeShortfallDeparture(client, departureId, asOf) {
+  const result = await client.query(
+    `SELECT d.status,d.departure_at,s.outcome,
+       EXISTS (SELECT 1 FROM departure_supplement_rounds r
+         WHERE r.departure_id=d.id AND r.status IN ('collecting_consent','collecting_payment')) AS b1_active
+     FROM departures d JOIN departure_formation_snapshots s ON s.departure_id=d.id
+     WHERE d.id=$1 FOR UPDATE OF d,s`, [departureId],
+  );
+  if (!result.rowCount || result.rows[0].status !== 'handling_shortfall'
+      || result.rows[0].outcome !== 'shortfall'
+      || new Date(result.rows[0].departure_at) > new Date(asOf)) return { status: 'not_due' };
+  if (result.rows[0].b1_active) return { status: 'b1_active' };
+
+  const accounts = await loadFormationAccounts(client, departureId);
+  if (accounts.platform.meetsThreshold) {
+    await client.query(
+      `UPDATE departures SET status='confirmed',updated_at=now()
+       WHERE id=$1 AND status='handling_shortfall'`, [departureId],
+    );
+    return { status: 'confirmed' };
+  }
+
+  const cancelled = await client.query(
+    `UPDATE departures SET status='cancelled',updated_at=now()
+     WHERE id=$1 AND status='handling_shortfall' RETURNING id`, [departureId],
+  );
+  if (!cancelled.rowCount) return { status: 'already_finalized' };
+
+  const paidOrders = await client.query(
+    `SELECT id,buyer_user_id,seat_fee_fen,discount_fen,platform_fee_fen,ticket_refunded_fen
+     FROM booking_orders WHERE departure_id=$1 AND status='paid' ORDER BY id FOR UPDATE`,
+    [departureId],
+  );
+  for (const order of paidOrders.rows) {
+    const ticketPrincipalRemaining = Number(order.seat_fee_fen)
+      - Number(order.discount_fen) - Number(order.ticket_refunded_fen ?? 0);
+    if (!Number.isSafeInteger(ticketPrincipalRemaining) || ticketPrincipalRemaining < 0) {
+      throw new Error('Shortfall departure refund found an invalid remaining ticket principal.');
+    }
+    const refundFen = ticketPrincipalRemaining + Number(order.platform_fee_fen);
+    if (!Number.isSafeInteger(refundFen) || refundFen < 0 || refundFen > 2_000_000_000) {
+      throw new Error('Shortfall departure refund amount is outside the supported range.');
+    }
+    await client.query(
+      `UPDATE order_passengers SET booking_status='departure_cancelled',
+         cancellation_reason='formation_shortfall_auto_cancel',cancelled_at=$2
+       WHERE order_id=$1 AND booking_status='active'`, [order.id, asOf],
+    );
+    await client.query(
+      `UPDATE booking_order_seats SET status='released'
+       WHERE order_id=$1 AND status='paid'`, [order.id],
+    );
+    await client.query(
+      `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,$2),
+         cancelled_refund_fen=COALESCE(cancelled_refund_fen,0)+$3,
+         ticket_refunded_fen=ticket_refunded_fen+$4,cancellation_penalty_fen=0,updated_at=now()
+       WHERE id=$1 AND status='paid'`, [order.id, asOf, refundFen, ticketPrincipalRemaining],
+    );
+    if (refundFen > 0) {
+      await client.query(
+        `INSERT INTO refund_obligations
+           (order_id,payment_transaction_id,amount_fen,reason,status,request_key)
+         VALUES ($1,
+           (SELECT id FROM payment_transactions
+            WHERE order_id=$1 AND purpose='booking' AND status='succeeded'
+            ORDER BY completed_at DESC NULLS LAST,id DESC LIMIT 1),
+           $2,'departure_shortfall','pending',$3)
+         ON CONFLICT (request_key) DO NOTHING`,
+        [order.id, refundFen, `departure-shortfall:${departureId}:${order.id}`],
+      );
+    }
+    await syncPromotionForUser(client, order.buyer_user_id);
+  }
+
+  await client.query(
+    `UPDATE order_passengers op SET booking_status='departure_cancelled',
+       cancellation_reason='formation_shortfall_auto_cancel',cancelled_at=$2
+     FROM booking_orders o WHERE o.id=op.order_id AND o.departure_id=$1
+       AND o.status='pending_payment' AND op.booking_status='active'`, [departureId, asOf],
+  );
+  await client.query(
+    `UPDATE payment_transactions t SET status='timed_out',updated_at=now(),completed_at=COALESCE(completed_at,now())
+     FROM booking_orders o WHERE o.id=t.order_id AND o.departure_id=$1
+       AND o.status='pending_payment' AND t.purpose='booking' AND t.status='pending'`, [departureId],
+  );
+  await client.query(
+    `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,$2),updated_at=now()
+     WHERE departure_id=$1 AND status='pending_payment'`, [departureId, asOf],
+  );
+  await client.query(
+    `UPDATE seat_hold_items SET status='released'
+     WHERE hold_id IN (SELECT id FROM seat_holds WHERE departure_id=$1) AND status='active'`,
+    [departureId],
+  );
+  await client.query(
+    `UPDATE seat_holds SET status='released',released_at=COALESCE(released_at,$2)
+     WHERE departure_id=$1 AND status='active'`, [departureId, asOf],
+  );
+  await client.query(
+    `UPDATE seat_inventory SET status='available',hold_id=NULL,hold_expires_at=NULL,
+       waitlist_released_at=NULL,updated_at=now()
+     WHERE departure_id=$1 AND status IN ('held','booked')`, [departureId],
+  );
+  await client.query(
+    `UPDATE departure_waitlist_entries SET status='closed',updated_at=now()
+     WHERE departure_id=$1 AND status IN ('waiting','authorized','converted')`, [departureId],
+  );
+  return { status: 'cancelled', refundedOrders: paidOrders.rowCount };
+}
+
+export async function processShortfallDepartureClosures(
+  pool, asOf = new Date(), onError = () => {}, { sandboxEnabled = false } = {},
+) {
+  if (!pool || !sandboxEnabled) return { checked: 0, confirmed: 0, cancelled: 0, deferred: 0 };
+  const due = await pool.query(
+    `SELECT d.id FROM departures d
+     JOIN departure_formation_snapshots s ON s.departure_id=d.id AND s.outcome='shortfall'
+     WHERE d.status='handling_shortfall' AND d.departure_at<=$1
+     ORDER BY d.departure_at,d.id LIMIT 100`, [asOf],
+  );
+  const counts = { checked: 0, confirmed: 0, cancelled: 0, deferred: 0 };
+  for (const candidate of due.rows) {
+    try {
+      const outcome = await withTransaction(pool, (client) =>
+        closeShortfallDeparture(client, candidate.id, asOf));
+      if (outcome.status === 'b1_active') counts.deferred += 1;
+      else if (outcome.status === 'confirmed') { counts.checked += 1; counts.confirmed += 1; }
+      else if (outcome.status === 'cancelled') { counts.checked += 1; counts.cancelled += 1; }
+    } catch (error) {
+      onError(error);
+    }
+  }
+  return counts;
+}
+
 /** Capture the approved T-1 18:00 Asia/Shanghai checkpoint once per departure. */
 export async function processFormationChecks(pool, asOf = new Date(), onError = () => {},
-  { redis = null, clockNow = null } = {}) {
+  { redis = null, clockNow = null, sandboxEnabled = false } = {}) {
   if (!pool) return { checked: 0, deferred: 0, overdue: 0 };
   await processWaitlistCloseouts(pool, asOf, redis, clockNow);
   await processSupplementDeadlines(pool, asOf);
+  await processShortfallDepartureClosures(pool, asOf, onError, { sandboxEnabled });
   await processSandboxRefundObligations(pool);
   const due = await pool.query(
     `SELECT d.id FROM departures d
@@ -854,6 +1036,9 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
             }, idempotentReplay: true };
           }
           return { error: [409, '本航次的一轮补差已结束，不能发起第二轮'] };
+        }
+        if (await residualSalesAlreadyStarted(client, departure.id, now.rows[0].now)) {
+          return { error: [409, '包余位销售已开始，不能再启动 B1 补差轮'] };
         }
         const snapshot = await client.query(
           `SELECT threshold_fen,platform_ticket_net_fen,penalty_pool_fen,outcome
@@ -1477,7 +1662,8 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       }).catch((error) => app.log.error({ err: error }, 'Step 4 checklist worker failed'));
       processFormationChecks(pool, new Date(), (error) => {
         app.log.error({ err: error }, 'Step 4 formation check failed');
-      }, { redis, clockNow }).catch((error) => app.log.error({ err: error }, 'Step 4 formation worker failed'));
+      }, { redis, clockNow, sandboxEnabled: config.nodeEnv !== 'production' })
+        .catch((error) => app.log.error({ err: error }, 'Step 4 formation worker failed'));
     }, 60_000);
     interval.unref?.();
     app.addHook('onClose', async () => clearInterval(interval));

@@ -4,6 +4,8 @@ import { syncPromotionForUser } from './promotion-service.js';
 import { createSandboxInsuranceAdapter, createSandboxPaymentAdapter } from './step3-adapters.js';
 import {
   closeSupplementRoundsForInsuranceGroupFailure,
+  confirmResidualDepartureIfMet,
+  isResidualSalesOpen,
   loadFormationAccounts,
   settleSupplementPayment,
 } from './step4-routes.js';
@@ -228,17 +230,24 @@ async function lockDepartureForInsuranceChange(client, departureId) {
   return { status: result.rows[0].status };
 }
 
-function bookingWindowOpen(departure, now) {
+function bookingWindowOpen(departure, now, residualSalesAllowed = false) {
+  if (departure?.status === 'handling_shortfall') {
+    return residualSalesAllowed && new Date(departure.departure_at) > new Date(now);
+  }
   return departure?.status === 'open'
     && new Date(departure.departure_at) > new Date(now)
     && new Date(departure.booking_deadline) > new Date(now)
     && new Date(departure.confirmation_at) > new Date(now);
 }
 
-function orderWindowOpen(departure, waitlistEntry, hold, now) {
+function orderWindowOpen(departure, waitlistEntry, hold, now, residualSalesAllowed = false) {
   if (new Date(hold.expires_at) <= new Date(now)
-      || departure?.status !== 'open' || new Date(departure.departure_at) <= new Date(now)) return false;
-  if (!hold.waitlist_entry_id) return bookingWindowOpen(departure, now);
+      || !['open','handling_shortfall'].includes(departure?.status)
+      || new Date(departure.departure_at) <= new Date(now)) return false;
+  if (departure?.status === 'handling_shortfall') {
+    return !hold.waitlist_entry_id && bookingWindowOpen(departure, now, residualSalesAllowed);
+  }
+  if (!hold.waitlist_entry_id) return bookingWindowOpen(departure, now, residualSalesAllowed);
   return waitlistEntry?.status === 'authorized' && waitlistEntry.accepted_at
     && new Date(waitlistEntry.authorization_expires_at) > new Date(now)
     && !departure.waitlist_window_closed_at && new Date(departure.closeout_at) > new Date(now);
@@ -518,6 +527,42 @@ async function loadOrder(pool, orderId, userId, security) {
   };
 }
 
+async function loadShortfallReplacementActivities(pool, orderId, userId) {
+  const cancelled = await pool.query(
+    `SELECT d.departure_at,d.marina_code
+     FROM booking_orders o JOIN departures d ON d.id=o.departure_id
+     WHERE o.id=$1 AND o.buyer_user_id=$2 AND o.status='cancelled' AND d.status='cancelled'
+       AND EXISTS (SELECT 1 FROM order_passengers op
+         WHERE op.order_id=o.id AND op.cancellation_reason='formation_shortfall_auto_cancel')`,
+    [orderId, userId],
+  );
+  if (!cancelled.rowCount) return null;
+  const result = await pool.query(
+    `SELECT d.id,d.departure_at,d.meeting_at,d.return_at,d.marina_code,b.name AS boat_name,
+       COUNT(s.id) FILTER (WHERE s.sale_channel='platform' AND s.status='available')::integer
+         AS available_seat_count
+     FROM departures d JOIN boats b ON b.id=d.boat_id
+     LEFT JOIN seat_inventory s ON s.departure_id=d.id
+     WHERE d.status='open' AND d.departure_at>now() AND d.booking_deadline>now()
+       AND d.marina_code=$1
+       AND (d.departure_at AT TIME ZONE 'Asia/Shanghai')::date =
+           ($2::timestamptz AT TIME ZONE 'Asia/Shanghai')::date
+     GROUP BY d.id,b.name
+     HAVING COUNT(s.id) FILTER (WHERE s.sale_channel='platform' AND s.status='available') > 0
+     ORDER BY ABS(EXTRACT(EPOCH FROM (d.departure_at-$2::timestamptz))),d.id
+     LIMIT 5`, [cancelled.rows[0].marina_code, cancelled.rows[0].departure_at],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    boatName: row.boat_name,
+    departureAt: row.departure_at,
+    meetingAt: row.meeting_at,
+    returnAt: row.return_at,
+    marinaCode: row.marina_code,
+    availableSeatCount: Number(row.available_seat_count),
+  }));
+}
+
 function validPassengers(value, seatIds) {
   if (!Array.isArray(value) || value.length !== seatIds.length) return { error: '乘船人数量必须与选中座位一致' };
   const passengers = [];
@@ -539,7 +584,8 @@ function validPassengers(value, seatIds) {
   return { value: passengers };
 }
 
-async function handlePaymentEvent({ pool, redis, adapter, event, signature, log, clockNow = null }) {
+async function handlePaymentEvent({ pool, redis, adapter, event, signature, log, clockNow = null,
+  residualSalesEnabled = false }) {
   if (!adapter.verifyCallback(event, signature)) return { statusCode: 401, body: { error: '支付回调签名无效' } };
   if (!validUuid(event.eventId) || !validUuid(event.orderId)
       || typeof event.transactionReference !== 'string'
@@ -651,6 +697,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
     const lateRefundRequestKey = order.waitlist_entry_id
       ? `late-waitlist:${payment.id}` : `late-booking:${payment.id}`;
     let timedOutWaitlistCallbackRestored = false;
+    let residualDepartureStatus = null;
     async function callbackMatchesActiveHold() {
       const deadline = order.authorization_expires_at ?? order.hold_expires_at;
       const receivedAt = await readStep3Clock(client, clockNow);
@@ -838,11 +885,18 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
         `UPDATE seat_holds SET status='consumed',released_at=now() WHERE id=$1`,
         [order.hold_id],
       );
+      const formation = await confirmResidualDepartureIfMet(
+        client, departureId, await readStep3Clock(client, clockNow), residualSalesEnabled,
+      );
+      if (formation.status !== 'unchanged') residualDepartureStatus = formation.status;
     } else {
       releasedHold = { id: order.hold_id, seatIds: await releaseHoldInTransaction(client, order.hold_id, 'released') };
     }
     await client.query('COMMIT');
-    responseBody = { paymentStatus: event.outcome === 'success' ? 'succeeded' : event.outcome === 'timeout' ? 'timed_out' : 'failed' };
+    responseBody = {
+      paymentStatus: event.outcome === 'success' ? 'succeeded' : event.outcome === 'timeout' ? 'timed_out' : 'failed',
+      ...(residualDepartureStatus ? { departureStatus: residualDepartureStatus } : {}),
+    };
     }
     }
   } catch (error) {
@@ -888,9 +942,15 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     try {
       await expireHolds(pool, redis, request.params.id, clockNow);
       const departure = await pool.query(
-        `SELECT id,seat_template_count,seat_layout_snapshot FROM departures WHERE id=$1 AND status='open' AND departure_at>now()
-           AND booking_deadline>now() AND ${formationCutoffOpenSql}`,
-        [request.params.id],
+        `SELECT d.id,d.status,d.seat_template_count,d.seat_layout_snapshot
+         FROM departures d LEFT JOIN departure_formation_snapshots s ON s.departure_id=d.id
+         WHERE d.id=$1 AND d.departure_at>now() AND (
+           (d.status='open' AND d.booking_deadline>now() AND ${formationCutoffOpenSql})
+           OR (d.status='handling_shortfall' AND $2::boolean AND s.outcome='shortfall'
+             AND NOT EXISTS (SELECT 1 FROM departure_supplement_rounds r
+               WHERE r.departure_id=d.id AND r.status IN ('collecting_consent','collecting_payment')))
+         )`,
+        [request.params.id, config.nodeEnv !== 'production'],
       );
       if (!departure.rowCount) return sendError(reply, 404, '活动不存在或已截止报名');
       const result = await pool.query(
@@ -920,6 +980,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         : [];
       return {
         expiresInSeconds: 600,
+        salesMode: departure.rows[0].status === 'handling_shortfall' ? 'residual' : 'standard',
         seatCount: Number(departure.rows[0].seat_template_count),
         seatLayout,
         seats: result.rows.map((row) => serializeSeat(row, request.user.id)),
@@ -958,9 +1019,14 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       );
       const departure = departureResult.rows[0];
       const lockedAt = await readStep3Clock(client, clockNow);
-      if (!bookingWindowOpen(departure, lockedAt)) {
+      const residualSalesAllowed = await isResidualSalesOpen(
+        client, request.params.id, lockedAt, config.nodeEnv !== 'production',
+      );
+      if (!bookingWindowOpen(departure, lockedAt, residualSalesAllowed)) {
         await client.query('ROLLBACK');
-        return sendError(reply, 404, '活动不存在或已截止报名');
+        return departure.status === 'handling_shortfall'
+          ? sendError(reply, 409, '当前 B1 补差仍在进行或余位销售窗口已关闭')
+          : sendError(reply, 404, '活动不存在或已截止报名');
       }
       const seats = await client.query(
         `SELECT s.id,s.seat_number,s.price_fen,s.is_premium,s.status,s.hold_id,
@@ -985,9 +1051,14 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         return sendError(reply, 409, '该座位正在按候补顺序授权，请刷新座位图');
       }
       const seatLockAt = await readStep3Clock(client, clockNow);
-      if (!bookingWindowOpen(departure, seatLockAt)) {
+      const residualSalesStillAllowed = await isResidualSalesOpen(
+        client, request.params.id, seatLockAt, config.nodeEnv !== 'production',
+      );
+      if (!bookingWindowOpen(departure, seatLockAt, residualSalesStillAllowed)) {
         await client.query('ROLLBACK');
-        return sendError(reply, 404, '活动不存在或已截止报名');
+        return departure.status === 'handling_shortfall'
+          ? sendError(reply, 409, '当前 B1 补差仍在进行或余位销售窗口已关闭')
+          : sendError(reply, 404, '活动不存在或已截止报名');
       }
       lockedSeatIds = seats.rows.map((seat) => seat.id);
       holdId = randomUUID();
@@ -1020,11 +1091,16 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       }
       redisSet = true;
       const commitAt = await readStep3Clock(client, clockNow);
-      if (!bookingWindowOpen(departure, commitAt)) {
+      const residualSalesAtCommit = await isResidualSalesOpen(
+        client, request.params.id, commitAt, config.nodeEnv !== 'production',
+      );
+      if (!bookingWindowOpen(departure, commitAt, residualSalesAtCommit)) {
         await client.query('ROLLBACK');
         await deleteHoldKeys(redis, holdId, lockedSeatIds).catch(() => {});
         redisSet = false;
-        return sendError(reply, 404, '活动不存在或已截止报名');
+        return departure.status === 'handling_shortfall'
+          ? sendError(reply, 409, '当前 B1 补差仍在进行或余位销售窗口已关闭')
+          : sendError(reply, 404, '活动不存在或已截止报名');
       }
       await client.query('COMMIT');
       return reply.code(201).send({
@@ -1102,7 +1178,10 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       const departure = departureResult.rows[0];
       const waitlistEntry = waitlistResult.rows[0] ?? null;
       const departureLockAt = await readStep3Clock(client, clockNow);
-      if (!orderWindowOpen(departure, waitlistEntry, hold, departureLockAt)) {
+      const residualSalesAllowed = await isResidualSalesOpen(
+        client, hold.departure_id, departureLockAt, config.nodeEnv !== 'production',
+      );
+      if (!orderWindowOpen(departure, waitlistEntry, hold, departureLockAt, residualSalesAllowed)) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '班次已停止报名，不能创建订单');
       }
@@ -1131,7 +1210,10 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         return sendError(reply, 409, '座位锁定服务已过期，请重新选位');
       }
       const orderCommitCheckAt = await readStep3Clock(client, clockNow);
-      if (!orderWindowOpen(departure, waitlistEntry, hold, orderCommitCheckAt)) {
+      const residualSalesAtCommit = await isResidualSalesOpen(
+        client, hold.departure_id, orderCommitCheckAt, config.nodeEnv !== 'production',
+      );
+      if (!orderWindowOpen(departure, waitlistEntry, hold, orderCommitCheckAt, residualSalesAtCommit)) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '班次已停止报名，不能创建订单');
       }
@@ -1232,7 +1314,10 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     if (!validUuid(request.params.id)) return sendError(reply, 400, '订单编号无效');
     const order = await loadOrder(pool, request.params.id, request.user.id, security);
     if (!order) return sendError(reply, 404, '订单不存在');
-    return { order };
+    const replacementActivities = await loadShortfallReplacementActivities(
+      pool, request.params.id, request.user.id,
+    );
+    return { order, ...(replacementActivities === null ? {} : { replacementActivities }) };
   });
 
   app.post('/orders/:id/payment-intents', { preHandler: requireUser }, async (request, reply) => {
@@ -1390,6 +1475,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         const result = await handlePaymentEvent({
           pool, redis, adapter: paymentAdapter, event: signed.event,
           signature: signed.signature, log: request.log, clockNow,
+          residualSalesEnabled: config.nodeEnv !== 'production',
         });
         return reply.code(result.statusCode).send(result.body);
       } catch (error) {
@@ -1421,6 +1507,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       const result = await handlePaymentEvent({
         pool, redis, adapter: paymentAdapter, event: signed.event,
         signature: signed.signature, log: request.log, clockNow,
+        residualSalesEnabled: config.nodeEnv !== 'production',
       });
       return reply.code(result.statusCode).send(result.body);
     } catch (error) {
@@ -1434,6 +1521,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       const result = await handlePaymentEvent({
         pool, redis, adapter: paymentAdapter, event: request.body,
         signature: String(request.headers['x-sandbox-signature'] ?? ''), log: request.log, clockNow,
+        residualSalesEnabled: config.nodeEnv !== 'production',
       });
       return reply.code(result.statusCode).send(result.body);
     } catch (error) {

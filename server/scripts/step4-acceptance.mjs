@@ -11,6 +11,7 @@ import {
   loadFormationAccounts,
   processConfirmedChecklists,
   processFormationChecks,
+  processShortfallDepartureClosures,
   processSupplementDeadlines,
   processSandboxRefundObligations,
 } from '../src/step4-routes.js';
@@ -416,7 +417,7 @@ async function makeSupplementFixture(captain, boatId, label) {
   const response = await expect('POST', `/captain/departures/${departureId}/supplement-rounds`,
     captain.token, { responseDeadlineAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }, 201);
   check(response.round.shortfallFen, 5000, `${label}: frozen one-seat shortfall is ¥50`);
-  return { departureId, user, orderId, round: response.round };
+  return { departureId, user, orderId, seatId: seat.id, round: response.round };
 }
 
 async function makeMultiSupplementFixture(captain, boatId, label, {
@@ -3271,6 +3272,196 @@ async function main() {
     'replayed ordinary late success remains idempotent');
 
   simulatedStep3Time = null;
+
+  const residualFixture = await makeSupplementFixture(
+    captain, quotaBoatId, 'B1 结束后包余位售票',
+  );
+  const residualSeat = await scalar(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel)
+     VALUES ($1,2,10000,'starboard','mid','available','platform')
+     RETURNING id,seat_number,price_fen`, [residualFixture.departureId],
+  );
+  const blockedSeats = await expect('GET', `/departures/${residualFixture.departureId}/seats`, angler.token, undefined, 404);
+  check(blockedSeats.error, '活动不存在或已截止报名', 'active B1 does not expose residual seats');
+  const activeB1Hold = await request('POST', `/departures/${residualFixture.departureId}/seat-holds`,
+    secondAngler.token, { seatIds: [residualSeat.id] });
+  check(activeB1Hold.status, 409, 'active B1 rejects Stage 3 seat holds');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [residualFixture.orderId])).status,
+    'paid', 'active B1 rejection leaves the original booking unchanged');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [residualSeat.id])).status,
+    'available', 'active B1 rejection leaves the remaining seat available');
+
+  const residualParticipant = residualFixture.round.participants[0];
+  await expect('POST', `/orders/${residualParticipant.orderId}/supplement-rounds/${residualFixture.round.id}/decision`,
+    residualFixture.user.token, { action: 'accept' });
+  const failedB1Intent = await expect('POST',
+    `/orders/${residualParticipant.orderId}/supplement-rounds/${residualFixture.round.id}/payment-intents`,
+    residualFixture.user.token, {}, 201);
+  await expect('POST',
+    `/orders/${residualParticipant.orderId}/supplement-rounds/${residualFixture.round.id}/sandbox-payment`,
+    residualFixture.user.token, { outcome: 'failure' });
+  check((await scalar('SELECT status FROM departure_supplement_rounds WHERE id=$1',
+    [residualFixture.round.id])).status, 'failed', 'failed B1 reaches a terminal state before Stage 3');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [residualFixture.orderId])).status,
+    'paid', 'failed accepted B1 leaves the original passenger aboard');
+  check((await scalar('SELECT status FROM payment_transactions WHERE provider_reference=$1',
+    [failedB1Intent.payment.reference])).status, 'failed', 'failed B1 sandbox payment is recorded');
+
+  const residualList = await expect('GET', '/departures', angler.token);
+  const residualListedDeparture = residualList.items.find((item) => item.id === residualFixture.departureId);
+  check(Boolean(residualListedDeparture), true, 'shortfall departure with a terminal B1 appears in the list');
+  check(residualListedDeparture.status, 'handling_shortfall', 'residual listing retains the shortfall state');
+  const residualSeatMap = await expect('GET', `/departures/${residualFixture.departureId}/seats`, secondAngler.token);
+  check(residualSeatMap.salesMode, 'residual', 'seat endpoint identifies the Stage 3 residual sales path');
+  check(residualSeatMap.seats.find((seat) => seat.id === residualSeat.id).status,
+    'available', 'the new buyer sees only the unsold seat as available');
+
+  const residualHoldAttempts = await Promise.all([
+    request('POST', `/departures/${residualFixture.departureId}/seat-holds`,
+      angler.token, { seatIds: [residualSeat.id] }),
+    request('POST', `/departures/${residualFixture.departureId}/seat-holds`,
+      secondAngler.token, { seatIds: [residualSeat.id] }),
+  ]);
+  check(residualHoldAttempts.map((attempt) => attempt.status).sort((left, right) => left - right),
+    [201, 409], 'concurrent Stage 3 requests cannot oversell one residual seat');
+  const residualWinnerIndex = residualHoldAttempts.findIndex((attempt) => attempt.status === 201);
+  const residualBuyer = residualWinnerIndex === 0 ? angler : secondAngler;
+  const residualHold = residualHoldAttempts[residualWinnerIndex].body;
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM seat_hold_items
+     WHERE seat_inventory_id=$1 AND status='active'`, [residualSeat.id],
+  )).count, 1, 'concurrent Stage 3 requests leave only one active hold');
+  const residualOrder = await expect('POST', '/orders', residualBuyer.token, {
+    holdId: residualHold.holdId,
+    idempotencyKey: 'residual-stage3-order-20261029',
+    passengers: [{
+      seatId: residualSeat.id,
+      fullName: '余位钓友',
+      identityNumber: makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0')),
+      phone: '13900009998',
+    }],
+  }, 201);
+  check(residualOrder.order.amount.totalFen, 10000, 'Stage 3 uses the frozen ordinary seat price');
+  const residualPayment = await expect('POST', `/orders/${residualOrder.order.id}/payment-intents`,
+    residualBuyer.token, {}, 201);
+  const residualSettlement = await expect('POST', `/orders/${residualOrder.order.id}/sandbox-payment`,
+    residualBuyer.token, { outcome: 'success' });
+  check(residualSettlement.paymentStatus, 'succeeded', 'Stage 3 purchase settles through sandbox payment');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [residualFixture.departureId])).status,
+    'confirmed', 'service confirms the trip only after the verified ticket net reaches the threshold');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [residualFixture.orderId])).status,
+    'paid', 'Stage 3 does not cancel the original passenger order');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [residualFixture.seatId])).status,
+    'booked', 'Stage 3 keeps the original passenger seat booked');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1',
+    [residualOrder.order.id])).status, 'paid', 'Stage 3 buyer is booked alongside the original passenger');
+  check((await loadFormationAccounts(pool, residualFixture.departureId)).platform.verifiableTotalFen,
+    54000, 'threshold check uses ticket net from both original and Stage 3 orders');
+  check(residualPayment.payment.amountFen, 10000, 'sandbox payment is for the listed seat price only');
+
+  const todayInShanghai = shanghaiDateAfter(0);
+  const confirmationToday = new Date(`${todayInShanghai}T18:00:00+08:00`);
+  const closureDate = Date.now() < confirmationToday.getTime() ? todayInShanghai : shanghaiDateAfter(1);
+  const closureDepartureAt = new Date(`${closureDate}T20:00:00+08:00`);
+  const closureBookingDeadline = new Date(closureDepartureAt.getTime() - 30 * 60 * 1000);
+  const closureAt = new Date(formationConfirmationAt(closureDepartureAt).getTime() + 10 * 60 * 1000);
+  const closureDepartureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,waitlist_window_closed_at,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',$3::timestamptz,$3::timestamptz-interval '30 minutes',
+        $3::timestamptz+interval '7 hours','qd_coast','xiaogang',100000,50000,$4,'open',$5,
+        12,12,0,false) RETURNING id`,
+    [quotaBoatId, captain.id, closureDepartureAt.toISOString(), closureBookingDeadline.toISOString(), closureAt],
+  )).rows[0].id;
+  const closureSeat = await scalar(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel)
+     VALUES ($1,1,50000,'port','mid','booked','platform') RETURNING id,seat_number,price_fen`,
+    [closureDepartureId],
+  );
+  const closureUser = await makeUser('未成行全退钓友');
+  const closureOrderId = await makePaidOrder(closureUser.id, closureDepartureId, closureSeat);
+  const closureCheckpoint = await processFormationChecks(pool, closureAt);
+  check(closureCheckpoint.checked >= 1, true, 'shortfall fixture reaches its formation checkpoint');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [closureDepartureId])).status,
+    'handling_shortfall', 'shortfall fixture enters Stage 3 before its deadline');
+  await processFormationChecks(pool, closureDepartureAt, undefined, { sandboxEnabled: true });
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [closureDepartureId])).status,
+    'cancelled', 'failed Stage 3 transitions to the full-refund terminal state');
+  const alternativeDepartureAt = new Date(closureDepartureAt.getTime() + 60 * 60 * 1000);
+  const alternativeDepartureId = (await pool.query(
+    `INSERT INTO departures
+       (boat_id,captain_user_id,trip_type,departure_at,meeting_at,return_at,target_area_code,marina_code,
+        minimum_sailing_total_fen,price_per_seat_fen,booking_deadline,status,
+        seat_template_count,platform_quota_seats,offline_quota_seats,manual_supply)
+     VALUES ($1,$2,'pro_fishing',$3::timestamptz,$3::timestamptz-interval '30 minutes',
+        $3::timestamptz+interval '7 hours','qd_coast','xiaogang',100000,50000,$4,'open',
+        12,12,0,false) RETURNING id`,
+    [quotaBoatId, captain.id, alternativeDepartureAt.toISOString(),
+      new Date(alternativeDepartureAt.getTime() - 30 * 60 * 1000).toISOString()],
+  )).rows[0].id;
+  await pool.query(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel)
+     VALUES ($1,1,50000,'port','mid','available','platform')`, [alternativeDepartureId],
+  );
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departures d
+     JOIN seat_inventory s ON s.departure_id=d.id
+     WHERE d.id=$1 AND d.status='open' AND d.departure_at>now() AND d.booking_deadline>now()
+       AND d.marina_code='xiaogang'
+       AND (d.departure_at AT TIME ZONE 'Asia/Shanghai')::date =
+           ($2::timestamptz AT TIME ZONE 'Asia/Shanghai')::date
+       AND s.sale_channel='platform' AND s.status='available'`,
+    [alternativeDepartureId, closureDepartureAt],
+  )).count, 1, 'replacement fixture is open, future, available, same marina and same Shanghai day');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [closureOrderId])).status,
+    'cancelled', 'all original paid orders are cancelled');
+  check((await scalar('SELECT cancellation_reason FROM order_passengers WHERE order_id=$1', [closureOrderId])).cancellation_reason,
+    'formation_shortfall_auto_cancel', 'shortfall cancellation is identified for replacement lookup');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM booking_orders o JOIN departures d ON d.id=o.departure_id
+     WHERE o.id=$1 AND o.buyer_user_id=$2 AND o.status='cancelled' AND d.status='cancelled'
+       AND EXISTS (SELECT 1 FROM order_passengers op
+         WHERE op.order_id=o.id AND op.cancellation_reason='formation_shortfall_auto_cancel')`,
+    [closureOrderId, closureUser.id],
+  )).count, 1, 'cancelled order matches the replacement lookup eligibility gate');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1',
+    [closureOrderId])).status, 'released', 'full cancellation releases the passenger seat record');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [closureSeat.id])).status,
+    'available', 'full cancellation releases the booked inventory');
+  check((await scalar(
+    `SELECT amount_fen,reason,status FROM refund_obligations WHERE order_id=$1`, [closureOrderId],
+  )).amount_fen, 50000, 'full departure refund returns the full paid ticket principal');
+  check((await scalar('SELECT reason FROM refund_obligations WHERE order_id=$1', [closureOrderId])).reason,
+    'departure_shortfall', 'refund obligation records the Stage 4 reason');
+  const repeatedClosure = await processShortfallDepartureClosures(
+    pool, closureDepartureAt, undefined, { sandboxEnabled: true },
+  );
+  check(repeatedClosure.cancelled, 0, 'replayed Stage 4 worker does not cancel or refund again');
+  check((await scalar('SELECT count(*)::integer AS count FROM refund_obligations WHERE order_id=$1',
+    [closureOrderId])).count, 1, 'idempotent closeout keeps one refund obligation');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM departures d JOIN boats b ON b.id=d.boat_id
+     LEFT JOIN seat_inventory s ON s.departure_id=d.id
+     WHERE d.id=$1 AND d.status='open' AND d.departure_at>now() AND d.booking_deadline>now()
+       AND d.marina_code='xiaogang'
+       AND (d.departure_at AT TIME ZONE 'Asia/Shanghai')::date =
+           ($2::timestamptz AT TIME ZONE 'Asia/Shanghai')::date
+     GROUP BY d.id,b.name
+     HAVING COUNT(s.id) FILTER (WHERE s.sale_channel='platform' AND s.status='available') > 0`,
+    [alternativeDepartureId, closureDepartureAt],
+  )).count, 1, 'replacement lookup returns the eligible same-day activity after closeout');
+  const closureOrder = await expect('GET', `/orders/${closureOrderId}`, closureUser.token);
+  check(closureOrder.replacementActivities?.map((activity) => activity.id) ?? null,
+    [alternativeDepartureId],
+    'cancelled order returns same-marina same-day replacement activities');
+  await processSandboxRefundObligations(pool);
+  check((await scalar('SELECT status FROM refund_obligations WHERE order_id=$1', [closureOrderId])).status,
+    'sandbox_succeeded', 'full refund is handled through the sandbox refund retry path');
 
   if (process.env.STEP4_SCREENSHOT_FIXTURE_PATH) {
     await createSupplementScreenshotFixture(

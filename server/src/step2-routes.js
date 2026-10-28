@@ -1,6 +1,7 @@
 import { createLocalObjectStorage } from './local-object-storage.js';
 import { createSecurity } from './security.js';
 import { step1Options } from './step1-routes.js';
+import { isResidualSalesOpen } from './step4-routes.js';
 import {
   BAIT_SUPPLIES,
   BAIT_TYPES,
@@ -481,7 +482,7 @@ function addCondition(conditions, values, sql, value) {
 }
 
 function buildDepartureFilters(query) {
-  const conditions = ["d.status='open'", 'd.departure_at > now()'];
+  const conditions = ['d.departure_at > now()'];
   const values = [];
   const invalid = (error) => ({ error });
   const dateFrom = query.dateFrom == null ? '' : String(query.dateFrom);
@@ -1088,8 +1089,18 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
     await updateEndedDepartures(pool);
     const filters = buildDepartureFilters(request.query ?? {});
     if (filters?.error) return sendError(reply, 400, filters.error);
+    const residualSalesSql = config.nodeEnv === 'production' ? 'FALSE' : `(
+      d.status='handling_shortfall' AND EXISTS (
+        SELECT 1 FROM departure_formation_snapshots fs
+        WHERE fs.departure_id=d.id AND fs.outcome='shortfall'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM departure_supplement_rounds sr
+        WHERE sr.departure_id=d.id AND sr.status IN ('collecting_consent','collecting_payment')
+      )
+    )`;
     const openResult = await pool.query(
       `${DEPARTURE_SELECT} WHERE ${filters.conditions.join(' AND ')}
+         AND (d.status='open' OR ${residualSalesSql})
        ORDER BY d.departure_at ASC LIMIT 100`,
       filters.values,
     );
@@ -1123,10 +1134,12 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
     await updateEndedDepartures(pool);
     const row = await loadDeparture(pool, request.params.id);
     const isPublished = row?.status === 'open' && new Date(row.departure_at) > new Date();
+    const isResidual = row?.status === 'handling_shortfall'
+      && await isResidualSalesOpen(pool, request.params.id, new Date(), config.nodeEnv !== 'production');
     const isLive = row?.status === 'in_progress' && row.live_session;
     const isCaptainTrip = row?.status === 'in_progress'
       && row.captain_user_id === request.user.id;
-    if (!row || (!isPublished && !isLive && !isCaptainTrip)) {
+    if (!row || (!isPublished && !isResidual && !isLive && !isCaptainTrip)) {
       return sendError(reply, 404, '活动不存在或已结束');
     }
     const [seats, rig] = await Promise.all([

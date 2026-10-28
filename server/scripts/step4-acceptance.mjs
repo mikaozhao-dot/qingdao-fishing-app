@@ -935,6 +935,11 @@ async function main() {
   if (seatFour.hold_id) {
     await pool.query("UPDATE seat_holds SET expires_at=now()-interval '1 second' WHERE id=$1", [seatFour.hold_id]);
     await expect('GET', '/departures/' + quotaDeparture.id + '/seats', angler.token);
+    check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [seatsBeforeTransfer.seats[3].id])).status,
+      'available', 'the expired hold winner releases the platform seat');
+  } else {
+    check(seatFour.hold_id, null, 'the transfer winner leaves no active hold on the seat');
+    check(seatFour.sale_channel, 'offline', 'the transfer winner moves the seat into the offline quota');
   }
 
   await pool.query("UPDATE departures SET booking_deadline=now()-interval '1 second' WHERE id=$1", [quotaDeparture.id]);

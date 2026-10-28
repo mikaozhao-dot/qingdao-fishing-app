@@ -3,7 +3,7 @@
 - 执行会话：fishingbooker拆解研究（Luna）
 - 当前仓库：`qingdao-fishing-app`，main；依据主仓命令 `docs/muse-to-luna-rea-teardown-session-reorder-2026-10-28.md`（`eb907aec`）。
 - 范围确认：本会话只负责 FishingBooker 客户端 REA 静态拆解。G 投保失败回修队列归 `luna开发` 会话；本会话不认领、不触碰、不评论其进度。
-- 当前状态：REA MCP 加载检查通过；按新令切换为 Google Play 官方来源获取。Play 商店已打开，但要求 Google 账号登录；2026-10-28 15:55（Asia/Shanghai）停在登录按钮前，APK 未取得、未安装或提取，尚未开始拆解。
+- 当前状态：REA MCP 加载检查通过；按新令切换为 Google Play 官方来源获取。创始人提供的截图显示 Google 服务器通信错误；按“重新打开”要求重启 Play 商店后，页面回到登录提示。2026-10-28 16:01（Asia/Shanghai）仍停在 “Sign in” 按钮前，APK 未取得、未安装或提取，尚未开始拆解。
 
 ## 1. REA 本次实际加载验证
 
@@ -30,7 +30,8 @@
 - 环境核对：Android SDK 位于 `/Users/mikao/Library/Android/sdk`；`adb` 37.0.1、Android Emulator 37.2.12 可用。此前仅有 Android 36 `google_apis` arm64 镜像，无 Play 商店镜像；未发现已连接的真机。
 - 按新令安装了官方 Android 36 Google Play arm64-v8a 系统镜像，并新建、启动独立 Pixel 6 AVD：`fishingbooker-play-api36`。未改动既有 AVD。
 - 通过 `market://details?id=com.fishingbookercaptains.android` 打开 Google Play。Play 显示 “Sign in to find the latest Android apps, games, movies, music, & more”，按钮为 “Sign in”；当前页为 `com.android.vending/com.google.android.finsky.unauthenticated.activity.UnauthenticatedMainActivity`。因此本路线必须先由创始人本人完成 Google 账号登录。
-- 请创始人在当前运行的 `fishingbooker-play-api36` 模拟器里亲自点击 Play 商店的 “Sign in” 并完成自己的 Google 账号登录；完成后告知本会话继续。不得把账号口令发到聊天，也不由执行方代填或保存凭据。执行方停在登录按钮前，不安装应用、不提取 APK。
+- 创始人提供的登录后截图出现：“Something went wrong / There was a problem communicating with Google servers. / Try again later.”。2026-10-28 16:00，本会话按“重新打开”要求对 `com.android.vending` 执行 force-stop 后重新打开 Captain 的 Play 商店链接；重新打开成功，页面回到上述 Google 登录提示。当前仍未认证。
+- 请创始人在当前运行的 `fishingbooker-play-api36` 模拟器里亲自点击 Play 商店的 “Sign in” 并完成自己的 Google 账号登录；若再次出现服务器通信错误，先由创始人处理登录问题并告知结果。不得把账号口令发到聊天，也不由执行方代填或保存凭据。本会话未输入凭据，停在登录按钮前，不安装应用、不提取 APK。
 - 若登录后 Play 显示地区不可用或找不到任一目标应用，按新令停止并回报，不切回镜像站路线。
 
 ## 4. 排期

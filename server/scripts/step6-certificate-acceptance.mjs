@@ -382,7 +382,7 @@ try {
     'frozen snapshot keeps all five rows when the certificate image summarizes them');
   check(created.body.certificate.snapshot.fishItems
     .filter((item) => item.fishCode === 'yellow_croaker')
-    .map((item) => item.source).sort(), ['本人记录', '本人补充'],
+    .map((item) => item.source).sort(), ['本人补充', '本人记录'],
   'same species remains two separate source rows in the frozen snapshot');
   check(created.body.certificate.snapshot.fishItems
     .filter((item) => item.source === '本人记录').length, 2,

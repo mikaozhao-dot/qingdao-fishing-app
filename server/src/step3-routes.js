@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { createSecurity, verifyChineseIdentityNumber } from './security.js';
 import { syncPromotionForUser } from './promotion-service.js';
 import { createSandboxInsuranceAdapter, createSandboxPaymentAdapter } from './step3-adapters.js';
-import { settleSupplementPayment } from './step4-routes.js';
+import {
+  closeSupplementRoundsForInsuranceGroupFailure,
+  loadFormationAccounts,
+  settleSupplementPayment,
+} from './step4-routes.js';
 import { registerStep3WaitlistRoutes } from './step3-waitlist-routes.js';
 import { configuredStep3Clock, readStep3Clock } from './step3-clock.js';
 import {
@@ -42,6 +46,175 @@ async function withTransaction(pool, operation) {
   } finally {
     client.release();
   }
+}
+
+function ticketPrincipalBySeat(seats, discountFen) {
+  const totalPrice = seats.reduce((sum, seat) => sum + Number(seat.price_fen), 0);
+  const discount = Number(discountFen);
+  if (!seats.length || !Number.isSafeInteger(totalPrice) || !Number.isSafeInteger(discount)
+      || totalPrice < 0 || discount < 0 || discount > totalPrice) {
+    throw new Error('Cannot allocate the order ticket principal to its seats.');
+  }
+  const totalPriceBigInt = BigInt(totalPrice);
+  const discountBigInt = BigInt(discount);
+  const allocations = seats.map((seat) => {
+    const numerator = discountBigInt * BigInt(Number(seat.price_fen));
+    return {
+      seatInventoryId: seat.seat_inventory_id,
+      seatNumber: Number(seat.seat_number),
+      priceFen: Number(seat.price_fen),
+      discountFen: totalPrice === 0 ? 0 : Number(numerator / totalPriceBigInt),
+      remainder: totalPrice === 0 ? 0n : numerator % totalPriceBigInt,
+    };
+  });
+  let remainder = discount - allocations.reduce((sum, seat) => sum + seat.discountFen, 0);
+  for (const seat of [...allocations].sort((left, right) =>
+    Number(right.remainder - left.remainder) || left.seatNumber - right.seatNumber)) {
+    if (!remainder) break;
+    seat.discountFen += 1;
+    remainder -= 1;
+  }
+  return new Map(allocations.map((seat) => [seat.seatInventoryId, seat.priceFen - seat.discountFen]));
+}
+
+function ageOnDate(identityNumber, asOf) {
+  if (!verifyChineseIdentityNumber(identityNumber)) return null;
+  const year = Number(identityNumber.slice(6, 10));
+  const month = Number(identityNumber.slice(10, 12));
+  const day = Number(identityNumber.slice(12, 14));
+  const localDate = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(asOf)).map((part) => [part.type, part.value]));
+  let age = Number(localDate.year) - year;
+  if (Number(localDate.month) < month
+      || (Number(localDate.month) === month && Number(localDate.day) < day)) age -= 1;
+  return age;
+}
+
+async function cancelInsurancePassenger(client, passenger, {
+  bookingStatus, cancellationReason, now, requestKey, waitlistEligible,
+}) {
+  const passengerId = passenger.passenger_id ?? passenger.id;
+  const orderResult = await client.query(
+    `SELECT id,departure_id,buyer_user_id,status,seat_fee_fen,discount_fen,
+            ticket_refunded_fen,cancelled_refund_fen
+     FROM booking_orders WHERE id=$1 FOR UPDATE`, [passenger.order_id],
+  );
+  const order = orderResult.rows[0];
+  if (!order || order.status !== 'paid') throw new Error('Insurance cancellation order is no longer paid.');
+  const seatResult = await client.query(
+    `SELECT os.seat_inventory_id,os.seat_number,os.price_fen,os.status,s.sale_channel
+     FROM booking_order_seats os JOIN seat_inventory s ON s.id=os.seat_inventory_id
+     WHERE os.order_id=$1 ORDER BY os.seat_number FOR UPDATE OF os,s`, [order.id],
+  );
+  const principalBySeat = ticketPrincipalBySeat(seatResult.rows, Number(order.discount_fen));
+  const ticketRefundFen = principalBySeat.get(passenger.seat_inventory_id);
+  if (ticketRefundFen === undefined) throw new Error('Passenger has no booked seat to release.');
+  const seat = seatResult.rows.find((row) => row.seat_inventory_id === passenger.seat_inventory_id);
+  if (seat.status !== 'paid') throw new Error('Passenger seat is no longer active.');
+  await client.query(
+    `UPDATE order_passengers SET booking_status=$2,cancellation_reason=$3,cancelled_at=$4
+     WHERE id=$1 AND booking_status='active'`,
+    [passengerId, bookingStatus, cancellationReason, now],
+  );
+  await client.query(
+    `UPDATE booking_order_seats SET status='released' WHERE order_id=$1 AND seat_inventory_id=$2 AND status='paid'`,
+    [order.id, passenger.seat_inventory_id],
+  );
+  const confirmation = await client.query(
+    `SELECT ${confirmationAtSql('d')} AS confirmation_at FROM departures d WHERE d.id=$1`,
+    [order.departure_id],
+  );
+  const releaseForWaitlist = waitlistEligible && seat.sale_channel === 'platform'
+    && new Date(now) < new Date(confirmation.rows[0].confirmation_at);
+  await client.query(
+    `UPDATE seat_inventory SET status='available',hold_id=NULL,hold_expires_at=NULL,
+       waitlist_released_at=CASE WHEN $2 THEN $3::timestamptz ELSE NULL::timestamptz END,updated_at=now()
+     WHERE id=$1 AND status='booked'`,
+    [passenger.seat_inventory_id, releaseForWaitlist, now],
+  );
+  if (seat.sale_channel === 'offline') {
+    await client.query(
+      `UPDATE departure_seat_quotas SET offline_state='open',updated_at=now()
+       WHERE departure_id=$1 AND seat_number=$2 AND sale_channel='offline'`,
+      [order.departure_id, seat.seat_number],
+    );
+  }
+  if (ticketRefundFen > 0) {
+    await client.query(
+      `INSERT INTO refund_obligations
+         (order_id,passenger_id,amount_fen,reason,status,request_key)
+       VALUES ($1,$2,$3,'insurance_failure','pending',$4)
+       ON CONFLICT (request_key) DO NOTHING`,
+      [order.id, passengerId, ticketRefundFen, requestKey],
+    );
+  }
+  const remainingSeats = await client.query(
+    `SELECT seat_inventory_id FROM booking_order_seats
+     WHERE order_id=$1 AND status='paid' ORDER BY seat_number LIMIT 1`, [order.id],
+  );
+  await client.query(
+    `UPDATE booking_orders SET status=CASE WHEN $2::boolean THEN 'paid' ELSE 'cancelled' END,
+       seat_inventory_id=COALESCE($3::uuid,seat_inventory_id),
+       ticket_refunded_fen=ticket_refunded_fen+$4,
+       cancelled_refund_fen=COALESCE(cancelled_refund_fen,0)+$4,
+       cancelled_at=CASE WHEN $2::boolean THEN cancelled_at ELSE COALESCE(cancelled_at,$5) END,
+       updated_at=now()
+     WHERE id=$1`,
+    [order.id, remainingSeats.rowCount > 0, remainingSeats.rows[0]?.seat_inventory_id ?? null,
+      ticketRefundFen, now],
+  );
+  await syncPromotionForUser(client, order.buyer_user_id);
+  return { ticketRefundFen, waitlistEligible: releaseForWaitlist };
+}
+
+async function cancelDepartureAfterInsuranceFailure(client, departureId, now) {
+  const accounts = await loadFormationAccounts(client, departureId);
+  if (!accounts || accounts.platform.meetsThreshold) {
+    return { departureCancelled: false, releasedHolds: [] };
+  }
+  await client.query(
+    `UPDATE departures SET status='cancelled',updated_at=now() WHERE id=$1`, [departureId],
+  );
+  const passengers = await client.query(
+    `SELECT op.id,op.order_id,op.seat_inventory_id,o.buyer_user_id
+     FROM booking_orders o
+     JOIN order_passengers op ON op.order_id=o.id
+     JOIN booking_order_seats os ON os.order_id=o.id AND os.seat_inventory_id=op.seat_inventory_id
+       AND os.status='paid'
+     WHERE o.departure_id=$1 AND o.status='paid' AND op.booking_status='active'
+     ORDER BY o.id,op.id FOR UPDATE OF o,op,os`, [departureId],
+  );
+  for (const passenger of passengers.rows) {
+    await cancelInsurancePassenger(client, passenger, {
+      bookingStatus: 'departure_cancelled',
+      cancellationReason: 'insurance_group_failure',
+      now,
+      requestKey: `insurance-failure:${passenger.passenger_id ?? passenger.id}`,
+      waitlistEligible: false,
+    });
+  }
+  const holds = await client.query(
+    `SELECT id FROM seat_holds WHERE departure_id=$1 AND status='active' ORDER BY id FOR UPDATE`,
+    [departureId],
+  );
+  const releasedHolds = [];
+  for (const hold of holds.rows) {
+    releasedHolds.push({
+      id: hold.id,
+      seatIds: await releaseHoldInTransaction(client, hold.id, 'released'),
+    });
+  }
+  await client.query(
+    `UPDATE departure_waitlist_entries SET status='closed',updated_at=now()
+     WHERE departure_id=$1 AND status='waiting'`, [departureId],
+  );
+  await client.query(
+    `UPDATE seat_inventory SET waitlist_released_at=NULL,updated_at=now()
+     WHERE departure_id=$1 AND status='available'`, [departureId],
+  );
+  await closeSupplementRoundsForInsuranceGroupFailure(client, departureId);
+  return { departureCancelled: true, releasedHolds };
 }
 
 async function lockDepartureForInsuranceChange(client, departureId) {
@@ -265,11 +438,22 @@ async function loadOrder(pool, orderId, userId, security) {
       [orderId],
     ),
     pool.query(
-      `SELECT s.seat_number,c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,
-              c.provider_policy_reference,c.verified_at
+      `SELECT s.seat_number,op.booking_status,c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,
+              c.provider_policy_reference,c.verified_at,c.insurer_rejection_streak,
+              attempts.attempt_count,attempts.attempt_history
        FROM passenger_insurance_coverages c
        JOIN order_passengers op ON op.id=c.passenger_id
        LEFT JOIN seat_inventory s ON s.id=op.seat_inventory_id
+       LEFT JOIN LATERAL (
+         SELECT count(a.id)::integer AS attempt_count,
+           COALESCE(jsonb_agg(jsonb_build_object(
+             'attemptNumber',a.attempt_number,'status',a.result_status,
+             'failureReason',a.failure_reason,'consecutiveInsurerRejections',a.rejection_streak,
+             'seatCancelled',a.seat_cancelled,'ticketRefundFen',a.refund_fen,
+             'departureCancelled',a.departure_cancelled,'createdAt',a.created_at
+           ) ORDER BY a.attempt_number) FILTER (WHERE a.id IS NOT NULL),'[]'::jsonb) AS attempt_history
+         FROM passenger_insurance_attempts a WHERE a.passenger_id=op.id
+       ) attempts ON TRUE
        WHERE c.order_id=$1 ORDER BY s.seat_number NULLS LAST,op.id`,
       [orderId],
     ),
@@ -324,6 +508,9 @@ async function loadOrder(pool, orderId, userId, security) {
         coverageEndAt: coverage.coverage_end_at,
         policyReference: coverage.provider_policy_reference,
         verifiedAt: coverage.verified_at,
+        attemptCount: Number(coverage.attempt_count),
+        consecutiveInsurerRejections: Number(coverage.insurer_rejection_streak),
+        attempts: coverage.attempt_history,
       })),
       premiumCollectedByPlatform: false,
     },
@@ -1294,7 +1481,9 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         await client.query(
           `UPDATE passenger_insurance_coverages SET status='pending_verification',failure_reason=NULL,
              updated_at=now()
-           WHERE order_id=$1 AND status <> 'effective'`,
+           WHERE order_id=$1 AND status <> 'effective'
+             AND EXISTS (SELECT 1 FROM order_passengers op
+               WHERE op.id=passenger_insurance_coverages.passenger_id AND op.booking_status='active')`,
           [request.params.id],
         );
         return {
@@ -1322,11 +1511,22 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
     );
     if (!result.rowCount) return sendError(reply, 404, '订单投保记录不存在');
     const coverages = await pool.query(
-      `SELECT s.seat_number,c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,
-              c.provider_policy_reference,c.verified_at
+      `SELECT s.seat_number,op.booking_status,c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,
+              c.provider_policy_reference,c.verified_at,c.insurer_rejection_streak,
+              attempts.attempt_count,attempts.attempt_history
        FROM passenger_insurance_coverages c
        JOIN order_passengers op ON op.id=c.passenger_id
        LEFT JOIN seat_inventory s ON s.id=op.seat_inventory_id
+       LEFT JOIN LATERAL (
+         SELECT count(a.id)::integer AS attempt_count,
+           COALESCE(jsonb_agg(jsonb_build_object(
+             'attemptNumber',a.attempt_number,'status',a.result_status,
+             'failureReason',a.failure_reason,'consecutiveInsurerRejections',a.rejection_streak,
+             'seatCancelled',a.seat_cancelled,'ticketRefundFen',a.refund_fen,
+             'departureCancelled',a.departure_cancelled,'createdAt',a.created_at
+           ) ORDER BY a.attempt_number) FILTER (WHERE a.id IS NOT NULL),'[]'::jsonb) AS attempt_history
+         FROM passenger_insurance_attempts a WHERE a.passenger_id=op.id
+       ) attempts ON TRUE
        WHERE c.order_id=$1 ORDER BY s.seat_number NULLS LAST,op.id`,
       [result.rows[0].order_id],
     );
@@ -1346,12 +1546,16 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       issuedAt: result.rows[0].issued_at,
       passengerCoverages: coverages.rows.map((coverage) => ({
         seatNumber: coverage.seat_number === null ? null : Number(coverage.seat_number),
+        bookingStatus: coverage.booking_status,
         status: coverage.status,
         failureReason: coverage.failure_reason,
         coverageStartAt: coverage.coverage_start_at,
         coverageEndAt: coverage.coverage_end_at,
         policyReference: coverage.provider_policy_reference,
         verifiedAt: coverage.verified_at,
+        attemptCount: Number(coverage.attempt_count),
+        consecutiveInsurerRejections: Number(coverage.insurer_rejection_streak),
+        attempts: coverage.attempt_history,
       })),
       premiumCollectedByPlatform: false,
     } };
@@ -1378,7 +1582,9 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       if (departure.error) return departure;
       await client.query(
         `SELECT id FROM passenger_insurance_coverages
-         WHERE order_id=$1 ORDER BY passenger_id,id FOR UPDATE`,
+         WHERE order_id=$1 AND EXISTS (SELECT 1 FROM order_passengers op
+           WHERE op.id=passenger_insurance_coverages.passenger_id AND op.booking_status='active')
+         ORDER BY passenger_id,id FOR UPDATE`,
         [request.params.id],
       );
       const updatedPolicy = await client.query(
@@ -1392,11 +1598,39 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       await client.query(
         `UPDATE passenger_insurance_coverages SET status=$2,failure_reason=NULL,
            provider_code='sandbox',provider_policy_reference=$3,
+           insurer_rejection_streak=CASE WHEN $2::varchar(24)='effective' THEN 0 ELSE insurer_rejection_streak END,
            verified_at=CASE WHEN $2::varchar(24)='effective' THEN now() ELSE NULL END,updated_at=now()
-         WHERE order_id=$1`,
+         WHERE order_id=$1 AND EXISTS (SELECT 1 FROM order_passengers op
+           WHERE op.id=passenger_insurance_coverages.passenger_id AND op.booking_status='active')`,
         [request.params.id, issued ? 'effective' : 'not_insured',
           issued ? updatedPolicy.rows[0].provider_policy_reference : null],
       );
+      if (issued) {
+        const passengers = await client.query(
+          `SELECT c.id AS coverage_id,c.passenger_id,op.order_id
+           FROM passenger_insurance_coverages c JOIN order_passengers op ON op.id=c.passenger_id
+           WHERE c.order_id=$1 AND op.booking_status='active' ORDER BY op.id`, [request.params.id],
+        );
+        for (const passenger of passengers.rows) {
+          const count = await client.query(
+            `SELECT COALESCE(MAX(attempt_number),0)::integer AS attempt_number
+             FROM passenger_insurance_attempts WHERE passenger_id=$1`, [passenger.passenger_id],
+          );
+          const attemptNumber = Number(count.rows[0].attempt_number) + 1;
+          await client.query(
+            `INSERT INTO passenger_insurance_attempts
+               (departure_id,order_id,passenger_id,coverage_id,attempt_key,attempt_number,
+                result_status,rejection_streak)
+             VALUES ($1,$2,$3,$4,$5,$6,'effective',0)`,
+            [policy.rows[0].departure_id, passenger.order_id, passenger.passenger_id,
+              passenger.coverage_id, `legacy-order-sandbox:${randomUUID()}`, attemptNumber],
+          );
+          await client.query(
+            `UPDATE passenger_insurance_coverages SET insurer_rejection_streak=0
+             WHERE id=$1`, [passenger.coverage_id],
+          );
+        }
+      }
       return { insurance: updatedPolicy.rows[0] };
     });
     if (result.error) return sendError(reply, result.error[0], result.error[1]);
@@ -1423,44 +1657,297 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
           || (status !== 'failed' && failureReason !== null)) {
         return sendError(reply, 400, '沙盒保险状态或失败原因无效');
       }
+      const attemptKey = request.body?.attemptKey;
+      const isTerminalAttempt = status === 'effective' || status === 'failed';
+      if (isTerminalAttempt && (typeof attemptKey !== 'string' || !/^[A-Za-z0-9._:-]{1,100}$/.test(attemptKey))) {
+        return sendError(reply, 400, '最终投保结果必须提供有效 attemptKey');
+      }
       const result = await withTransaction(pool, async (client) => {
         const order = await client.query(
           `SELECT departure_id,status FROM booking_orders
            WHERE id=$1 AND buyer_user_id=$2`,
           [request.params.id, request.user.id],
         );
-        if (!order.rowCount || order.rows[0].status !== 'paid') {
+        if (!order.rowCount) {
           return { error: [404, '已支付订单中的乘客投保记录不存在'] };
         }
-        const departure = await lockDepartureForInsuranceChange(client, order.rows[0].departure_id);
-        if (departure.error) return departure;
+        const departure = await client.query(
+          'SELECT status FROM departures WHERE id=$1 FOR UPDATE', [order.rows[0].departure_id],
+        );
+        if (!departure.rowCount) return { error: [404, '班次不存在'] };
         const coverage = await client.query(
-          `SELECT id FROM passenger_insurance_coverages
-           WHERE order_id=$1 AND passenger_id=$2 FOR UPDATE`,
+          `SELECT c.id,c.status,c.failure_reason,c.coverage_start_at,c.coverage_end_at,
+                  c.verified_at,c.insurer_rejection_streak,op.id AS passenger_id,
+                  op.order_id,op.seat_inventory_id,op.booking_status
+           FROM passenger_insurance_coverages c
+           JOIN order_passengers op ON op.id=c.passenger_id AND op.order_id=c.order_id
+           JOIN departures d ON d.id=c.departure_id
+           WHERE c.order_id=$1 AND c.passenger_id=$2
+             AND c.coverage_start_at=d.departure_at AND c.coverage_end_at=d.return_at
+           FOR UPDATE OF c,op`,
           [request.params.id, request.params.passengerId],
         );
         if (!coverage.rowCount) {
           return { error: [404, '已支付订单中的乘客投保记录不存在'] };
         }
+        const passenger = coverage.rows[0];
+        if (isTerminalAttempt) {
+          const priorAttempt = await client.query(
+            `SELECT attempt_number,result_status,failure_reason,rejection_streak,
+                    seat_cancelled,refund_fen,departure_cancelled
+             FROM passenger_insurance_attempts WHERE passenger_id=$1 AND attempt_key=$2`,
+            [passenger.passenger_id, attemptKey],
+          );
+          if (priorAttempt.rowCount) {
+            const prior = priorAttempt.rows[0];
+            if (prior.result_status !== status || prior.failure_reason !== failureReason) {
+              return { error: [409, 'attemptKey 已用于不同投保结果'] };
+            }
+            return {
+              attempt: prior,
+              coverage: passenger,
+              idempotentReplay: true,
+              departureId: order.rows[0].departure_id,
+              waitlistEligible: false,
+              releasedHolds: [],
+            };
+          }
+        }
+        if (passenger.booking_status !== 'active') {
+          return { error: [409, '该乘客本次订位已取消'] };
+        }
+        if (order.rows[0].status !== 'paid'
+            || ['in_progress','completed','cancelled','weather_cancelled'].includes(departure.rows[0].status)) {
+          return { error: [409, '当前订单或班次不能修改乘客保障状态'] };
+        }
+        if (!isTerminalAttempt) {
+          const updated = await client.query(
+            `UPDATE passenger_insurance_coverages SET status=$2,failure_reason=NULL,
+               provider_code='sandbox',updated_at=now()
+             WHERE id=$1 RETURNING status,failure_reason,coverage_start_at,coverage_end_at,verified_at,
+               insurer_rejection_streak`,
+            [passenger.id, status],
+          );
+          return { insurance: updated.rows[0], attempt: null };
+        }
+        const attemptCount = await client.query(
+          `SELECT COALESCE(MAX(attempt_number),0)::integer AS attempt_number
+           FROM passenger_insurance_attempts WHERE passenger_id=$1`, [passenger.passenger_id],
+        );
+        const attemptNumber = Number(attemptCount.rows[0].attempt_number) + 1;
+        const previousStreak = Number(passenger.insurer_rejection_streak);
+        const rejectionStreak = status === 'effective' ? 0
+          : failureReason === 'insurer_rejected' ? previousStreak + 1 : 0;
         const updated = await client.query(
-          `UPDATE passenger_insurance_coverages SET status=$2,failure_reason=$3,provider_code='sandbox',
+          `UPDATE passenger_insurance_coverages SET status=$2,failure_reason=$3,
+             insurer_rejection_streak=$4,provider_code='sandbox',
              provider_policy_reference=CASE WHEN $2::varchar(24)='effective' THEN COALESCE(provider_policy_reference,
                'sandbox_passenger_' || passenger_id::text) ELSE provider_policy_reference END,
              verified_at=CASE WHEN $2::varchar(24)='effective' THEN now() ELSE NULL END,updated_at=now()
-           WHERE id=$1
-           RETURNING status,failure_reason,coverage_start_at,coverage_end_at,verified_at`,
-          [coverage.rows[0].id, status, failureReason],
+           WHERE id=$1 RETURNING status,failure_reason,coverage_start_at,coverage_end_at,verified_at,
+             insurer_rejection_streak`,
+          [passenger.id, status, failureReason, rejectionStreak],
         );
-        return { insurance: updated.rows[0] };
+        const attempt = await client.query(
+          `INSERT INTO passenger_insurance_attempts
+             (departure_id,order_id,passenger_id,coverage_id,attempt_key,attempt_number,
+              result_status,failure_reason,rejection_streak)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           RETURNING attempt_number,result_status,failure_reason,rejection_streak,
+             seat_cancelled,refund_fen,departure_cancelled`,
+          [order.rows[0].departure_id, passenger.order_id, passenger.passenger_id, passenger.id,
+            attemptKey, attemptNumber, status, failureReason, rejectionStreak],
+        );
+        let resultAttempt = attempt.rows[0];
+        let waitlistEligible = false;
+        let releasedHolds = [];
+        let departureCancelled = false;
+        if (status === 'failed' && failureReason === 'insurer_rejected' && rejectionStreak >= 3) {
+          const now = await readStep3Clock(client, clockNow);
+          const cancellation = await cancelInsurancePassenger(client, passenger, {
+            bookingStatus: 'insurance_rejected',
+            cancellationReason: 'insurer_rejected_three_attempts',
+            now,
+            requestKey: `insurance-failure:${passenger.passenger_id}`,
+            waitlistEligible: true,
+          });
+          waitlistEligible = cancellation.waitlistEligible;
+          const tripResult = await cancelDepartureAfterInsuranceFailure(client, order.rows[0].departure_id, now);
+          departureCancelled = tripResult.departureCancelled;
+          releasedHolds = tripResult.releasedHolds;
+          resultAttempt = (await client.query(
+            `UPDATE passenger_insurance_attempts SET seat_cancelled=true,refund_fen=$3,
+               departure_cancelled=$4 WHERE passenger_id=$1 AND attempt_key=$2
+             RETURNING attempt_number,result_status,failure_reason,rejection_streak,
+               seat_cancelled,refund_fen,departure_cancelled`,
+            [passenger.passenger_id, attemptKey, cancellation.ticketRefundFen, departureCancelled],
+          )).rows[0];
+        }
+        return {
+          insurance: updated.rows[0],
+          attempt: resultAttempt,
+          idempotentReplay: false,
+          departureId: order.rows[0].departure_id,
+          waitlistEligible: waitlistEligible && !departureCancelled,
+          releasedHolds,
+        };
       });
       if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      for (const hold of result.releasedHolds ?? []) {
+        await deleteHoldKeys(redis, hold.id, hold.seatIds).catch((error) =>
+          request.log.warn({ err: error }, 'Insurance failure released a Redis seat hold'));
+      }
+      const waitlistAuthorizations = result.waitlistEligible
+        ? await dispatchWaitlistCandidates(pool, redis, result.departureId, new Date(), clockNow)
+          .catch((error) => {
+            request.log.warn({ err: error }, 'Insurance failure waitlist dispatch failed');
+            return [];
+          })
+        : [];
       return { insurance: {
-        status: result.insurance.status,
-        failureReason: result.insurance.failure_reason,
-        coverageStartAt: result.insurance.coverage_start_at,
-        coverageEndAt: result.insurance.coverage_end_at,
-        verifiedAt: result.insurance.verified_at,
+        status: result.insurance?.status ?? result.coverage?.status,
+        failureReason: result.insurance?.failure_reason ?? result.coverage?.failure_reason ?? null,
+        coverageStartAt: result.insurance?.coverage_start_at ?? result.coverage?.coverage_start_at,
+        coverageEndAt: result.insurance?.coverage_end_at ?? result.coverage?.coverage_end_at,
+        verifiedAt: result.insurance?.verified_at ?? result.coverage?.verified_at,
         premiumCollectedByPlatform: false,
+        ...(result.attempt ? {
+          attemptNumber: Number(result.attempt.attempt_number),
+          consecutiveInsurerRejections: Number(result.attempt.rejection_streak),
+          seatCancelled: result.attempt.seat_cancelled,
+          ticketRefundFen: Number(result.attempt.refund_fen),
+          departureCancelled: result.attempt.departure_cancelled,
+          idempotentReplay: result.idempotentReplay,
+          waitlistAuthorizations,
+        } : {}),
       } };
+    });
+
+  app.post('/orders/:id/passengers/:passengerId/insurance/guardian-exit/sandbox',
+    { preHandler: requireUser }, async (request, reply) => {
+      if (config.nodeEnv === 'production') return sendError(reply, 404, '沙盒保险状态入口未开放');
+      const { id: orderId, passengerId: childPassengerId } = request.params;
+      const guardianPassengerId = request.body?.guardianPassengerId;
+      const requestKey = request.body?.requestKey;
+      if (!validUuid(orderId) || !validUuid(childPassengerId) || !validUuid(guardianPassengerId)) {
+        return sendError(reply, 400, '订单或乘客编号无效');
+      }
+      if (childPassengerId === guardianPassengerId || request.body?.relationshipConfirmed !== true
+          || typeof requestKey !== 'string' || !/^[A-Za-z0-9._:-]{1,100}$/.test(requestKey)) {
+        return sendError(reply, 400, '需确认同订单家长/监护关系并提供有效 requestKey');
+      }
+      const result = await withTransaction(pool, async (client) => {
+        const order = await client.query(
+          `SELECT departure_id,status FROM booking_orders WHERE id=$1 AND buyer_user_id=$2`,
+          [orderId, request.user.id],
+        );
+        if (!order.rowCount) {
+          return { error: [404, '已支付订单中的监护人乘客记录不存在'] };
+        }
+        const departure = await client.query(
+          'SELECT status FROM departures WHERE id=$1 FOR UPDATE', [order.rows[0].departure_id],
+        );
+        if (!departure.rowCount) return { error: [404, '班次不存在'] };
+        const prior = await client.query(
+          `SELECT child_passenger_id,guardian_passenger_id FROM insurance_guardian_exit_decisions
+           WHERE order_id=$1 AND request_key=$2`, [orderId, requestKey],
+        );
+        if (prior.rowCount) {
+          if (prior.rows[0].child_passenger_id !== childPassengerId
+              || prior.rows[0].guardian_passenger_id !== guardianPassengerId) {
+            return { error: [409, 'requestKey 已用于不同监護人退出决定'] };
+          }
+          const refund = await client.query(
+            `SELECT amount_fen FROM refund_obligations
+             WHERE passenger_id=$1 AND reason='insurance_failure' AND request_key=$2`,
+            [guardianPassengerId, `insurance-guardian-exit:${guardianPassengerId}`],
+          );
+          return {
+            guardianExited: true,
+            idempotentReplay: true,
+            refundFen: Number(refund.rows[0]?.amount_fen ?? 0),
+            departureId: order.rows[0].departure_id,
+            waitlistEligible: false,
+            releasedHolds: [],
+            departureCancelled: false,
+          };
+        }
+        if (order.rows[0].status !== 'paid'
+            || ['in_progress','completed','cancelled','weather_cancelled'].includes(departure.rows[0].status)) {
+          return { error: [409, '当前订单或班次不能申请家长随同退出'] };
+        }
+        const passengers = await client.query(
+          `SELECT op.id,op.order_id,op.seat_inventory_id,op.booking_status,
+                  op.identity_number_ciphertext,c.insurer_rejection_streak
+           FROM order_passengers op
+           JOIN passenger_insurance_coverages c ON c.passenger_id=op.id
+           WHERE op.order_id=$1 AND op.id=ANY($2::uuid[])
+           ORDER BY op.id FOR UPDATE OF op,c`,
+          [orderId, [childPassengerId, guardianPassengerId]],
+        );
+        if (passengers.rowCount !== 2) return { error: [404, '同订单家长/监护人乘客记录不存在'] };
+        const child = passengers.rows.find((row) => row.id === childPassengerId);
+        const guardian = passengers.rows.find((row) => row.id === guardianPassengerId);
+        if (child.booking_status !== 'insurance_rejected' || Number(child.insurer_rejection_streak) < 3) {
+          return { error: [409, '只有三次被保险公司退回的未成年孩子可以申请家长随同退出'] };
+        }
+        if (guardian.booking_status !== 'active') return { error: [409, '家长/监护人本次订位已退出'] };
+        const now = await readStep3Clock(client, clockNow);
+        let childIdentity;
+        let guardianIdentity;
+        try {
+          childIdentity = security.decrypt(child.identity_number_ciphertext);
+          guardianIdentity = security.decrypt(guardian.identity_number_ciphertext);
+        } catch {
+          return { error: [409, '实名信息无法核验，不能执行未成年乘客退出'] };
+        }
+        if (ageOnDate(childIdentity, now) === null || ageOnDate(childIdentity, now) >= 18
+            || ageOnDate(guardianIdentity, now) === null || ageOnDate(guardianIdentity, now) < 18) {
+          return { error: [409, '孩子必须未满十八周岁，家长/监护人必须已满十八周岁'] };
+        }
+        await client.query(
+          `INSERT INTO insurance_guardian_exit_decisions
+             (order_id,child_passenger_id,guardian_passenger_id,request_key,relationship_confirmed)
+           VALUES ($1,$2,$3,$4,true)`,
+          [orderId, childPassengerId, guardianPassengerId, requestKey],
+        );
+        const cancellation = await cancelInsurancePassenger(client, guardian, {
+          bookingStatus: 'guardian_exit',
+          cancellationReason: 'child_insurance_failure_guardian_opt_out',
+          now,
+          requestKey: `insurance-guardian-exit:${guardianPassengerId}`,
+          waitlistEligible: true,
+        });
+        const tripResult = await cancelDepartureAfterInsuranceFailure(client, order.rows[0].departure_id, now);
+        return {
+          guardianExited: true,
+          idempotentReplay: false,
+          refundFen: cancellation.ticketRefundFen,
+          departureId: order.rows[0].departure_id,
+          waitlistEligible: cancellation.waitlistEligible && !tripResult.departureCancelled,
+          releasedHolds: tripResult.releasedHolds,
+          departureCancelled: tripResult.departureCancelled,
+        };
+      });
+      if (result.error) return sendError(reply, result.error[0], result.error[1]);
+      for (const hold of result.releasedHolds ?? []) {
+        await deleteHoldKeys(redis, hold.id, hold.seatIds).catch((error) =>
+          request.log.warn({ err: error }, 'Guardian exit released a Redis seat hold'));
+      }
+      const waitlistAuthorizations = result.waitlistEligible
+        ? await dispatchWaitlistCandidates(pool, redis, result.departureId, new Date(), clockNow)
+          .catch((error) => {
+            request.log.warn({ err: error }, 'Guardian exit waitlist dispatch failed');
+            return [];
+          })
+        : [];
+      return {
+        guardianExited: result.guardianExited,
+        idempotentReplay: result.idempotentReplay,
+        ticketRefundFen: result.refundFen,
+        departureCancelled: result.departureCancelled,
+        waitlistAuthorizations,
+        premiumCollectedByPlatform: false,
+      };
     });
 }

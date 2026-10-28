@@ -42,12 +42,12 @@ async function requireCaptainOwnership(client, departureId, userId, lock = false
   return result.rows[0] ?? null;
 }
 
-async function loadFormationAccounts(client, departureId) {
+export async function loadFormationAccounts(client, departureId) {
   const result = await client.query(
     `SELECT d.id,d.minimum_sailing_total_fen,d.departure_at,d.status,
        ${confirmationAtSql('d')} AS confirmation_at,
        COALESCE((
-         SELECT SUM(ROUND((o.seat_fee_fen-o.discount_fen)::numeric * 0.9))
+         SELECT SUM(ROUND((o.seat_fee_fen-o.discount_fen-o.ticket_refunded_fen)::numeric * 0.9))
          FROM booking_orders o
          WHERE o.departure_id=d.id AND o.status='paid'
        ),0)::bigint AS platform_ticket_net_fen,
@@ -121,7 +121,7 @@ export function distributeSupplementFen(shortfallFen, orders) {
   });
 }
 
-async function failSupplementRound(client, roundId, reason, terminalStatus = 'failed') {
+export async function failSupplementRound(client, roundId, reason, terminalStatus = 'failed') {
   const roundResult = await client.query(
     `SELECT id,status FROM departure_supplement_rounds WHERE id=$1 FOR UPDATE`, [roundId],
   );
@@ -163,6 +163,41 @@ async function failSupplementRound(client, roundId, reason, terminalStatus = 'fa
      )`, [roundId],
   );
   return true;
+}
+
+export async function closeSupplementRoundsForInsuranceGroupFailure(client, departureId) {
+  const rounds = await client.query(
+    `SELECT id,status FROM departure_supplement_rounds
+     WHERE departure_id=$1 AND status IN ('collecting_consent','collecting_payment','succeeded')
+     ORDER BY id FOR UPDATE`, [departureId],
+  );
+  for (const round of rounds.rows) {
+    if (['collecting_consent','collecting_payment'].includes(round.status)) {
+      await failSupplementRound(client, round.id, 'insurance_group_failure');
+      continue;
+    }
+    await client.query(
+      `UPDATE departure_supplement_rounds SET status='failed',failure_reason='insurance_group_failure',
+         updated_at=now(),completed_at=now() WHERE id=$1 AND status='succeeded'`, [round.id],
+    );
+    await client.query(
+      `INSERT INTO refund_obligations
+         (order_id,payment_transaction_id,amount_fen,reason,status,request_key)
+       SELECT p.order_id,t.id,t.amount_fen,'supplement_failure','pending','supplement-failure:'||t.id
+       FROM departure_supplement_participants p
+       JOIN payment_transactions t ON t.supplement_participant_id=p.id AND t.status='succeeded'
+       WHERE p.round_id=$1
+       ON CONFLICT (payment_transaction_id,reason) DO NOTHING`, [round.id],
+    );
+    await client.query(
+      `UPDATE departure_supplement_participants p SET payment_status='refund_pending',updated_at=now()
+       WHERE p.round_id=$1 AND EXISTS (
+         SELECT 1 FROM payment_transactions t
+         WHERE t.supplement_participant_id=p.id AND t.status='succeeded'
+       )`, [round.id],
+    );
+  }
+  return rounds.rowCount;
 }
 
 async function refundSupplementDecliners(client, roundId) {
@@ -588,7 +623,7 @@ async function buildChecklist(client, departureId) {
     "FROM departures d " +
     "LEFT JOIN booking_orders o ON o.departure_id=d.id AND o.status='paid' " +
     "LEFT JOIN booking_order_seats os ON os.order_id=o.id AND os.status='paid' " +
-    "LEFT JOIN order_passengers op ON op.order_id=o.id " +
+      "LEFT JOIN order_passengers op ON op.order_id=o.id AND op.booking_status='active' " +
     "LEFT JOIN insurance_policies ip ON ip.order_id=o.id " +
     "WHERE d.id=$1 GROUP BY d.id",
     [departureId],
@@ -1047,7 +1082,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
              LEFT JOIN passenger_insurance_coverages c ON c.passenger_id=op.id
                AND c.departure_id=o.departure_id
                AND c.coverage_start_at=d.departure_at AND c.coverage_end_at=d.return_at
-             WHERE o.departure_id=$1 AND o.status='paid'
+             WHERE o.departure_id=$1 AND o.status='paid' AND op.booking_status='active'
              ORDER BY s.seat_number NULLS LAST,op.id`,
             [departure.id],
           ),
@@ -1200,7 +1235,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
           `SELECT c.id FROM passenger_insurance_coverages c
            JOIN booking_orders o ON o.id=c.order_id
            JOIN order_passengers op ON op.id=c.passenger_id AND op.order_id=o.id
-           WHERE o.departure_id=$1 AND o.status='paid'
+           WHERE o.departure_id=$1 AND o.status='paid' AND op.booking_status='active'
            ORDER BY op.id,c.id
            FOR UPDATE OF c`,
           [departure.id],
@@ -1215,7 +1250,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
              AND c.departure_id=d.id
              AND c.coverage_start_at=d.departure_at
              AND c.coverage_end_at=d.return_at
-           WHERE o.departure_id=$1 AND o.status='paid'
+             WHERE o.departure_id=$1 AND o.status='paid' AND op.booking_status='active'
            ORDER BY op.id`,
           [departure.id],
         );
@@ -1301,7 +1336,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
           "LEFT JOIN departure_checkins dc ON dc.departure_id=d.id AND dc.event='departed' " +
           "LEFT JOIN departure_passenger_gate_decisions pg ON pg.departure_id=d.id " +
             "AND pg.passenger_id=op.id AND pg.decision='allowed' " +
-          "WHERE o.departure_id=$1 AND o.status='paid' " +
+          "WHERE o.departure_id=$1 AND o.status='paid' AND op.booking_status='active' " +
           "AND (dc.id IS NULL OR pg.passenger_id IS NOT NULL) " +
           'ORDER BY o.created_at,op.id',
           [departure.id],
@@ -1348,7 +1383,7 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       'LEFT JOIN departure_formation_snapshots s ON s.departure_id=d.id ' +
       'LEFT JOIN departure_pretrip_checklists c ON c.departure_id=d.id ' +
       `LEFT JOIN LATERAL (
-        SELECT COALESCE(SUM(ROUND((paid.seat_fee_fen-paid.discount_fen)::numeric * 0.9)),0)::bigint AS ticket_net_fen
+        SELECT COALESCE(SUM(ROUND((paid.seat_fee_fen-paid.discount_fen-paid.ticket_refunded_fen)::numeric * 0.9)),0)::bigint AS ticket_net_fen
         FROM booking_orders paid WHERE paid.departure_id=d.id AND paid.status='paid'
       ) formation_tickets ON TRUE ` +
       `LEFT JOIN LATERAL (

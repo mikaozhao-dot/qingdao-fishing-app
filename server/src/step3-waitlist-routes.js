@@ -251,6 +251,7 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
       await client.query('SELECT id FROM departures WHERE id=$1 FOR UPDATE', [departureId]);
       const orderResult = await client.query(
         `SELECT o.id,o.status,o.buyer_user_id,o.seat_fee_fen,o.discount_fen,o.platform_fee_fen,o.total_amount_fen,
+                o.ticket_refunded_fen,
                 o.cancelled_refund_fen,o.cancellation_penalty_fen,d.departure_at,d.status AS departure_status,
                 ${confirmationAtSql('d')} AS confirmation_at
          FROM booking_orders o JOIN departures d ON d.id=o.departure_id
@@ -277,7 +278,7 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
         return sendError(reply, 409, '当前订单不能取消');
       }
       const amounts = cancellationAmounts(
-        Number(order.seat_fee_fen) - Number(order.discount_fen),
+        Number(order.seat_fee_fen) - Number(order.discount_fen) - Number(order.ticket_refunded_fen ?? 0),
         order.departure_at,
         now,
       );
@@ -291,7 +292,8 @@ export function registerStep3WaitlistRoutes(app, { pool, redis, config, requireU
       );
       await client.query(
         `UPDATE booking_orders SET status='cancelled',cancelled_at=$2,updated_at=now(),
-          cancelled_refund_fen=$3,cancellation_penalty_fen=$4,ticket_refunded_fen=$5
+          cancelled_refund_fen=COALESCE(cancelled_refund_fen,0)+$3,
+          cancellation_penalty_fen=$4,ticket_refunded_fen=ticket_refunded_fen+$5
          WHERE id=$1`,
         [order.id, now, amounts.refundFen + Number(order.platform_fee_fen), amounts.penaltyFen,
           amounts.refundFen],

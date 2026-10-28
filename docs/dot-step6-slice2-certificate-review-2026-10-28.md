@@ -162,3 +162,37 @@ Dot 已读取本 SHA 以下原始日志，**B 类混合来源冻结快照补证�
 **R1 当前只剩 A：可独立目检的实际成品图及与实现/夹具的对应说明。** 当前增量仍只含测试脚本和文档，没有新增 PNG；已有编码测试不代替成品图目检。交现有 1/4/5 行及同鱼混合来源输出即可，可复用兼容场景；不要求整套重跑、不增加原生平台验收任务。现有服务端混合快照已验证，成图夹具可与其关联。正式交付回执随材料说明决定五条位置即可，不因回执格式阻挡已完成的技术核查。
 
 R1 尚未整体技术关闭，切片 2 与创始人产品验收仍开放；本节没有代码、业务规则、生产或下一切片授权。
+
+
+## 2026-10-28 08:45 CST A 类独立成图复核完成：R1 限定技术关闭
+
+**A 类成品图证据在本次 1/4/5 来源行夹具与输出尺寸范围内通过；S6-S2-R1 限定技术关闭。** 与先前已关闭的 B、R2/R3 和证书推广来源补证合并，本轮所列切片 2 技术复核项已关闭，可交创始人作产品验收；**不是创始人已验收、不是正式产品关单，也不批准下一切片或生产使用。**
+
+本次只审 A，不重开 B/R2/R3、不重跑 CI。正式请求：[136c8471](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/136c84710d0842ddbbc1d9c8c5ac09deb00cf973/docs/dot-review-request-step6-slice2-r1-2026-10-28.md)，截止 2026-10-28 12:00 CST（04:00 UTC）；本结论在截止前完成。写入前实读 main=0781f719caea37fd1ac206a8420716c52b4a21ca；Muse 的通过仅作交付背景，以下是 Dot 自己完成的文件与像素检查。
+
+### 实际校验与逐张目检
+
+从证据提交 136c84710d0842ddbbc1d9c8c5ac09deb00cf973 拉取三张原始 PNG，逐张解码后使用 view_image 查看；本地计算 SHA-256，均与[运行图清单](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/136c84710d0842ddbbc1d9c8c5ac09deb00cf973/docs/evidence/step6-slice2/r1-runtime/README.md)一致。均为 **1080×1656**：
+
+| 来源行 | 字节数 | 实算 SHA-256 |
+|---|---:|---|
+| 1 | 552515 | eca99436b33246d54394159e3f6beefd0ee874a800a41d3a63cf8d6f04ec889c |
+| 4 | 575735 | acfd360141c35f06b013324e35ad9a9d1f817325d52ca86adf2e0529f198a16b |
+| 5 | 604659 | a014c9c70a75b854a4bb914e5a78ae1e5f6e49fdf1408fa4d43614923ed01ae5 |
+
+- [1 行图](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/136c84710d0842ddbbc1d9c8c5ac09deb00cf973/docs/evidence/step6-slice2/r1-runtime/certificate-1-source-rows-iphone-simulator.png)：小黄鱼×1、本人记录完整可读，无“未展示”摘要。
+- [4 行图](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/136c84710d0842ddbbc1d9c8c5ac09deb00cf973/docs/evidence/step6-slice2/r1-runtime/certificate-4-source-rows-iphone-simulator.png)：四行小黄鱼×1/2/3/4，来源本人记录/本人补充交替，四行全部可见，没有遗漏提示；此为展示边界的合成夹具，不外推为真实用户的可提交记录组合。
+- [5 行混合图](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/136c84710d0842ddbbc1d9c8c5ac09deb00cf973/docs/evidence/step6-slice2/r1-runtime/certificate-5-source-rows-iphone-simulator.png)：可见小黄鱼×2（本人记录）、海鲈鱼×1（本人记录）、小黄鱼×3（本人补充）、黑头×1（本人补充）。同鱼不同来源保持两行且数量不同，没有合并。摘要可读为“共 5 条渔获记录 · 本图展示前 4 条 · 另有 1 条未展示”，下一行“完整明细见 App 内本航次渔获详情”。未显示的带鱼×1来自清单/已审五行夹具，不声称在图片中看到了第五行。
+
+三张图中的鱼名、来源、数量及五行图摘要均在渔获区内部，未见本次边界场景的裁切、重叠或溢出。结论限于所交原尺寸图，不代表任意缩放、极长昵称、超大字体或所有设备均已验证。
+
+### 版本与生成说明的核对边界
+
+- 固定代码 45682879962fc996c6726d7e8c9f81d42e29f69a；图面实现 3040a298835674672a3016ff76754da5a4e1dca9。实际 compare 确认两者之间只有验收脚本/评审文档差量，Flutter 图面文件未变；45682879→写入前 main 仅文档与图片，无新实现。
+- 五行图的来源结构、小黄鱼两数量 2/3 与已关闭的服务端混合来源夹具对应；图面是客户端输出证据，既有 API/冻结证据仍引用前节同 SHA 原始日志，不把图片当数据库执行证据。
+- 清单称通过 iPhone Duo iOS Simulator 运行生产 CertificateArtwork，再经 RepaintBoundary.toImage(pixelRatio:3) 导出。Dot 独立确认的是仓内 PNG 字节、尺寸、像素内容及版本差量/夹具对应；没有亲自运行模拟器或复现临时生成驱动，也没有据文件哈希证明历史运行进程来源。该限制不阻断本轮已约定的成图目检，不扩大为系统分享、相册保存、QR 真实扫码或原生深链全链路验收。
+- 五项决定的实现位置与只读详情入口在前轮已静态核查；本轮[交付回执](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/136c84710d0842ddbbc1d9c8c5ac09deb00cf973/docs/step6-slice2-r1-delivery-receipt-2026-10-28.md)与请求、清单均已收到，README/进度已同步，无需重交这些材料。
+
+### 交接
+
+Muse/Luna 可据本节将 A 与 R1 更新为“限定技术通过，待创始人产品验收”，不再重复派 A/B 或 R2/R3 回修。此前“切片 2 暂不技术通过”在本轮所列复核范围内由此结论取代；真实业务上线门槛及切片 1 风险接受的未验标记均保留。创始人产品验收与正式关单仍须另有明确记录，本节不代作该决定。

@@ -80,3 +80,11 @@ REA 前置澄清已被 Luna 开工回执明确读取，Muse 在 `docs/ui-design-
 - [普通取消](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/0040af6a45c6e8bbf29e20f31cab64f23e71f564/server/src/step3-waitlist-routes.js)
 - [增量验收脚本](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/0040af6a45c6e8bbf29e20f31cab64f23e71f564/server/scripts/step4-acceptance.mjs)
 - [正式请求](https://github.com/mikaozhao-dot/qingdao-fishing-app/blob/172d54eb81f828400aa4d158722d8a945a1a56f9/docs/g-insurance-failure-review-request-2026-10-28.md)
+
+## 2026-10-28 07:07 UTC 接力状态纠正（不重复技术审查）
+
+已读新增 `1578c249` Muse 评审及 `e33de8fd` 的 R1 多图开工回执；后者仍写 G 的 Dot 评审待回仓。实际本文件已于 **06:42 UTC、提交 [740b4e1b](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/740b4e1bf8960a124fa5f5481ef360cf34d9c133)** 入仓，针对固定实现 `0040af6a45c6e8bbf29e20f31cab64f23e71f564` 的结论为**暂不通过，G-R1 至 G-R4 四项有界回修**，不是尚未开始或等待 Dot 首次审核。
+
+请 Muse/Luna 以本文件为既有独立结论对账：Luna 对照四项回修，交付修复固定 SHA、定点夹具和同 SHA CI 后，Dot 再审差量；无需重新递交原始 `0040af6a` 或重复催审。Muse 的原实现有条件通过不能替代这些未关闭技术项。本次仅纠正接力状态，不重新列技术问题、不增加业务规则或实现范围。
+
+另已知仓内新增 R1 多图呈现决定；只跟踪其实际实现与正式送审，不重开此前已通过的事实、隐私、资格、冻结快照和归因项。本段不裁定两项工作的优先级，不代创始人验收或授权下一项。当前仍未见 G 四项修复交付；本段发布不等于对方已实际读取。

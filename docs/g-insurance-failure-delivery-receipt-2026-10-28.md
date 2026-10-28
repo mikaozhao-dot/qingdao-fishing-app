@@ -5,7 +5,7 @@
 - 实现提交：`0040af6a45c6e8bbf29e20f31cab64f23e71f564`（已推送 `main`）。
 - 依据：`docs/founder-decision-g-insurance-failure-2026-10-28.md` 与 `docs/muse-to-luna-remaining-development-order-2026-10-28.md`。
 - 本交付只覆盖沙盒/API、PostgreSQL 迁移和验收；未接真实保险或资金通道，未部署生产，也未修改规格正本。
-- 评审请求：`docs/g-insurance-failure-review-request-2026-10-28.md`。Muse 评审及 Dot 定点复核均待回仓；本回执不代表评审通过或创始人产品验收。
+- 初版评审请求：`docs/g-insurance-failure-review-request-2026-10-28.md`。Muse 对初版作有条件通过；Dot 对初版提出 G-R1 至 G-R4 有界回修。补正 SHA `d3e0ab3c` 已获 Dot 限定沙盒技术通过，当前待 Muse 独立对账及创始人产品验收。本回执不代表 Muse 验收或创始人产品验收。
 
 ## 实现内容
 
@@ -35,7 +35,29 @@ GitHub Actions [run 40644144920](https://github.com/mikaozhao-dot/qingdao-fishin
 
 ## 仍待处理
 
-- 等待 Muse 对规则符合性和交付范围作独立评审。
-- 等待 Dot 对固定 SHA 的技术实现和迁移/验收证据作独立复核。
+- `aa57247a` 的 Dot 初轮差量复核与 Muse 实读已回仓。Muse 指定三项有界补正，并要求 Muse 复核后再送 Dot；Dot 已于 `1e3a2d5` 对固定补正 SHA `d3e0ab3c` 写回限定沙盒技术通过。当前仍待 Muse 对补正及 Dot 结论作独立复核/对账，创始人产品验收仍待明确决定。
 - 真实首单前仍须完成保险方对出单/回查时效、拒保标准、年龄/健康准入、退保规则的书面确认及对外文案合规复核；本交付未解除这些条件。
 - 评审完成前不启动队列中的包船、F 补偿券或会员星级/会员券工作。
+
+## Dot 有界回修交付（2026-10-28）
+
+- 固定修复提交：`aa57247a9ef3eacdcd0e5fd8fb8bf3c5c5438c03`；原 Dot 缺陷基准为 `0040af6a45c6e8bbf29e20f31cab64f23e71f564`，只修 G-R1 至 G-R4。
+- 新增迁移 `027_g_insurance_failure_review_fixback.sql`：允许可审计的 `successful_supplement_refund` 成团调整类型，并将 guardian 决策持久化退款额与整班取消结果。
+- G-R1：补差退出按剩余票款本金与应退平台费建立后续退款，不覆盖累计退款字段；只释放仍为订单 `paid` 且库存 `booked` 的席位。数据库用例覆盖 G 部分退款后补差拒绝、补差超时，以及旧订单释放座位被他人买走后再退出；断言退款累计正确、重订乘客保持已订且库存仍占用。
+- G-R2：整班保险失败时，成功补差转入退款义务，并追加唯一可审计冲销行；成团账户与履约汇总均按成功额减冲销额计算。用例覆盖成功补差、保险整班失败、退款义务、账户净额为零及重放不重复。
+- G-R3：保险乘客结果和监护人退出均在班次行锁后重新锁定并读取订单状态。新增确定性取消先持锁、保险请求排队用例，核对取消订单在锁后返回 409，保障、尝试和退款状态不变。
+- G-R4：监护退出保存并回放原退款金额及班次取消布尔值；孩子已有不同退出决定时返回 409，不增加决策或退款。数据库用例核对同键结果一致、不同键/监护人冲突无副作用。
+- 本地隔离验收：PostgreSQL 17 / Redis；迁移 001–027、`npm run check`、`npm test`（10/10）通过；Step 4 验收 831 项断言通过。
+- GitHub Actions [run 40650882567 / job 122690410921](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40650882567) 对固定 SHA `aa57247a9ef3eacdcd0e5fd8fb8bf3c5c5438c03` 成功。日志确认迁移与 Step 4–6 数据库流程通过：Step 4 832、Step 5 slice 1 为 133、Step 5 live 为 77、Step 6 promotion 为 334、退款重订迁移为 33、证书为 70 项断言。Step 4 本地 831 与 CI 832 分开记载。
+- 当时状态（`aa57247a` 首轮回修交付后）：待 Dot 修复版复核。此状态已被下方 Muse 评审和补正记录更新；不代表 Muse 对补正 SHA 的复审、创始人产品验收、队列关单或真实保险/资金/生产授权。
+
+## 三项有界补正（2026-10-28）
+
+- 固定补正提交：`d3e0ab3c27326c0cdf8a3bcc63df10fd6cd12219`。执行顺序按 Muse 新评审 `docs/ui-design-review-aa57247a.md`：先由 Muse 复核本 SHA，再送 Dot；在两项复核与创始人产品验收完成前不启动队列下一项。
+- G-R4 升级兼容：新增迁移 `028_g_insurance_guardian_legacy_replay_backfill.sql`。迁移 027 新增的默认 `false` 不能代表旧决定的真实班次结局，故用 `departure_outcome_known` 明确未知；退款额依 `insurance-guardian-exit:<guardian>` 关联的乘客级退款义务回填。只有保存为 `true` 的班次取消值可由 027 默认值规则辨认为已知；旧库默认 `false` 留作未知，API 重放返回 `departureCancelled: null`。没有声称实际存在保留的 026 旧库。
+- G-R3：取消竞态测试持有班次锁期间只取消订单并释放席位，班次仍为 confirmed；排队保险请求在取得锁后读取新订单状态并返回 409，保障、尝试、退款保持不变。
+- G-R4：新冲突夹具在第一次监护人退出后保留第二位成年乘客与另一名付费乘客，使订单仍为 paid、班次仍 confirmed 且第二监护人 active；同一孩子以新 key/另一监护人请求时返回 409，不增加决定/退款、不改变订单和班次。
+- 升级夹具 `server/scripts/g-insurance-guardian-migration-acceptance.mjs` 实际在迁移 026 后创建旧决定和 5000 分乘客退款义务，再顺序应用 027、028，验证 027 的 0 默认复现、028 回填为 5000、历史班次结果仍未知，以及重跑 028 幂等。Step 4 API 夹具另验证旧决定同键重放返回 5000、未知班次结果为 null、不重复建退款。
+- 本地：PostgreSQL 17 / Redis 隔离环境；迁移 001–028、`npm run check`、`npm test`（10/10）、Step 4 852 项及迁移升级 4 项通过。
+- GitHub Actions [run 40654110138 / job 122700881003](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40654110138/job/122700881003) 的 checkout SHA 为 `d3e0ab3c27326c0cdf8a3bcc63df10fd6cd12219`，成功应用迁移 028、Step 4 853 项、G guardian 升级夹具 4 项、Step 5 133 项、Step 5 live 77 项、Step 6 promotion 334 项、退款重订升级 33 项、证书 70 项通过。
+- Dot 对固定补正 SHA `d3e0ab3c27326c0cdf8a3bcc63df10fd6cd12219` 已在 `1e3a2d5` 作限定沙盒技术通过；Muse 对该补正 SHA 的独立复核仍待回仓，创始人产品验收尚未完成。该提交仍不涉及真实保险、真实资金或生产。

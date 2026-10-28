@@ -1,6 +1,8 @@
 # Codex 开发任务书 · 第 4 步（修订版 v2）：成团与履约（按创始人批准 A–E 同步）
 
 依据：创始人审批记录 `docs/founder-approval-dot-decisions-2026-10-24.md`（A–E 通过，F 暂不开，G 与包船分配保留）、现行口径索引 `docs/current-rules-index.md`、第 4 步任务书 v1。
+
+**后续口径更新（2026-10-28）：** 本任务书按 2026-10-24 的批准范围编写。之后创始人已分别定版 F 补偿券公式/场景与 G 保险失败处置，见 `docs/founder-decision-compensation-coupon-3pct-2026-10-28.md` 和 `docs/founder-decision-g-insurance-failure-2026-10-28.md`。两份决定均不是开工令；代码实现须有独立任务书并经评审，生产与真实通道仍未授权。现行口径以 `docs/current-rules-index.md` 为准。
 **效力**：本版取代 v1 中成团核算、补差、成行状态与库存相关条款；v1 已交付的非金额子集（行前清单、沙盒通知、出/返航打卡、实名名单导出、只读履约信息）保持不变、不重做。**暂缓仅对本版列明的已批准条款解除，其余维持。**
 
 ## 本轮实现范围（已批准）

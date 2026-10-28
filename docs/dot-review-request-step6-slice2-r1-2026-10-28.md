@@ -21,4 +21,8 @@
 - `facts.items` 未截断写入预览与冻结快照：`server/src/step6-certificate-routes.js:340-350,383-404`。
 - 可点击的现有详情页及只读接线：`app/lib/step6_certificate_flow.dart:386-395,446-453`、`app/lib/main.dart:264-270`、`app/lib/step5_flow.dart:418-461,568-700`。
 
-README 与回修进度已同步为“B 类混合来源冻结快照补证已由 Dot 限定关闭；A 类运行成图已交，待 Dot 目检；切片 2 未整体通过”。本请求不代替 A 类复核结论；在 Dot 对 A 和创始人验收完成前，不标记 R1 技术关闭或切片 2 产品通过。
+README 与回修进度已同步为“B 类混合来源冻结快照补证已由 Dot 限定关闭；A 类运行成图已交，待 Dot 目检；切片 2 未整体通过”。本段为请求提交时的状态。
+
+## 完成记录（2026-10-28）
+
+Dot 已于 `577c845` 对本请求的 1/4/5 条原尺寸 PNG 完成 A 类限定范围目检，并关闭 R1 限定技术复核；结论及其明确边界见 [`Dot 独立复核记录`](dot-step6-slice2-certificate-review-2026-10-28.md)。本请求已完成，不再等待或要求重复检查。下一关为创始人产品验收，单独记录于 [`创始人验收申请`](founder-acceptance-request-step6-slice2-2026-10-28.md)；在创始人明确决定前，不标记产品验收通过、正式关单或下一切片授权。

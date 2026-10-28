@@ -360,6 +360,12 @@ try {
   }, 'preview copies source facts without editable or synthesized values');
   check(preview.body.preview.fishItems.length, 5,
     'preview keeps all five source rows for presentation-layer summarization');
+  check(preview.body.preview.fishItems.find((item) =>
+    item.fishCode === 'yellow_croaker' && item.source === '本人记录')?.quantity, 2,
+  'preview preserves the own-report quantity for the repeated species');
+  check(preview.body.preview.fishItems.find((item) =>
+    item.fishCode === 'yellow_croaker' && item.source === '本人补充')?.quantity, 3,
+  'preview preserves the own-supplement quantity for the repeated species');
   assert.ok(preview.body.preview.landingUrl.includes('source=certificate'));
   assertions += 1;
   check(preview.body.preview.promotionCode.length > 0, true, 'certificate reuses the normal member promotion code');
@@ -390,6 +396,12 @@ try {
   check(created.body.certificate.snapshot.fishItems
     .filter((item) => item.source === '本人补充').length, 3,
   'frozen snapshot keeps all three own-supplement source rows');
+  check(created.body.certificate.snapshot.fishItems.find((item) =>
+    item.fishCode === 'yellow_croaker' && item.source === '本人记录')?.quantity, 2,
+  'frozen snapshot retains the own-report quantity for the repeated species');
+  check(created.body.certificate.snapshot.fishItems.find((item) =>
+    item.fishCode === 'yellow_croaker' && item.source === '本人补充')?.quantity, 3,
+  'frozen snapshot retains the own-supplement quantity for the repeated species');
   check(Object.keys(created.body.certificate.snapshot).some((key) => /phone|identity|order/i.test(key)),
     false, 'public certificate snapshot has no phone, identity, or order fields');
   await pool.query("UPDATE boats SET name='修改后的船名' WHERE id=$1", [personalTrip.boatId]);

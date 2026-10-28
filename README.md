@@ -5,7 +5,7 @@ iOS 与 Android 双端海钓拼船应用。第 1 步提供手机号沙盒登录�
 
 第 6 步切片 1 R4 留存证据差量已导出并经 Dot 复核：请求/数据库导出对应性及代理哈希算法静态口径通过；PID、APK 来源、代理原文件来源、许可证时间顺序、iOS 映射五项由创始人接受为剩余风险，仍标记未验。创始人随后完成产品验收，切片 1 于限定沙盒范围正式关闭。风险接受决定与产品关单记录见 `docs/founder-decision-step6-slice1-r4-risk-acceptance-limited-close-2026-10-27.md` 和 `docs/founder-acceptance-step6-slice1-close-2026-10-27.md`；选项文件已由该决定取代。真机深链重验仍为上线前条件，H5 免下载首单仍未交付。第 6 步切片 2 状态见 `docs/step6-slice2-fixback-progress-2026-10-28.md`：Dot 对原始实现不整体通过并列出 R1–R3；后于 `faa9593` 按固定 SHA `d347d7c` 的 CI 原始日志在限定范围关闭 R2/R3 与推广补证；创始人已在 `0911449` 定版 R1 摘要展示；实现、同 SHA CI 与 1/4/5 条运行 PNG 已交付，Dot 已在 `bd489ae` 对 B 类混合来源快照补证限定关闭，并于 `577c845` 在已交 1/4/5 条 PNG 与 1080 × 1656 图像范围内关闭 R1 限定技术复核；R2/R3 与证书推广来源补证此前也在各自明确范围内限定关闭。创始人于 `c216450` 按限定沙盒范围完成产品验收并关单（记录见 `docs/founder-acceptance-step6-slice2-close-2026-10-28.md`）；未授权下一切片、生产部署、真实资金或真实保险。
 
-2026-10-28 创始人新增口径：已有有效预订的班次不得转整船包船挤人；会员星级与两类营销券已定版；F 补偿券现保留两类场景；保险公司退回后的 G 处置已定版。Muse 已按 G → 包船禁挤人 → F → 会员星券顺序发布剩余开发工单。G 沙盒/API 实现已提交 `0040af6`，回执及 Muse/Dot 评审请求见 `docs/g-insurance-failure-delivery-receipt-2026-10-28.md` 和 `docs/g-insurance-failure-review-request-2026-10-28.md`；评审与创始人验收均待完成。待 G 评审闭合后再按队列继续，后续各项仍须逐项交付，全部限沙盒。FishingBooker 安卓客户端 REA 拆解为独立调研线，不插队、不修改约钓者规格；等待评审空窗或开发队列结束后再按工单排期。会员发起活动仍是未排期提案。逐项现行规则与边界见 `docs/current-rules-index.md`。
+2026-10-28 创始人新增口径：已有有效预订的班次不得转整船包船挤人；会员星级与两类营销券已定版；F 补偿券现保留两类场景；保险公司退回后的 G 处置已定版。Muse 已按 G → 包船禁挤人 → F → 会员星券顺序发布剩余开发工单。G 沙盒/API 初版 `0040af6` 经 Muse 有条件通过；Dot 对固定 SHA 提出 G-R1 至 G-R4 有界回修，状态与开工回执见 `docs/dot-g-insurance-failure-review-2026-10-28.md`、`docs/g-insurance-failure-fixback-start-ack-2026-10-28.md`。G 回修复核和创始人验收前不启动该队列的下一项，全部限沙盒。FishingBooker 安卓客户端 REA 拆解为独立调研线，不插队、不修改约钓者规格；等待评审空窗或开发队列结束后再按工单排期。会员发起活动仍是未排期提案。逐项现行规则与边界见 `docs/current-rules-index.md`。
 
 创始人于 2026-10-28 对 S6-S2-R1 改定为分页多图、全部展示来源记录，替代此前证书图前 4 条摘要方案；新版尚未实现与验收，状态见 `docs/step6-slice2-r1-pagination-fixback-start-ack-2026-10-28.md`。该窄范围回修不启动其余开发队列。
 
@@ -66,6 +66,7 @@ flutter run
 - `docs/ui-design-review-a2f68d2.md`：2026-10-28 对会员券限制与 F 补偿券一年有效期决策的文档同步巡检记录；仅核对规则回注，不构成代码验收或开工授权。
 - `docs/muse-to-luna-remaining-development-order-2026-10-28.md`、`docs/luna-remaining-development-start-receipt-2026-10-28.md`：剩余四项开发的队列工单与开工状态；队列工作须逐项评审后再继续。S6-S2-R1 多图修复是创始人单独授权的窄范围回修，不改变该队列顺序。
 - `docs/g-insurance-failure-delivery-receipt-2026-10-28.md`、`docs/g-insurance-failure-review-request-2026-10-28.md`：G 乘客级投保失败处置的固定实现 SHA、本地与 CI 证据，以及待 Muse/Dot 评审请求。
+- `docs/dot-g-insurance-failure-review-2026-10-28.md`、`docs/g-insurance-failure-fixback-start-ack-2026-10-28.md`：Dot 对 G-R1–R4 的静态复核与 Luna 有界回修状态。
 - `docs/founder-decision-step6-slice2-r1-pagination-display-2026-10-28.md`、`docs/step6-slice2-r1-pagination-fixback-start-ack-2026-10-28.md`：R1 证书多图完整展示决定与针对性回修开工回执；实现和评审尚待完成。
 - `docs/muse-to-luna-rea-fishingbooker-teardown-order-2026-10-28.md`、`docs/muse-to-dot-rea-fishingbooker-teardown-review-request-2026-10-28.md`、`docs/ui-design-review-620db74f.md`、`docs/dot-rea-fishingbooker-pre-review-clarification-2026-10-28.md`：FishingBooker 客户端静态拆解工单、评审链和证据边界澄清；该独立调研线按工单排在剩余开发之后/评审空窗。
 - `docs/codex-dev-step1-brief-v1.md`、`docs/step1-build-notes.md`、`docs/step1-review-84828e0f87c2.md`、`docs/step1-review-request-2026-10-24.md`：第 1 步任务、实施记录与 Muse 独立评审。

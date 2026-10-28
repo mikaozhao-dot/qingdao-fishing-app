@@ -3,7 +3,7 @@
 - 执行会话：fishingbooker拆解研究（Luna）
 - 当前仓库：`qingdao-fishing-app`，main；依据主仓命令 `docs/muse-to-luna-rea-teardown-session-reorder-2026-10-28.md`（`eb907aec`）。
 - 范围确认：本会话只负责 FishingBooker 客户端 REA 静态拆解。G 投保失败回修队列归 `luna开发` 会话；本会话不认领、不触碰、不评论其进度。
-- 当前状态：REA MCP 加载检查通过；按新令切换为 Google Play 官方来源获取。创始人提供的截图显示 Google 服务器通信错误；按“重新打开”要求重开 Play 商店后页面回到登录提示。创始人于 2026-10-28 17:50（Asia/Shanghai）确认再次登录仍报错。APK 未取得、未安装或提取，尚未开始拆解。
+- 当前状态：REA MCP 加载检查通过；Mac HTTP/HTTPS 代理已按新令传入 AVD，Google Play 可达性自测通过。Play 当前停在完整的 Google 登录页，等创始人本人登录；APK 尚未取得、安装或提取，尚未开始拆解。
 
 ## 1. REA 本次实际加载验证
 
@@ -30,9 +30,13 @@
 - 环境核对：Android SDK 位于 `/Users/mikao/Library/Android/sdk`；`adb` 37.0.1、Android Emulator 37.2.12 可用。此前仅有 Android 36 `google_apis` arm64 镜像，无 Play 商店镜像；未发现已连接的真机。
 - 按新令安装了官方 Android 36 Google Play arm64-v8a 系统镜像，并新建、启动独立 Pixel 6 AVD：`fishingbooker-play-api36`。未改动既有 AVD。
 - 通过 `market://details?id=com.fishingbookercaptains.android` 打开 Google Play。Play 显示 “Sign in to find the latest Android apps, games, movies, music, & more”，按钮为 “Sign in”；当前页为 `com.android.vending/com.google.android.finsky.unauthenticated.activity.UnauthenticatedMainActivity`。因此本路线必须先由创始人本人完成 Google 账号登录。
-- 创始人提供的登录后截图出现：“Something went wrong / There was a problem communicating with Google servers. / Try again later.”。2026-10-28 16:00，本会话按“重新打开”要求对 `com.android.vending` 执行 force-stop 后重新打开 Captain 的 Play 商店链接；重新打开成功，页面回到上述 Google 登录提示。当前仍未认证。
-- 请创始人在当前运行的 `fishingbooker-play-api36` 模拟器里亲自点击 Play 商店的 “Sign in” 并完成自己的 Google 账号登录；若再次出现服务器通信错误，先由创始人处理登录问题并告知结果。不得把账号口令发到聊天，也不由执行方代填或保存凭据。本会话未输入凭据，停在登录按钮前，不安装应用、不提取 APK。
-- 2026-10-28 17:50（Asia/Shanghai），创始人确认登录重试仍报同一 Google 服务器通信错误。样本获取按新令继续暂停，不切换镜像站。请创始人本人处理此模拟器的 Google 账号／Play 服务通信，并在能够进入 Play 商店后告知；此前不继续安装或提取。
+- 创始人提供的登录尝试截图出现：“Something went wrong / There was a problem communicating with Google servers. / Try again later.”。2026-10-28 16:00，本会话按“重新打开”要求对 `com.android.vending` 执行 force-stop 后重新打开 Captain 的 Play 商店链接；重新打开成功，页面回到上述 Google 登录提示。当前仍未认证。
+- Mac 代理实读（`scutil --proxy`）：HTTP `Enable=1, Server=127.0.0.1, Port=15236`；HTTPS `Enable=1, Server=127.0.0.1, Port=15236`。仅记录代理地址和端口，不含凭据。
+- AVD 自动时间核对：`auto_time=1`、`auto_time_zone=1`；模拟器时区为 `Asia/Shanghai`。
+- 方法一：冷关现有 `fishingbooker-play-api36` 后重新启动，参数为 `-http-proxy http://127.0.0.1:15236`。进程参数已核验包含该代理地址。
+- 可达性自测：2026-10-28 18:00（Asia/Shanghai）在 AVD 用 Captain Play 链接打开 Google Play；登录页完整显示 “Sign in to find the latest Android apps, games, movies, music, & more” 与 “Sign in” 按钮，没有 Google 服务器错误提示。方法一通过；未执行方法二。
+- 登录停点：请创始人在当前运行的 `fishingbooker-play-api36` 模拟器里亲自点击 Play 商店的 “Sign in” 并完成自己的 Google 账号登录；完成后告知本会话继续。不得把账号口令发到聊天，也不由执行方代填或保存凭据。本会话未输入凭据，当前停在登录按钮前，不安装应用、不提取 APK。
+- 2026-10-28 17:50（Asia/Shanghai），创始人确认登录重试此前仍报 Google 服务器通信错误；本次代理冷启动后页面自测恢复正常。若登录时再次出现通信错误，保留原文回报并停止，不切换镜像站或其他代理方法。
 - 若登录后 Play 显示地区不可用或找不到任一目标应用，按新令停止并回报，不切回镜像站路线。
 
 ## 4. 排期
@@ -42,5 +46,5 @@
 
 ## 已执行与未执行
 
-- 已执行：读取本仓新令、原工单与 Dot 澄清；本会话实际调用 REA 加载验证；核对公开分发页与下载可达性；安装 Google Play 官方系统镜像、创建并启动独立 AVD、打开 Play 商店并确认登录要求。
+- 已执行：读取本仓新令、原工单、Dot 澄清及代理修复令；本会话实际调用 REA 加载验证；核对公开分发页与下载可达性；安装 Google Play 官方系统镜像、创建并启动独立 AVD；实读 Mac HTTP/HTTPS 代理、按方法一冷启动 AVD，并完成 Play 页面可达性自测。
 - 未执行：未登录 Google 账号；未安装或提取 FishingBooker 应用；未打开或分析目标 APK；未登录 FishingBooker、未下单、未访问生产账户或生产流量；未运行 jadx/apktool 或其他替代拆解工具；未触碰 G 开发队列文件。

@@ -3,7 +3,7 @@
 - 执行会话：fishingbooker拆解研究（Luna）
 - 当前仓库：`qingdao-fishing-app`，main；依据主仓命令 `docs/muse-to-luna-rea-teardown-session-reorder-2026-10-28.md`（`eb907aec`）。
 - 范围确认：本会话只负责 FishingBooker 客户端 REA 静态拆解。G 投保失败回修队列归 `luna开发` 会话；本会话不认领、不触碰、不评论其进度。
-- 当前状态：REA MCP 加载检查通过；Mac HTTP/HTTPS 代理已按新令传入 AVD，Google Play 可达性自测通过。Play 当前停在完整的 Google 登录页，等创始人本人登录；APK 尚未取得、安装或提取，尚未开始拆解。
+- 当前状态：REA MCP 加载检查通过。此前 Android AVD 路线已按要求停止在本人 Google 登录环节；依 2026-10-28 BlueStacks Air 新令，官方 BlueStacks Air 5.21.790.7505 已安装并启动，内置 Google Play 已于 18:37（Asia/Shanghai）打开到完整登录页，当前等创始人本人登录。APK 尚未取得、安装或提取，尚未开始拆解。
 
 ## 1. REA 本次实际加载验证
 
@@ -35,16 +35,25 @@
 - AVD 自动时间核对：`auto_time=1`、`auto_time_zone=1`；模拟器时区为 `Asia/Shanghai`。
 - 方法一：冷关现有 `fishingbooker-play-api36` 后重新启动，参数为 `-http-proxy http://127.0.0.1:15236`。进程参数已核验包含该代理地址。
 - 可达性自测：2026-10-28 18:00（Asia/Shanghai）在 AVD 用 Captain Play 链接打开 Google Play；登录页完整显示 “Sign in to find the latest Android apps, games, movies, music, & more” 与 “Sign in” 按钮，没有 Google 服务器错误提示。方法一通过；未执行方法二。
-- 登录停点：请创始人在当前运行的 `fishingbooker-play-api36` 模拟器里亲自点击 Play 商店的 “Sign in” 并完成自己的 Google 账号登录；完成后告知本会话继续。不得把账号口令发到聊天，也不由执行方代填或保存凭据。本会话未输入凭据，当前停在登录按钮前，不安装应用、不提取 APK。
+- 历史登录停点（Android AVD 路线，现由后续 BlueStacks Air 新令替代）：此前请创始人在 `fishingbooker-play-api36` 中自行登录。该路线出现 Google 服务器通信错误后停止；本回执第 4 节记录的新路线和当前登录停点为准。该路线未输入凭据，未安装应用或提取 APK。
 - 2026-10-28 17:50（Asia/Shanghai），创始人确认登录重试此前仍报 Google 服务器通信错误；本次代理冷启动后页面自测恢复正常。若登录时再次出现通信错误，保留原文回报并停止，不切换镜像站或其他代理方法。
 - 若登录后 Play 显示地区不可用或找不到任一目标应用，按新令停止并回报，不切回镜像站路线。
 
-## 4. 排期
+## 4. BlueStacks Air 官方装机与当前登录停点（2026-10-28）
 
-- 当前 APK 尚未锁定，按新令暂不承诺拆解开工或交付钟点。
-- 两个应用都从 Play 安装、提取并完成包名／版本／SHA-256 本地核验后，再更新本回执给出新的开工和交付钟点；不默默顺延。
+- 本次由 fishingbooker拆解研究（Luna）执行会话认领 BlueStacks Air 装机与 Play 可达性核验。实际开始：2026-10-28 18:33（Asia/Shanghai）；18:37 打开 Play 并确认登录页；18:38 停在登录页等待创始人本人操作。
+- 下载来源：BlueStacks 官方 Mac 产品页 https://www.bluestacks.com/mac；官方安装包 `BlueStacksInstaller_5.21.790.7505.pkg`，本机路径 `/Users/mikao/Downloads/BlueStacksInstaller_5.21.790.7505.pkg`，SHA-256 `137accd707aa21028abf57412820d803fe550b07a1d5110ada291b80e10877aa`。安装包签名校验为 Developer ID Installer: now.gg, Inc. (UJYFHY4XNR)，Apple notarization trusted；`spctl` 结果为 accepted / Notarized Developer ID。
+- 主机环境：macOS 26.6.2、Apple Silicon（`arm64`）。安装收据显示 BlueStacks 与 BlueStacks Air MIM 均为 5.21.790.7505；应用位于 `/Applications/BlueStacks.app`。安装启动成功，未观察到要求创始人输入管理员口令或批准系统扩展的步骤。
+- Play 实况：BlueStacks Air 窗口内打开系统自带 Google Play，画面显示 “Sign in to find the latest Android apps, games, movies, music, & more” 和 “Sign in” 按钮；本次未点登录、未输入账号或验证码，也未安装 FishingBooker 应用。当前停点为 Play 登录页，需创始人本人完成 Google 登录后告知本会话继续。
+- 逐项卡点：① 等待创始人本人 Google 登录；② 登录前不能从 Play 安装两款目标应用；③ 因 APK 尚未导出，包名、实测版本、SHA-256 和 REA 实际打开结果均待取得样本后填写。当前未观察到 BlueStacks 内 Google Play 通信错误。
+- 登录失败止损：若登录仍出现 Google 服务器通信错误，记录原文并停止；不改用第三方 APK 来源、第三种模拟器或真机路线，等创始人决定。
+
+## 5. 排期
+
+- 本阶段计划已实际完成：18:33 开始官方安装，18:37 完成 Play 可达性核验，18:38 按新令停在本人登录页。
+- APK 获取、拆解开工与交付钟点受创始人 Google 登录完成时间阻塞；当前没有依据承诺具体完成时刻。登录完成后立即更新本回执，先写明当日执行与交付钟点，再安装、导出和核验 APK；如预计赶不上，将在承诺钟点前更新，不默默顺延。
 
 ## 已执行与未执行
 
-- 已执行：读取本仓新令、原工单、Dot 澄清及代理修复令；本会话实际调用 REA 加载验证；核对公开分发页与下载可达性；安装 Google Play 官方系统镜像、创建并启动独立 AVD；实读 Mac HTTP/HTTPS 代理、按方法一冷启动 AVD，并完成 Play 页面可达性自测。
+- 已执行：读取本仓新令、原工单、Dot 澄清及代理修复令；本会话实际调用 REA 加载验证；核对公开分发页与下载可达性；安装 Google Play 官方系统镜像、创建并启动独立 AVD；实读 Mac HTTP/HTTPS 代理、按方法一冷启动 AVD，并完成 Play 页面可达性自测；按新令从 BlueStacks 官方来源安装并验证 BlueStacks Air 5.21.790.7505，在其内打开 Google Play 登录页。
 - 未执行：未登录 Google 账号；未安装或提取 FishingBooker 应用；未打开或分析目标 APK；未登录 FishingBooker、未下单、未访问生产账户或生产流量；未运行 jadx/apktool 或其他替代拆解工具；未触碰 G 开发队列文件。

@@ -3,7 +3,7 @@
 - 执行会话：fishingbooker拆解研究（Luna）
 - 当前仓库：`qingdao-fishing-app`，main；依据主仓命令 `docs/muse-to-luna-rea-teardown-session-reorder-2026-10-28.md`（`eb907aec`）。
 - 范围确认：本会话只负责 FishingBooker 客户端 REA 静态拆解。G 投保失败回修队列归 `luna开发` 会话；本会话不认领、不触碰、不评论其进度。
-- 当前状态：REA MCP 加载检查通过。此前 Android AVD 路线已按要求停止；依 BlueStacks Air 新令，官方 BlueStacks Air 5.21.790.7505 已安装并启动。Google Play 登录尚未验证成功：用户提供的 now.gg 账户已登录截图不是 Google Play 认证结果；Play 当前显示 “Checking info...” 并持续转圈。APK 尚未取得、安装或提取，尚未开始拆解。
+- 当前状态：REA MCP 加载检查通过。此前 Android AVD 路线已按要求停止；依 BlueStacks Air 新令，官方 BlueStacks Air 5.21.790.7505 已安装并启动。Google Play 认证失败：18:47（Asia/Shanghai）Play 显示 “Something went wrong / There was a problem communicating with Google servers. / Try again later.”，按新令停手。APK 尚未取得、安装或提取，尚未开始拆解。
 
 ## 1. REA 本次实际加载验证
 
@@ -44,15 +44,15 @@
 - 本次由 fishingbooker拆解研究（Luna）执行会话认领 BlueStacks Air 装机与 Play 可达性核验。实际开始：2026-10-28 18:33（Asia/Shanghai）；18:37 打开 Play 并确认登录页；18:38 停在登录页等待创始人本人操作。
 - 下载来源：BlueStacks 官方 Mac 产品页 https://www.bluestacks.com/mac；官方安装包 `BlueStacksInstaller_5.21.790.7505.pkg`，本机路径 `/Users/mikao/Downloads/BlueStacksInstaller_5.21.790.7505.pkg`，SHA-256 `137accd707aa21028abf57412820d803fe550b07a1d5110ada291b80e10877aa`。安装包签名校验为 Developer ID Installer: now.gg, Inc. (UJYFHY4XNR)，Apple notarization trusted；`spctl` 结果为 accepted / Notarized Developer ID。
 - 主机环境：macOS 26.6.2、Apple Silicon（`arm64`）。安装收据显示 BlueStacks 与 BlueStacks Air MIM 均为 5.21.790.7505；应用位于 `/Applications/BlueStacks.app`。安装启动成功，未观察到要求创始人输入管理员口令或批准系统扩展的步骤。
-- Play 实况：18:37 首次确认登录页显示 “Sign in to find the latest Android apps, games, movies, music, & more” 与 “Sign in”。18:40 用户称已登录，但重开 Play 后仍显示同一登录页；18:41 点击 “Sign in” 后页面进入 “Checking info...” 加载状态，截至 18:44 仍持续转圈，没有出现已登录商店页或具体错误文案。未输入账号、口令或验证码，未安装 FishingBooker 应用。用户随后提供的截图为 now.gg 账户网页，显示 now.gg 账户会话已登录；它不能证明 Google Play 的 Google 账号认证成功。
+- Play 实况：18:37 首次确认登录页显示 “Sign in to find the latest Android apps, games, movies, music, & more” 与 “Sign in”。18:40 用户称已登录，但重开 Play 后仍显示同一登录页；18:41 点击 “Sign in” 后页面进入 “Checking info...” 加载状态，截至 18:44 仍持续转圈。18:47（Asia/Shanghai）重新查看时，Play 显示原文：“Something went wrong” / “There was a problem communicating with Google servers.” / “Try again later.”。这是 BlueStacks Air 路线首次明确认证失败；按新令记录后停手，不再重试。未输入账号、口令或验证码，未安装 FishingBooker 应用。用户提供的 now.gg 账户网页截图仅证明 now.gg 会话登录，不能证明 Google Play 认证成功。
 - 代理核对：macOS `scutil --proxy` 实读 HTTP、HTTPS、SOCKS 均启用，目标为 `127.0.0.1`（HTTP/HTTPS 端口 `15236`，SOCKS 端口 `15235`）；BlueStacks 进程环境未设置 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY`。系统代理已配置，但目前没有证据确认 BlueStacks 应用流量实际经过该代理；未改网络设置、未另装网络工具。
-- 逐项卡点：① Google Play 仍处于 “Checking info...” ，登录成功未验证；② 在 Play 显示已认证前不安装两款目标应用；③ APK 尚未导出，包名、实测版本、SHA-256 和 REA 实际打开结果待取得样本后填写。当前未出现可逐字记录的明确错误文案。
-- 登录止损：当前只记录到 “Checking info...” 持续加载，不能当作成功，也没有可冒充成错误的原文。等待创始人在 BlueStacks 内完成 Google Play 登录；若出现明确报错，逐字记录并停止，不换第三种模拟器、不切回真机或第三方 APK 来源，等创始人决定。
+- 逐项卡点：① Google Play 认证因上述 Google 服务器通信错误失败；② 按新令停手，不再尝试登录，不安装两款目标应用；③ APK 尚未导出，包名、实测版本、SHA-256 和 REA 实际打开结果待取得样本后填写。
+- 登录止损：Google Play 明确返回 “There was a problem communicating with Google servers. Try again later.”，已记录原文并停止。按新令不再重试、不换第三种模拟器、不切回真机或第三方 APK 来源，等创始人决定下一路线。
 
 ## 5. 排期
 
-- 已完成节点：18:33 开始官方安装，18:37 确认 Play 登录页；18:41 打开 Play 登录检查，至 18:44 仍停在 “Checking info...”。
-- APK 安装、导出、REA 开工与交付时间均受 Google Play 认证未完成阻塞；此刻不编造固定 ETA。认证页显示成功后，立即更新回执，先给出当日执行与交付钟点再继续；若预计赶不上，会在承诺时点前更新，不默默顺延。
+- 已完成节点：18:33 开始官方安装，18:37 确认 Play 登录页；18:41 登录检查停留在 “Checking info...”；18:47 收到上述明确服务器通信错误并按令停手。
+- APK 安装、导出、REA 开工与交付时间目前因认证失败而阻塞。下一步路线须由创始人决定；获批新路线后先更新当日执行与交付钟点，再继续，不默默顺延。
 
 ## 已执行与未执行
 

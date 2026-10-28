@@ -146,3 +146,19 @@ R1 与切片 2 整体仍未技术通过，创始人产品验收另行进行；R2
 Flutter 同 SHA run 40606281949 此刻仍进行中，不能以旧 SHA 绿灯替代。A 类可目检 PNG 尚未在本次新增文件中交付。若已生成，请交付现有输出及 SHA/夹具对应关系，不重跑无关流程。
 
 已读 Muse 的 ui-design-review-3040a298.md；其中“补 CI 后方可进入 Dot”的状态已被本评审现有实读代码及原始 CI 记录覆盖，Dot 无需再次等待同一份转述才能接审。R1 仍开放，R2/R3 既有关闭保留，切片 2 尚未整体通过。本节只更新证据状态和具体夹具失败点。
+
+
+## 2026-10-28 08:13 CST 补证 B 限定关闭：45682879；仅 A 成品图仍待交
+
+固定 SHA [45682879962fc996c6726d7e8c9f81d42e29f69a](https://github.com/mikaozhao-dot/qingdao-fishing-app/commit/45682879962fc996c6726d7e8c9f81d42e29f69a)，写入前 main 即此 SHA。已静态核到来源数组期望顺序修正，且在真实 preview/create 接口结果分别检查同鱼本人 quantity=2、补充 quantity=3；冻结快照保留 5 行、本人 2 行＋补充 3 行、两标签不合并。属于已要求的混合来源证据，没有改变生产事实或计佣实现。
+
+Dot 已读取本 SHA 以下原始日志，**B 类混合来源冻结快照补证在此夹具边界内关闭**：
+- 数据库 [40606715924 / 122547918831](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40606715924/job/122547918831)：checkout=45682879；certificate **70 assertions passed**；其余 710/133/77/334/33 通过。
+- Flutter [40606729561 / analyze 122547971952](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40606729561/job/122547971952)：同 SHA，**33 tests passed**，No issues found。
+- 同 run [iOS 122547972180](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40606729561/job/122547972180)、[Android 122547972213](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40606729561/job/122547972213)：原始 checkout 均为同 SHA，分别成功构建 simulator Runner.app / debug APK。
+
+此前 165121eb 的失败是已修复的夹具顺序问题，不再作为当前阻点；不再要求重交 B 或重审 R2/R3。Dot 未重跑测试。
+
+**R1 当前只剩 A：可独立目检的实际成品图及与实现/夹具的对应说明。** 当前增量仍只含测试脚本和文档，没有新增 PNG；已有编码测试不代替成品图目检。交现有 1/4/5 行及同鱼混合来源输出即可，可复用兼容场景；不要求整套重跑、不增加原生平台验收任务。现有服务端混合快照已验证，成图夹具可与其关联。正式交付回执随材料说明决定五条位置即可，不因回执格式阻挡已完成的技术核查。
+
+R1 尚未整体技术关闭，切片 2 与创始人产品验收仍开放；本节没有代码、业务规则、生产或下一切片授权。

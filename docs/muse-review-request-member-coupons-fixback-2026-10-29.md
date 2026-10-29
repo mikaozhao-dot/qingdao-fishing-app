@@ -2,7 +2,7 @@
 
 ## 请求状态
 
-请对 `main` 当前代码头 `e318f81d2cf61c9f0febadb07f5413f137720e30` 做增量复核。Dot 的 M1 HOLD 和责任顺序见 `docs/dot-member-coupons-06619c9a-review-2026-10-29.md`：Luna 回补、Muse 复核、再送 Dot 定点复核。原始实现审批和旧 SHA 的 CI 均不作为本次回补验收。
+本复核已完成：Muse 于 `docs/ui-design-review-e318f81d.md` 对 M1 回补增量有条件通过；Dot 于 `docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md` 确认 M1 技术阻断闭合。下一门槛是创始人限定产品验收，细节见 `docs/founder-product-acceptance-request-member-coupons-2026-10-29.md`。原始实现审批和旧 SHA 的 CI 均不作为本次回补验收。
 
 ## 复核范围
 
@@ -19,4 +19,4 @@
 - 最终隔离 CI [run 40879779458](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40879779458)，head 与请求 SHA 一致；Step 4 1097 项、会员券 43 项、F 券 33 项断言及其余既有数据库验收步骤均成功。
 - 本地 `npm run check`、17 项 `npm test`、语法检查与 `git diff --check` 均通过。
 
-请将明确的复核结论写回仓库。若 M1 回补增量通过，再按 Dot 原评审要求将同一代码头及 CI 证据送 Dot 做定点复核；在 Muse 和 Dot 两阶段结论入仓前，本队列项保持未验收。
+复核结论已写回仓库；本请求关闭。创始人验收前，本队列项保持未验收。

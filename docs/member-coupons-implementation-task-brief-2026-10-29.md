@@ -3,7 +3,7 @@
 ## 状态与授权
 
 - **任务书：Muse 有条件通过并已解除开工门禁。**依据 `docs/ui-design-review-06811f5f.md`；本文件将草案正式化。
-- **实现：原始交付 `06619c9a` 经 Dot 定点复核发现 M1 HOLD；按回补要求修复后已推送到 main（最终代码头 `e318f81d`）。** 最新隔离 CI `40879779458` 通过，含 Step 4 的关闭路径验收；当前等待 Muse 对回补增量独立复核，之后按 Dot 原评审要求送 Dot 定点复核。队列第 4 项在两阶段复核完成前不算完成。证据见 `docs/member-coupons-closeout-fixback-delivery-receipt-2026-10-29.md`。
+- **代码复核：Muse 对 M1 回补增量有条件通过（`docs/ui-design-review-e318f81d.md`）；Dot 已关闭 M1 技术阻断（`docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md`）。** 回补代码头为 `e318f81d`，隔离 CI `40879779458` 通过。现在等待创始人对本地/CI 沙盒交付作限定产品验收；队列第 4 项在验收结论入仓前保持待验收。验收请求与已披露的覆盖局限见 `docs/founder-product-acceptance-request-member-coupons-2026-10-29.md`。
 - 仅限本地/CI 沙盒 API 与数据库。不得接入真实支付、资金、保险、生产部署或新增处罚措施。
 - F 券仅接入与会员券的同单择一核销、佣金基数和审计衔接；不得改变 F 券发放资格、责任归属或其他已验收范围。
 

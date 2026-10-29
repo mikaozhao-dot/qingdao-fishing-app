@@ -4,7 +4,7 @@
 
 - Dot 对首轮代码头 `06619c9aee1a41efc3c7f33ac7cfa8f54e0e92c9` 给出 M1 HOLD，问题与边界见 `docs/dot-member-coupons-06619c9a-review-2026-10-29.md`。
 - 回补代码已推到 `main`，最终代码头 `e318f81d2cf61c9f0febadb07f5413f137720e30`。
-- 回补 CI 已通过；当前只请求 Muse 对 M1 回补增量代码复核。Muse 复核后还须按 Dot 原评审要求送 Dot 定点复核。本回执、CI 和代码提交均不代表 Muse 或 Dot 验收，队列第 4 项不关单。
+- Muse 对 M1 回补增量有条件通过（`docs/ui-design-review-e318f81d.md`）；Dot 的定点复核确认 M1 技术阻断闭合（`docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md`）。现在等待创始人限定产品验收；队列第 4 项暂不标记完成。
 
 ## 回补内容
 
@@ -19,10 +19,10 @@
 - 本地 `server/npm test -- --test-reporter=dot`：17 项通过、0 项失败。
 - `git diff --check` 与 `node --check server/scripts/step4-acceptance.mjs`：通过。
 - 隔离 GitHub Actions [run 40879779458](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40879779458)：head 为 `e318f81d2cf61c9f0febadb07f5413f137720e30`，完整成功；Step 4 数据库验收 1097 项断言、会员券验收 43 项断言、F 券验收 33 项断言均通过，工作流中的其余既有数据库验收步骤也通过。
-- 该流水线的前两次回补尝试未通过：第一次在优惠券夹具缺少本人座位时停止，第二次在身份验证夹具缺少已验证时间时停止；随后补齐真实本人身份夹具，最终运行通过。两次失败没有修改业务逻辑。
+- 该流水线的前三次回补尝试未通过：第一次在优惠券夹具缺少本人座位时停止；第二次仍在本人座位夹具处停止，且当时身份夹具尚缺已验证时间；第三次在券复用探针缺少本人座位时停止。随后补齐本人身份与复用探针夹具，最终运行通过。Dot 核对的原始失败记录见其回补复核报告；三次失败均在夹具/探针，最终通过前未修改业务逻辑。
 
 ## 待办与边界
 
-- 待 Muse 对 M1 回补增量复核；复核完成后由 Muse 按 Dot 要求送 Dot 定点复核。
-- 在这两项复核结论入仓前，会员券队列项状态为“待 Muse 回补复核 / 待 Dot 定点复核 / 未验收”。
+- 下一步为创始人限定产品验收；请求范围、证据和已披露覆盖局限见 `docs/founder-product-acceptance-request-member-coupons-2026-10-29.md`。
+- Muse 与 Dot 的 M1 增量技术结论均已入仓，但不代表产品验收；创始人结论入仓前，会员券队列项保持“待限定产品验收 / 未关单”。
 - 本次仅修复本地/CI 沙盒关闭路径及其验收，不接真实支付、资金、保险或生产环境，不扩大到 Dot 已列明之外的会员券/F 券范围。

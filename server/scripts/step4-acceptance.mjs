@@ -610,7 +610,7 @@ async function makePendingResidualBooking(captain, boatId, buyer, label, couponS
   let couponFixture = null;
   const passengerIdentityNumber = makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0'));
   if (couponSpec) {
-    await pool.query('UPDATE users SET identity_number_hash=$2 WHERE id=$1',
+    await pool.query('UPDATE users SET identity_number_hash=$2,identity_verified_at=now() WHERE id=$1',
       [buyer.id, security.identityHash(passengerIdentityNumber)]);
   }
   simulatedStep3Time = purchaseAt;
@@ -714,7 +714,7 @@ async function makeWaitlistPaymentFixture(captain, boatId, label, clockOffsets =
   await expect('POST', `/waitlist/${authorized.entry.id}/accept`, candidate.token, {});
   const passengerIdentityNumber = makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0'));
   if (couponSpec) {
-    await pool.query('UPDATE users SET identity_number_hash=$2 WHERE id=$1',
+    await pool.query('UPDATE users SET identity_number_hash=$2,identity_verified_at=now() WHERE id=$1',
       [candidate.id, security.identityHash(passengerIdentityNumber)]);
   }
   const order = await expect('POST', '/orders', candidate.token, {

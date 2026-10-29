@@ -3,7 +3,7 @@
 ## 状态与授权
 
 - **任务书：Muse 有条件通过并已解除开工门禁。**依据 `docs/ui-design-review-06811f5f.md`；本文件将草案正式化。
-- **代码复核：Muse 对 M1 回补增量有条件通过（`docs/ui-design-review-e318f81d.md`）；Dot 已关闭 M1 技术阻断（`docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md`）。** 回补代码头为 `e318f81d`，隔离 CI `40879779458` 通过。现在等待创始人对本地/CI 沙盒交付作限定产品验收；队列第 4 项在验收结论入仓前保持待验收。验收请求与已披露的覆盖局限见 `docs/founder-product-acceptance-request-member-coupons-2026-10-29.md`。
+- **代码与产品验收：Muse 对 M1 回补增量有条件通过（`docs/ui-design-review-e318f81d.md`），Dot 已关闭 M1 技术阻断（`docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md`），创始人已对沙盒交付作限定范围产品验收（`docs/founder-product-acceptance-member-coupons-2026-10-29.md`）。** 回补代码头 `e318f81d`，隔离 CI `40879779458` 通过。队列第 4 项仅在限定沙盒范围内验收完成；不授权真实通道或生产放行。已披露的覆盖局限继续保留。
 - 仅限本地/CI 沙盒 API 与数据库。不得接入真实支付、资金、保险、生产部署或新增处罚措施。
 - F 券仅接入与会员券的同单择一核销、佣金基数和审计衔接；不得改变 F 券发放资格、责任归属或其他已验收范围。
 
@@ -40,4 +40,4 @@
 
 ## 评审边界
 
-此次任务书审批不代表代码验收、F 券完整业务验收或生产放行。实现交付时须附改动清单、运行过的检查/用例及通过/失败结果，提交后等待 Muse 代码复核；不得自行标记 Muse 已验收。
+任务书审批本身不替代代码验收。本项目的 M1 回补代码复核与限定沙盒产品验收结果分别记录于 `docs/ui-design-review-e318f81d.md`、`docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md` 和 `docs/founder-product-acceptance-member-coupons-2026-10-29.md`。这不代表 F 券完整业务验收或生产放行。

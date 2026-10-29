@@ -4,7 +4,7 @@
 
 - 本文件记录首轮交付，代码头 `06619c9aee1a41efc3c7f33ac7cfa8f54e0e92c9` 后被 Dot 定点复核判为 M1 HOLD；该轮交付及其 CI 不覆盖两个批量关闭入口的券释放缺口。
 - M1 回补已另行提交，当前代码头与验证证据见 `docs/member-coupons-closeout-fixback-delivery-receipt-2026-10-29.md`。
-- 首轮交付回执本身不代表产品验收。M1 回补已获 Muse 有条件通过、Dot 定点复核通过；当前等待创始人限定产品验收，状态见 `docs/founder-product-acceptance-request-member-coupons-2026-10-29.md`。
+- 首轮交付回执本身不代表产品验收。M1 回补已获 Muse 有条件通过、Dot 定点复核通过，创始人已另行作限定沙盒产品验收，记录见 `docs/founder-product-acceptance-member-coupons-2026-10-29.md`。
 - 任务书 `docs/member-coupons-implementation-task-brief-2026-10-29.md` 的沙盒、真实通道和生产边界继续有效。
 
 ## 交付范围
@@ -23,4 +23,4 @@
 
 ## 待 Muse 复核
 
-首轮复核请求针对已被 Dot 判为 HOLD 的旧代码头，现由回补请求取代；Muse 与 Dot 对 M1 回补增量的结论分别记录于 `docs/ui-design-review-e318f81d.md` 和 `docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md`。下一门槛为创始人限定产品验收，本队列项暂不标记完成。
+首轮复核请求针对已被 Dot 判为 HOLD 的旧代码头，现由回补请求取代；Muse 与 Dot 对 M1 回补增量的结论分别记录于 `docs/ui-design-review-e318f81d.md` 和 `docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md`。创始人限定产品验收已通过；本队列项仅在限定沙盒范围内完成。

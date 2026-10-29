@@ -2,7 +2,7 @@
 
 ## 请求状态
 
-本复核已完成：Muse 于 `docs/ui-design-review-e318f81d.md` 对 M1 回补增量有条件通过；Dot 于 `docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md` 确认 M1 技术阻断闭合。下一门槛是创始人限定产品验收，细节见 `docs/founder-product-acceptance-request-member-coupons-2026-10-29.md`。原始实现审批和旧 SHA 的 CI 均不作为本次回补验收。
+本复核已完成：Muse 于 `docs/ui-design-review-e318f81d.md` 对 M1 回补增量有条件通过；Dot 于 `docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md` 确认 M1 技术阻断闭合；创始人随后对沙盒交付作限定范围产品验收，决定记录见 `docs/founder-product-acceptance-member-coupons-2026-10-29.md`。原始实现审批和旧 SHA 的 CI 均不作为本次回补验收。
 
 ## 复核范围
 
@@ -19,4 +19,4 @@
 - 最终隔离 CI [run 40879779458](https://github.com/mikaozhao-dot/qingdao-fishing-app/actions/runs/40879779458)，head 与请求 SHA 一致；Step 4 1097 项、会员券 43 项、F 券 33 项断言及其余既有数据库验收步骤均成功。
 - 本地 `npm run check`、17 项 `npm test`、语法检查与 `git diff --check` 均通过。
 
-复核结论已写回仓库；本请求关闭。创始人验收前，本队列项保持未验收。
+复核结论已写回仓库；本请求关闭。队列项仅在限定沙盒范围内验收完成。

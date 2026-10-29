@@ -4,7 +4,7 @@
 
 - Dot 对首轮代码头 `06619c9aee1a41efc3c7f33ac7cfa8f54e0e92c9` 给出 M1 HOLD，问题与边界见 `docs/dot-member-coupons-06619c9a-review-2026-10-29.md`。
 - 回补代码已推到 `main`，最终代码头 `e318f81d2cf61c9f0febadb07f5413f137720e30`。
-- Muse 对 M1 回补增量有条件通过（`docs/ui-design-review-e318f81d.md`）；Dot 的定点复核确认 M1 技术阻断闭合（`docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md`）。现在等待创始人限定产品验收；队列第 4 项暂不标记完成。
+- Muse 对 M1 回补增量有条件通过（`docs/ui-design-review-e318f81d.md`）；Dot 的定点复核确认 M1 技术阻断闭合（`docs/dot-member-coupons-e318f81d-fixback-review-2026-10-29.md`）；创始人已作限定沙盒产品验收（`docs/founder-product-acceptance-member-coupons-2026-10-29.md`）。队列项仅在该限定范围内完成。
 
 ## 回补内容
 
@@ -23,6 +23,6 @@
 
 ## 待办与边界
 
-- 下一步为创始人限定产品验收；请求范围、证据和已披露覆盖局限见 `docs/founder-product-acceptance-request-member-coupons-2026-10-29.md`。
-- Muse 与 Dot 的 M1 增量技术结论均已入仓，但不代表产品验收；创始人结论入仓前，会员券队列项保持“待限定产品验收 / 未关单”。
+- 创始人限定产品验收已完成；决定、范围和边界见 `docs/founder-product-acceptance-member-coupons-2026-10-29.md`。
+- 会员券队列项在本地/CI 沙盒范围内验收完成；已披露的覆盖局限继续保留，不扩展为生产验收。
 - 本次仅修复本地/CI 沙盒关闭路径及其验收，不接真实支付、资金、保险或生产环境，不扩大到 Dot 已列明之外的会员券/F 券范围。

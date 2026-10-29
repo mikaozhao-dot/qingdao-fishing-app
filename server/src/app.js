@@ -9,6 +9,7 @@ import { registerStep4Routes } from './step4-routes.js';
 import { registerStep5Routes } from './step5-routes.js';
 import { registerPromotionRoutes } from './promotion-routes.js';
 import { registerStep6CertificateRoutes } from './step6-certificate-routes.js';
+import { registerFCompensationCouponRoutes } from './f-compensation-coupon-routes.js';
 
 const { Pool } = pg;
 
@@ -39,7 +40,7 @@ export function buildApp(runtimeConfig = config) {
     if (request.headers.origin) {
       reply.header('access-control-allow-origin', '*');
       reply.header('access-control-allow-methods', 'GET,POST,OPTIONS');
-      reply.header('access-control-allow-headers', 'content-type,authorization,x-admin-password,x-sandbox-signature');
+      reply.header('access-control-allow-headers', 'content-type,authorization,x-admin-password,x-admin-actor,x-sandbox-signature');
       reply.header('access-control-max-age', '600');
     }
   });
@@ -93,6 +94,7 @@ export function buildApp(runtimeConfig = config) {
   registerStep4Routes(app, { pool, redis, config: runtimeConfig, requireUser });
   registerStep5Routes(app, { pool, config: runtimeConfig, requireUser });
   registerStep6CertificateRoutes(app, { pool, config: runtimeConfig, requireUser });
+  registerFCompensationCouponRoutes(app, { pool, config: runtimeConfig, requireUser });
 
   app.addHook('onClose', async () => {
     await pool?.end();

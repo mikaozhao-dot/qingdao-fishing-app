@@ -49,6 +49,7 @@ jobs:
       STEP5_LIVE_ACCEPTANCE: 'true'
       STEP6_PROMOTION_ACCEPTANCE: 'true'
       STEP6_CERTIFICATE_ACCEPTANCE: 'true'
+      F_COMPENSATION_ACCEPTANCE: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -83,3 +84,6 @@ jobs:
       - name: Run Step 6 slice 2 catch-certificate acceptance
         working-directory: server
         run: npm run smoke:step6-certificates
+      - name: Run F compensation coupon sandbox acceptance
+        working-directory: server
+        run: npm run smoke:f-compensation-coupons

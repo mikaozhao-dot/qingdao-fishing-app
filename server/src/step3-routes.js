@@ -1259,13 +1259,14 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
          WHERE id=$1 AND identity_status='verified' AND identity_verified_at IS NOT NULL FOR UPDATE`,
         [request.user.id],
       );
-      if (!identityResult.rowCount || !identityResult.rows[0].identity_number_hash) {
+      const buyerIdentityHash = identityResult.rowCount && identityResult.rows[0].identity_number_hash
+        ? Buffer.from(identityResult.rows[0].identity_number_hash) : null;
+      if (couponInput && !buyerIdentityHash) {
         await client.query('ROLLBACK');
         return sendError(reply, 403, '实名状态已变化，请重新核验后下单');
       }
-      const buyerIdentityHash = Buffer.from(identityResult.rows[0].identity_number_hash);
-      const buyerPassenger = passengerResult.value.find((passenger) =>
-        security.identityHash(passenger.identityNumber).equals(buyerIdentityHash));
+      const buyerPassenger = buyerIdentityHash ? passengerResult.value.find((passenger) =>
+        security.identityHash(passenger.identityNumber).equals(buyerIdentityHash)) : null;
       if (couponInput && !buyerPassenger) {
         await client.query('ROLLBACK');
         return sendError(reply, 409, '优惠券仅限本人乘船时使用');

@@ -432,9 +432,9 @@ try {
   const fCoupon = await pool.query(
     `INSERT INTO f_compensation_coupon_ledger
        (source_event_key,source_order_id,beneficiary_user_id,scenario,responsible_party,
-        ticket_paid_fen,amount_fen,issued_by,issue_note)
+        ticket_paid_fen,amount_fen,issued_by,issue_note,expires_at)
      VALUES ($1,$2,$3,'captain_non_weather_cancel','captain_guarantee',5000,150,'member_coupon_acceptance',
-        '会员券互斥核验的沙盒 F 券') RETURNING id`,
+        '会员券互斥核验的沙盒 F 券',now()+interval '1 year') RETURNING id`,
     [`member-f-source-${randomUUID()}`, fSource, buyer.id],
   );
   fCouponIds.push(fCoupon.rows[0].id);

@@ -608,6 +608,11 @@ async function makePendingResidualBooking(captain, boatId, buyer, label, couponS
   let order;
   let payment;
   let couponFixture = null;
+  const passengerIdentityNumber = makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0'));
+  if (couponSpec) {
+    await pool.query('UPDATE users SET identity_number_hash=$2 WHERE id=$1',
+      [buyer.id, security.identityHash(passengerIdentityNumber)]);
+  }
   simulatedStep3Time = purchaseAt;
   try {
     hold = await expect('POST', `/departures/${fixture.departureId}/seat-holds`, buyer.token,
@@ -619,7 +624,7 @@ async function makePendingResidualBooking(captain, boatId, buyer, label, couponS
       passengers: [{
         seatId: seat.id,
         fullName: '截止前待付款钓友',
-        identityNumber: makeSandboxIdentityNumber(String(sequence).padStart(3, '0')),
+        identityNumber: passengerIdentityNumber,
         phone: '13900008888',
       }],
     }, 201);
@@ -707,13 +712,18 @@ async function makeWaitlistPaymentFixture(captain, boatId, label, clockOffsets =
   const authorized = await expect('GET', `/waitlist/${registration.entry.id}`, candidate.token);
   check(authorized.entry.status, 'authorized', `${label}: pre-cutoff queue receives the released seat`);
   await expect('POST', `/waitlist/${authorized.entry.id}/accept`, candidate.token, {});
+  const passengerIdentityNumber = makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0'));
+  if (couponSpec) {
+    await pool.query('UPDATE users SET identity_number_hash=$2 WHERE id=$1',
+      [candidate.id, security.identityHash(passengerIdentityNumber)]);
+  }
   const order = await expect('POST', '/orders', candidate.token, {
     holdId: authorized.entry.holdId,
     idempotencyKey: `waitlist-order-${sequence}-${Date.now()}`,
     passengers: [{
       seatId: authorized.entry.seatId,
       fullName: '候补钓友',
-      identityNumber: makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0')),
+      identityNumber: passengerIdentityNumber,
       phone: '13900009999',
     }],
   }, 201);

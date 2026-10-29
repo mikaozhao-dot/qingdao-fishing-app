@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import pg from 'pg';
@@ -7,6 +8,7 @@ import { buildApp } from '../src/app.js';
 import { config } from '../src/config.js';
 import { createSecurity, makeSandboxIdentityNumber } from '../src/security.js';
 import { createSandboxPaymentAdapter } from '../src/step3-adapters.js';
+import { reserveOrderCoupon } from '../src/member-coupon-service.js';
 import {
   loadFormationAccounts,
   processConfirmedChecklists,
@@ -186,6 +188,138 @@ async function makeUser(name, captain = false) {
   } finally {
     client.release();
   }
+}
+
+async function runDbTransaction(operation) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await operation(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function reserveTestCouponForOrder(orderId, userId, couponKind, {
+  sourceOrderId = orderId,
+  expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+} = {}) {
+  return runDbTransaction(async (client) => {
+    const order = await client.query(
+      `SELECT buyer_seat_inventory_id,seat_fee_fen,discount_fen,platform_fee_fen
+       FROM booking_orders WHERE id=$1 FOR UPDATE`, [orderId],
+    );
+    if (!order.rowCount || !order.rows[0].buyer_seat_inventory_id) {
+      throw new Error('Coupon acceptance fixture requires a buyer seat.');
+    }
+    const amountFen = couponKind === 'member' ? 2000 : 150;
+    let couponId;
+    if (couponKind === 'member') {
+      sequence += 1;
+      const coupon = await client.query(
+        `INSERT INTO member_coupons
+           (user_id,coupon_type,milestone,amount_fen,issued_at,expires_at)
+         VALUES ($1,'upgrade',$2,$3,now(),$4) RETURNING id`,
+        [userId, 10000 + sequence, amountFen, expiresAt],
+      );
+      couponId = coupon.rows[0].id;
+      await client.query(
+        `INSERT INTO coupon_ledger_events
+           (coupon_kind,member_coupon_id,user_id,event_type,event_key,details)
+         VALUES ('member',$1,$2,'issued',$3,$4::jsonb)`,
+        [couponId, userId, `member-coupon-issued:${couponId}`,
+          JSON.stringify({ amountFen, source: 'closeout_acceptance' })],
+      );
+    } else if (couponKind === 'f') {
+      const coupon = await client.query(
+        `INSERT INTO f_compensation_coupon_ledger
+           (source_event_key,source_order_id,beneficiary_user_id,scenario,responsible_party,
+            ticket_paid_fen,amount_fen,issued_by,issue_note,expires_at)
+         VALUES ($1,$2,$3,'captain_non_weather_cancel','captain_guarantee',5000,150,
+            'step4_closeout_acceptance','沙盒关闭入口券释放验收', $4) RETURNING id`,
+        [`closeout-acceptance-${randomUUID()}`, sourceOrderId, userId, expiresAt],
+      );
+      couponId = coupon.rows[0].id;
+      await client.query(
+        `INSERT INTO coupon_ledger_events
+           (coupon_kind,f_coupon_id,user_id,event_type,event_key,details)
+         VALUES ('f',$1,$2,'issued',$3,$4::jsonb)`,
+        [couponId, userId, `f-coupon-issued:${couponId}`,
+          JSON.stringify({ amountFen, source: 'closeout_acceptance' })],
+      );
+    } else {
+      throw new TypeError('Unsupported closeout acceptance coupon kind.');
+    }
+    await client.query(
+      `UPDATE booking_orders SET coupon_discount_fen=$2,
+         total_amount_fen=seat_fee_fen-discount_fen-$2+platform_fee_fen,updated_at=now()
+       WHERE id=$1`, [orderId, amountFen],
+    );
+    const redemption = await reserveOrderCoupon(client, {
+      couponKind, couponId, userId, orderId,
+      seatInventoryId: order.rows[0].buyer_seat_inventory_id,
+    });
+    return {
+      kind: couponKind, id: couponId, amountFen, orderId,
+      redemptionId: redemption.id, expiresAt: new Date(expiresAt),
+    };
+  });
+}
+
+async function reserveExistingTestCouponForOrder(orderId, userId, coupon) {
+  return runDbTransaction(async (client) => {
+    const order = await client.query(
+      `SELECT buyer_seat_inventory_id,seat_fee_fen,discount_fen,platform_fee_fen
+       FROM booking_orders WHERE id=$1 FOR UPDATE`, [orderId],
+    );
+    if (!order.rowCount || !order.rows[0].buyer_seat_inventory_id) {
+      throw new Error('Coupon acceptance probe requires a buyer seat.');
+    }
+    await client.query(
+      `UPDATE booking_orders SET coupon_discount_fen=$2,
+         total_amount_fen=seat_fee_fen-discount_fen-$2+platform_fee_fen,updated_at=now()
+       WHERE id=$1`, [orderId, coupon.amountFen],
+    );
+    return reserveOrderCoupon(client, {
+      couponKind: coupon.kind, couponId: coupon.id, userId, orderId,
+      seatInventoryId: order.rows[0].buyer_seat_inventory_id,
+    });
+  });
+}
+
+async function expireTestCoupon(coupon) {
+  const table = coupon.kind === 'member' ? 'member_coupons' : 'f_compensation_coupon_ledger';
+  const result = await pool.query(
+    `UPDATE ${table} SET issued_at=now()-interval '2 years',expires_at=now()-interval '1 year'
+     WHERE id=$1 RETURNING expires_at`, [coupon.id],
+  );
+  if (!result.rowCount) throw new Error('Coupon acceptance fixture was not found.');
+  return result.rows[0].expires_at;
+}
+
+async function checkCouponReleasedAfterCloseout(coupon, expectedExpiry, label) {
+  const redemption = await scalar(
+    `SELECT id,status FROM order_coupon_redemptions WHERE order_id=$1`, [coupon.orderId],
+  );
+  check(redemption.status, 'released', `${label}: closeout releases the reserved coupon`);
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM coupon_ledger_events
+     WHERE redemption_id=$1 AND event_type='released'`, [redemption.id],
+  )).count, 1, `${label}: closeout writes exactly one release event`);
+  const couponColumn = coupon.kind === 'member' ? 'member_coupon_id' : 'f_coupon_id';
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM order_coupon_redemptions
+     WHERE ${couponColumn}=$1 AND status IN ('reserved','redeemed')`, [coupon.id],
+  )).count, 0, `${label}: the released coupon is no longer actively held`);
+  const table = coupon.kind === 'member' ? 'member_coupons' : 'f_compensation_coupon_ledger';
+  check((await scalar(`SELECT expires_at FROM ${table} WHERE id=$1`, [coupon.id])).expires_at.getTime(),
+    new Date(expectedExpiry).getTime(), `${label}: release preserves the original expiry`);
+  return redemption.id;
 }
 
 async function makeConfirmedDeparture(captainId, boatId) {
@@ -447,7 +581,7 @@ async function makeSupplementFixture(captain, boatId, label) {
   return { departureId, user, orderId, seatId: seat.id, round: response.round };
 }
 
-async function makePendingResidualBooking(captain, boatId, buyer, label) {
+async function makePendingResidualBooking(captain, boatId, buyer, label, couponSpec = null) {
   const fixture = await makeSupplementFixture(captain, boatId, `${label}基础班次`);
   const participant = fixture.round.participants[0];
   await expect('POST',
@@ -473,6 +607,7 @@ async function makePendingResidualBooking(captain, boatId, buyer, label) {
   let hold;
   let order;
   let payment;
+  let couponFixture = null;
   simulatedStep3Time = purchaseAt;
   try {
     hold = await expect('POST', `/departures/${fixture.departureId}/seat-holds`, buyer.token,
@@ -488,13 +623,18 @@ async function makePendingResidualBooking(captain, boatId, buyer, label) {
         phone: '13900008888',
       }],
     }, 201);
+    couponFixture = couponSpec
+      ? await reserveTestCouponForOrder(order.order.id, buyer.id, couponSpec.kind, {
+        sourceOrderId: fixture.orderId, expiresAt: couponSpec.expiresAt,
+      })
+      : null;
     payment = await expect('POST', `/orders/${order.order.id}/payment-intents`, buyer.token, {}, 201);
   } finally {
     simulatedStep3Time = null;
   }
   return {
     ...fixture, buyer, departureAt, seat, hold, order: order.order, payment: payment.payment,
-    supplementIntent: supplementIntent.payment,
+    supplementIntent: supplementIntent.payment, coupon: couponFixture,
   };
 }
 
@@ -536,7 +676,7 @@ async function makeMultiSupplementFixture(captain, boatId, label, {
   return { departureId, user, orders, round: roundResponse.round };
 }
 
-async function makeWaitlistPaymentFixture(captain, boatId, label, clockOffsets = null) {
+async function makeWaitlistPaymentFixture(captain, boatId, label, clockOffsets = null, couponSpec = null) {
   const departureAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
   const bookingDeadline = new Date(departureAt.getTime() - 30 * 60 * 1000);
   const confirmationAt = formationConfirmationAt(departureAt);
@@ -577,17 +717,24 @@ async function makeWaitlistPaymentFixture(captain, boatId, label, clockOffsets =
       phone: '13900009999',
     }],
   }, 201);
+  const coupon = couponSpec
+    ? await reserveTestCouponForOrder(order.order.id, candidate.id, couponSpec.kind, {
+      sourceOrderId: sellerOrderId, expiresAt: couponSpec.expiresAt,
+    })
+    : null;
   const intent = await expect('POST', `/orders/${order.order.id}/payment-intents`, candidate.token, {}, 201);
   return {
     departureId, departureAt, confirmationAt,
     entryId: authorized.entry.id, orderId: order.order.id, candidate,
-    intent: intent.payment, authorizationExpiresAt: authorized.entry.authorizationExpiresAt,
+    intent: intent.payment, authorizationExpiresAt: authorized.entry.authorizationExpiresAt, coupon,
   };
 }
 
-async function makeOrdinaryPendingPaymentFixture(captain, boatId, label) {
+async function makeOrdinaryPendingPaymentFixture(captain, boatId, label, {
+  buyer: existingBuyer = null, coupon = null,
+} = {}) {
   const departure = await makeWindowDeparture(captain, boatId, label);
-  const buyer = await makeUser(`${label}钓友`);
+  const buyer = existingBuyer ?? await makeUser(`${label}钓友`);
   simulatedStep3Time = new Date(departure.confirmationAt.getTime() - 60_000);
   const hold = await expect('POST', `/departures/${departure.departureId}/seat-holds`, buyer.token,
     { seatIds: [departure.seat.id] }, 201);
@@ -601,13 +748,16 @@ async function makeOrdinaryPendingPaymentFixture(captain, boatId, label) {
       phone: '13900009999',
     }],
   }, 201);
+  const couponRedemption = coupon
+    ? await reserveExistingTestCouponForOrder(order.order.id, buyer.id, coupon)
+    : null;
   const intent = await expect('POST', `/orders/${order.order.id}/payment-intents`, buyer.token, {}, 201);
   return {
     ...departure,
     buyer,
     holdId: hold.holdId,
     orderId: order.order.id,
-    intent: intent.payment,
+    intent: intent.payment, couponRedemption,
   };
 }
 
@@ -3708,6 +3858,251 @@ async function main() {
   await processSandboxRefundObligations(pool);
   check((await scalar('SELECT status FROM refund_obligations WHERE order_id=$1', [closureOrderId])).status,
     'sandbox_succeeded', 'full refund is handled through the sandbox refund retry path');
+
+  const shortfallMemberBuyer = await makeUser('短缺关闭会员券钓友');
+  const shortfallMember = await makePendingResidualBooking(
+    captain, quotaBoatId, shortfallMemberBuyer, 'shortfall-member-coupon', { kind: 'member' },
+  );
+  const shortfallMemberClosureAt = new Date(shortfallMember.departureAt.getTime() + 1000);
+  const shortfallMemberCloseout = await processShortfallDepartureClosures(
+    pool, shortfallMemberClosureAt, undefined, { sandboxEnabled: true },
+  );
+  check(shortfallMemberCloseout.cancelled >= 1, true,
+    'shortfall closeout processes a pending order with a member coupon');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [shortfallMember.departureId])).status,
+    'cancelled', 'shortfall member-coupon closeout terminates its departure');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [shortfallMember.order.id])).status,
+    'cancelled', 'shortfall member-coupon closeout cancels the unpaid order');
+  check((await scalar('SELECT status FROM payment_transactions WHERE provider_reference=$1',
+    [shortfallMember.payment.reference])).status, 'timed_out',
+  'shortfall member-coupon closeout times out its payment');
+  check((await scalar('SELECT status FROM seat_holds WHERE id=$1', [shortfallMember.hold.holdId])).status,
+    'released', 'shortfall member-coupon closeout releases its hold');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [shortfallMember.seat.id])).status,
+    'available', 'shortfall member-coupon closeout makes its seat available');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1',
+    [shortfallMember.order.id])).status, 'released',
+  'shortfall member-coupon closeout releases the order seat');
+  await checkCouponReleasedAfterCloseout(shortfallMember.coupon,
+    shortfallMember.coupon.expiresAt, 'shortfall member coupon');
+  check((await scalar('SELECT count(*)::integer AS count FROM refund_obligations WHERE order_id=$1',
+    [shortfallMember.order.id])).count, 0,
+  'shortfall member-coupon closeout does not create a refund for an unpaid order');
+  await processShortfallDepartureClosures(
+    pool, shortfallMemberClosureAt, undefined, { sandboxEnabled: true },
+  );
+  await checkCouponReleasedAfterCloseout(shortfallMember.coupon,
+    shortfallMember.coupon.expiresAt, 'replayed shortfall member coupon');
+
+  const shortfallMemberReuse = await makeOrdinaryPendingPaymentFixture(
+    captain, quotaBoatId, 'shortfall member coupon reuse', {
+      buyer: shortfallMember.buyer, coupon: shortfallMember.coupon,
+    },
+  );
+  simulatedStep3Time = null;
+  const shortfallMemberReusedRedemption = await scalar(
+    'SELECT id,status FROM order_coupon_redemptions WHERE order_id=$1', [shortfallMemberReuse.orderId],
+  );
+  check(shortfallMemberReusedRedemption.status, 'reserved',
+    'the unexpired member coupon can be reserved by a new order after shortfall closeout');
+  check(shortfallMemberReusedRedemption.id === shortfallMember.coupon.redemptionId, false,
+    'member coupon reuse creates a new redemption instead of reviving the cancelled one');
+  const shortfallMemberLateEvent = residualSuccessEvent(
+    shortfallMember, new Date(shortfallMember.departureAt.getTime() + 1000),
+  );
+  simulatedStep3Time = new Date(shortfallMember.departureAt.getTime() + 2000);
+  const shortfallMemberLatePayment = await signedPaymentCallback(shortfallMemberLateEvent);
+  simulatedStep3Time = null;
+  check(shortfallMemberLatePayment.status, 200,
+    'late success after shortfall closeout is acknowledged and refunded');
+  check(shortfallMemberLatePayment.body.latePaymentRefundRequired, true,
+    'late success after shortfall closeout does not revive the order');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [shortfallMember.order.id])).status,
+    'cancelled', 'late shortfall success leaves the original order cancelled');
+  check((await scalar('SELECT late_success FROM payment_transactions WHERE provider_reference=$1',
+    [shortfallMember.payment.reference])).late_success, true,
+  'late shortfall success is marked for refund');
+  check((await scalar(`SELECT status FROM refund_obligations
+    WHERE order_id=$1 AND reason='late_booking_payment'`, [shortfallMember.order.id])).status,
+  'sandbox_succeeded', 'late shortfall success creates its sandbox refund');
+  check((await scalar('SELECT status FROM order_coupon_redemptions WHERE id=$1',
+    [shortfallMemberReusedRedemption.id])).status, 'reserved',
+  'late success cannot release a member coupon already reused by another order');
+  await signedPaymentCallback(shortfallMemberLateEvent);
+  check((await scalar(`SELECT count(*)::integer AS count FROM coupon_ledger_events
+    WHERE redemption_id=$1 AND event_type='released'`, [shortfallMember.coupon.redemptionId])).count, 1,
+  'late callback replay does not duplicate the original member-coupon release event');
+
+  const shortfallExpiredBuyer = await makeUser('短缺关闭过期 F 券钓友');
+  const shortfallExpiredF = await makePendingResidualBooking(
+    captain, quotaBoatId, shortfallExpiredBuyer, 'shortfall-expired-f-coupon', { kind: 'f' },
+  );
+  const shortfallExpiredAt = await expireTestCoupon(shortfallExpiredF.coupon);
+  const shortfallExpiredClosureAt = new Date(shortfallExpiredF.departureAt.getTime() + 1000);
+  await processShortfallDepartureClosures(
+    pool, shortfallExpiredClosureAt, undefined, { sandboxEnabled: true },
+  );
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [shortfallExpiredF.order.id])).status,
+    'cancelled', 'shortfall closeout cancels the unpaid order holding an F coupon');
+  await checkCouponReleasedAfterCloseout(shortfallExpiredF.coupon,
+    shortfallExpiredAt, 'shortfall expired F coupon');
+  const shortfallExpiredProbe = await makeOrdinaryPendingPaymentFixture(
+    captain, quotaBoatId, 'shortfall expired F coupon probe', { buyer: shortfallExpiredF.buyer },
+  );
+  simulatedStep3Time = null;
+  await assert.rejects(
+    reserveExistingTestCouponForOrder(shortfallExpiredProbe.orderId,
+      shortfallExpiredF.buyer.id, shortfallExpiredF.coupon),
+    (error) => {
+      check(error.statusCode, 409, 'an expired F coupon remains unavailable after shortfall release');
+      return true;
+    },
+  );
+  check((await scalar(`SELECT count(*)::integer AS count FROM order_coupon_redemptions
+    WHERE f_coupon_id=$1 AND status IN ('reserved','redeemed')`, [shortfallExpiredF.coupon.id])).count, 0,
+  'an expired F coupon cannot be reserved after closeout');
+
+  simulatedStep3Time = null;
+  const waitlistExpiredBuyerCoupon = await makeWaitlistPaymentFixture(
+    captain, quotaBoatId, 'waitlist expired member coupon', null, { kind: 'member' },
+  );
+  const waitlistMemberExpiredAt = await expireTestCoupon(waitlistExpiredBuyerCoupon.coupon);
+  const waitlistMemberCloseoutAt = new Date(
+    waitlistExpiredBuyerCoupon.confirmationAt.getTime() + 10 * 60 * 1000,
+  );
+  simulatedStep3Time = waitlistMemberCloseoutAt;
+  await processWaitlistCloseouts(
+    pool, waitlistMemberCloseoutAt, acceptanceRedis, testConfig.step3ClockNow,
+  );
+  simulatedStep3Time = null;
+  const waitlistMemberHoldId = (await scalar(
+    'SELECT hold_id FROM booking_orders WHERE id=$1', [waitlistExpiredBuyerCoupon.orderId],
+  )).hold_id;
+  const waitlistMemberSeatId = (await scalar(
+    'SELECT seat_inventory_id FROM booking_orders WHERE id=$1', [waitlistExpiredBuyerCoupon.orderId],
+  )).seat_inventory_id;
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1',
+    [waitlistExpiredBuyerCoupon.orderId])).status, 'cancelled',
+  'waitlist closeout cancels the unpaid member-coupon order');
+  check((await scalar('SELECT status FROM payment_transactions WHERE provider_reference=$1',
+    [waitlistExpiredBuyerCoupon.intent.reference])).status, 'timed_out',
+  'waitlist closeout times out the member-coupon payment');
+  check((await scalar('SELECT status FROM seat_holds WHERE id=$1', [waitlistMemberHoldId])).status,
+    'expired', 'waitlist closeout expires the member-coupon hold');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [waitlistMemberSeatId])).status,
+    'available', 'waitlist closeout releases the member-coupon seat');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1',
+    [waitlistExpiredBuyerCoupon.orderId])).status, 'released',
+  'waitlist closeout releases the member-coupon order seat');
+  check((await scalar('SELECT status FROM departure_waitlist_entries WHERE id=$1',
+    [waitlistExpiredBuyerCoupon.entryId])).status, 'expired',
+  'waitlist closeout expires the converted member-coupon entry');
+  await checkCouponReleasedAfterCloseout(waitlistExpiredBuyerCoupon.coupon,
+    waitlistMemberExpiredAt, 'waitlist expired member coupon');
+  simulatedStep3Time = waitlistMemberCloseoutAt;
+  await processWaitlistCloseouts(
+    pool, waitlistMemberCloseoutAt, acceptanceRedis, testConfig.step3ClockNow,
+  );
+  simulatedStep3Time = null;
+  await checkCouponReleasedAfterCloseout(waitlistExpiredBuyerCoupon.coupon,
+    waitlistMemberExpiredAt, 'replayed waitlist member coupon');
+  const waitlistExpiredProbe = await makeOrdinaryPendingPaymentFixture(
+    captain, quotaBoatId, 'waitlist expired member coupon probe', {
+      buyer: waitlistExpiredBuyerCoupon.candidate,
+    },
+  );
+  simulatedStep3Time = null;
+  await assert.rejects(
+    reserveExistingTestCouponForOrder(waitlistExpiredProbe.orderId,
+      waitlistExpiredBuyerCoupon.candidate.id, waitlistExpiredBuyerCoupon.coupon),
+    (error) => {
+      check(error.statusCode, 409, 'an expired member coupon remains unavailable after waitlist release');
+      return true;
+    },
+  );
+  check((await scalar(`SELECT count(*)::integer AS count FROM order_coupon_redemptions
+    WHERE member_coupon_id=$1 AND status IN ('reserved','redeemed')`,
+  [waitlistExpiredBuyerCoupon.coupon.id])).count, 0,
+  'an expired member coupon cannot be reserved after waitlist closeout');
+
+  simulatedStep3Time = null;
+  const waitlistFCoupon = await makeWaitlistPaymentFixture(
+    captain, quotaBoatId, 'waitlist F coupon', null, { kind: 'f' },
+  );
+  const waitlistFCloseoutAt = new Date(waitlistFCoupon.confirmationAt.getTime() + 10 * 60 * 1000);
+  simulatedStep3Time = waitlistFCloseoutAt;
+  await processWaitlistCloseouts(pool, waitlistFCloseoutAt, acceptanceRedis, testConfig.step3ClockNow);
+  simulatedStep3Time = null;
+  const waitlistFHoldId = (await scalar(
+    'SELECT hold_id FROM booking_orders WHERE id=$1', [waitlistFCoupon.orderId],
+  )).hold_id;
+  const waitlistFSeatId = (await scalar(
+    'SELECT seat_inventory_id FROM booking_orders WHERE id=$1', [waitlistFCoupon.orderId],
+  )).seat_inventory_id;
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [waitlistFCoupon.orderId])).status,
+    'cancelled', 'waitlist closeout cancels the unpaid F-coupon order');
+  check((await scalar('SELECT status FROM payment_transactions WHERE provider_reference=$1',
+    [waitlistFCoupon.intent.reference])).status, 'timed_out',
+  'waitlist closeout times out the F-coupon payment');
+  check((await scalar('SELECT status FROM seat_holds WHERE id=$1', [waitlistFHoldId])).status,
+    'expired', 'waitlist closeout expires the F-coupon hold');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [waitlistFSeatId])).status,
+    'available', 'waitlist closeout releases the F-coupon seat');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1',
+    [waitlistFCoupon.orderId])).status, 'released',
+  'waitlist closeout releases the F-coupon order seat');
+  check((await scalar('SELECT status FROM departure_waitlist_entries WHERE id=$1',
+    [waitlistFCoupon.entryId])).status, 'expired', 'waitlist closeout expires the converted F-coupon entry');
+  await checkCouponReleasedAfterCloseout(waitlistFCoupon.coupon,
+    waitlistFCoupon.coupon.expiresAt, 'waitlist F coupon');
+  simulatedStep3Time = waitlistFCloseoutAt;
+  await processWaitlistCloseouts(pool, waitlistFCloseoutAt, acceptanceRedis, testConfig.step3ClockNow);
+  simulatedStep3Time = null;
+  await checkCouponReleasedAfterCloseout(waitlistFCoupon.coupon,
+    waitlistFCoupon.coupon.expiresAt, 'replayed waitlist F coupon');
+
+  const waitlistFReuse = await makeOrdinaryPendingPaymentFixture(
+    captain, quotaBoatId, 'waitlist F coupon reuse', {
+      buyer: waitlistFCoupon.candidate, coupon: waitlistFCoupon.coupon,
+    },
+  );
+  simulatedStep3Time = null;
+  const waitlistFReusedRedemption = await scalar(
+    'SELECT id,status FROM order_coupon_redemptions WHERE order_id=$1', [waitlistFReuse.orderId],
+  );
+  check(waitlistFReusedRedemption.status, 'reserved',
+    'the unexpired F coupon can be reserved by a new order after waitlist closeout');
+  const waitlistCouponLateEvent = paymentAdapter.buildCallback({
+    transactionReference: waitlistFCoupon.intent.reference,
+    orderId: waitlistFCoupon.orderId,
+    amountFen: waitlistFCoupon.intent.amountFen,
+    outcome: 'success',
+  }).event;
+  waitlistCouponLateEvent.createdAt = new Date(waitlistFCloseoutAt.getTime() + 1000).toISOString();
+  simulatedStep3Time = new Date(waitlistFCloseoutAt.getTime() + 2000);
+  const waitlistLatePayment = await signedPaymentCallback(waitlistCouponLateEvent);
+  simulatedStep3Time = null;
+  check(waitlistLatePayment.status, 200, 'late waitlist success is acknowledged and refunded');
+  check(waitlistLatePayment.body.latePaymentRefundRequired, true,
+    'late waitlist success does not restore the closed order');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [waitlistFCoupon.orderId])).status,
+    'cancelled', 'late waitlist success leaves the original order cancelled');
+  check((await scalar('SELECT late_success FROM payment_transactions WHERE provider_reference=$1',
+    [waitlistFCoupon.intent.reference])).late_success, true,
+  'late waitlist success is marked for refund');
+  check((await scalar(`SELECT status FROM refund_obligations
+    WHERE order_id=$1 AND reason='late_waitlist_payment'`, [waitlistFCoupon.orderId])).status,
+  'sandbox_succeeded', 'late waitlist success creates its sandbox refund');
+  check((await scalar('SELECT status FROM order_coupon_redemptions WHERE id=$1',
+    [waitlistFReusedRedemption.id])).status, 'reserved',
+  'late waitlist success cannot release an F coupon already reused by another order');
+  await signedPaymentCallback(waitlistCouponLateEvent);
+  check((await scalar(`SELECT count(*)::integer AS count FROM coupon_ledger_events
+    WHERE redemption_id=$1 AND event_type='released'`, [waitlistFCoupon.coupon.redemptionId])).count, 1,
+  'late waitlist callback replay does not duplicate the original F-coupon release event');
+  check((await scalar('SELECT order_id FROM order_coupon_redemptions WHERE id=$1',
+    [waitlistFReusedRedemption.id])).order_id, waitlistFReuse.orderId,
+  'late waitlist callback replay leaves the reused F coupon with the new order');
 
   if (process.env.STEP4_SCREENSHOT_FIXTURE_PATH) {
     await createSupplementScreenshotFixture(

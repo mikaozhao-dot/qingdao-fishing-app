@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readStep3Clock } from './step3-clock.js';
+import { releaseReservedCouponsForOrders } from './member-coupon-service.js';
 
 const HOLD_KEY_PREFIX = 'fishing:step3:seat:';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -225,6 +226,7 @@ export async function processWaitlistCloseouts(pool, asOf = new Date(), redis = 
          ORDER BY o.id FOR UPDATE OF o`, [row.id, closeoutAt],
       );
       const pendingOrderIds = pendingOrders.rows.map((order) => order.id);
+      await releaseReservedCouponsForOrders(client, pendingOrderIds, 'waitlist_window_closed');
       const holdIds = [...new Set([
         ...activeHolds.rows.map((hold) => hold.id),
         ...pendingOrders.rows.map((order) => order.hold_id).filter(Boolean),

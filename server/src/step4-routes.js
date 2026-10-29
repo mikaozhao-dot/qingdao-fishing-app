@@ -1,6 +1,10 @@
 import { createSecurity } from './security.js';
 import { syncPromotionForUser, syncPromotionsForDeparture } from './promotion-service.js';
-import { reconcileCouponAfterRefund, syncMemberRewardsForDeparture } from './member-coupon-service.js';
+import {
+  reconcileCouponAfterRefund,
+  releaseReservedCouponsForOrders,
+  syncMemberRewardsForDeparture,
+} from './member-coupon-service.js';
 import { closeoutAtSql, processWaitlistCloseouts } from './step3-waitlist.js';
 import { configuredStep3Clock } from './step3-clock.js';
 
@@ -673,6 +677,14 @@ async function closeShortfallDeparture(client, departureId, asOf) {
     }
     await syncPromotionForUser(client, order.buyer_user_id);
   }
+
+  const pendingOrders = await client.query(
+    `SELECT id FROM booking_orders
+     WHERE departure_id=$1 AND status='pending_payment' ORDER BY id FOR UPDATE`,
+    [departureId],
+  );
+  const pendingOrderIds = pendingOrders.rows.map((order) => order.id);
+  await releaseReservedCouponsForOrders(client, pendingOrderIds, 'shortfall_departure_closed');
 
   await client.query(
     `UPDATE order_passengers op SET booking_status='departure_cancelled',

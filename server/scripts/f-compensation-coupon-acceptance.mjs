@@ -297,6 +297,12 @@ try {
 } finally {
   await app.close().catch(() => {});
   if (testOrders.length) {
+    await pool.query(
+      `DELETE FROM coupon_ledger_events
+       WHERE f_coupon_id IN (
+         SELECT id FROM f_compensation_coupon_ledger WHERE source_order_id=ANY($1::uuid[])
+       )`, [testOrders],
+    );
     await pool.query('DELETE FROM f_compensation_coupon_ledger WHERE source_order_id=ANY($1::uuid[])', [testOrders]);
     await pool.query('DELETE FROM booking_orders WHERE id=ANY($1::uuid[])', [testOrders]);
   }

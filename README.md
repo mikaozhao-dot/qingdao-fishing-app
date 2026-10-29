@@ -97,6 +97,8 @@ flutter run
 - `design/step3-review-photos/`：第 3 步 01–05 为 Flutter Web 手机视口预览；07–10 含 iOS 模拟器交易流程图；`v04-before-ios-seat-map-*`、09–10 为前版对照；11 为创始人定版参考图；12–13 为按参考实现的 iOS 模拟器原生截图，14 为 1MB 内预览图。
 - `design/step4-review-photos/`：第 4 步船长/钓友页面及补差确认、支付、完成流程的 iOS 模拟器截图；切片 1 补差截图为 18–20 号。
 
+会员星级与营销券实施任务、交付证据及待 Muse 代码复核：`docs/member-coupons-implementation-task-brief-2026-10-29.md`、`docs/member-coupons-delivery-receipt-2026-10-29.md`、`docs/muse-review-request-member-coupons-2026-10-29.md`。
+
 ## 协作规矩
 
 Muse 评审与规格裁定写回仓库；Codex 按仓内任务书实现。规格正本与已冻结的设计稿不在工程地基提交中改写。密钥、真实商户参数和乘客实名信息不得入仓。

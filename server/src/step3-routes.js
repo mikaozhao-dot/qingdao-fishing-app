@@ -653,7 +653,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
       return { statusCode: 400, body: { error: '支付订单或金额不匹配' } };
     }
     const departure = await client.query(
-      `SELECT d.id FROM departures d JOIN booking_orders o ON o.departure_id=d.id
+      `SELECT d.id,d.departure_at FROM departures d JOIN booking_orders o ON o.departure_id=d.id
        WHERE o.id=$1 FOR UPDATE OF d`,
       [event.orderId],
     );
@@ -701,6 +701,10 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
     async function callbackMatchesActiveHold() {
       const deadline = order.authorization_expires_at ?? order.hold_expires_at;
       const receivedAt = await readStep3Clock(client, clockNow);
+      const paymentAt = Date.parse(event.createdAt);
+      const departureAt = departure.rows[0].departure_at;
+      const departureDeadline = departureAt instanceof Date
+        ? departureAt.getTime() : Date.parse(departureAt);
       const seatCounts = await client.query(
         `SELECT
            (SELECT count(*)::integer FROM booking_order_seats
@@ -712,7 +716,9 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
         [order.id, order.hold_id],
       );
       const expected = Number(seatCounts.rows[0].expected);
-      return effectivePaymentAtOrBeforeDeadline(event.createdAt, deadline)
+      return Number.isFinite(paymentAt) && Number.isFinite(departureDeadline)
+        && paymentAt < departureDeadline
+        && effectivePaymentAtOrBeforeDeadline(event.createdAt, deadline)
         && order.status === 'pending_payment'
         && order.hold_status === 'active'
         && new Date(order.hold_expires_at) > new Date(receivedAt)

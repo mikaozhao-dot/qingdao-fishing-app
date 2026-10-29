@@ -92,6 +92,33 @@ async function holdDepartureRow(departureId) {
   return client;
 }
 
+async function runDepartureLockQueue(departureId, first, second, firstQuery, secondQuery, label) {
+  const lock = await holdDepartureRow(departureId);
+  let lockOpen = true;
+  let firstResult;
+  let secondResult;
+  let firstPromise;
+  let secondPromise;
+  try {
+    firstPromise = first();
+    check(await waitForLockedQuery(firstQuery), true, `${label}: first operation waits on the departure lock`);
+    secondPromise = second();
+    check(await waitForLockedQuery(secondQuery), true, `${label}: second operation queues behind the first`);
+    await lock.query('COMMIT');
+    lockOpen = false;
+    firstResult = await firstPromise;
+    secondResult = await secondPromise;
+  } catch (error) {
+    if (lockOpen) await lock.query('ROLLBACK').catch(() => {});
+    await Promise.allSettled([firstPromise, secondPromise].filter(Boolean));
+    throw error;
+  } finally {
+    if (lockOpen) await lock.query('ROLLBACK').catch(() => {});
+    lock.release();
+  }
+  return [firstResult, secondResult];
+}
+
 async function expect(method, path, token, payload, status = 200) {
   const response = await request(method, path, token, payload);
   check(response.status, status, method + ' ' + path);
@@ -418,6 +445,57 @@ async function makeSupplementFixture(captain, boatId, label) {
     captain.token, { responseDeadlineAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }, 201);
   check(response.round.shortfallFen, 5000, `${label}: frozen one-seat shortfall is ¥50`);
   return { departureId, user, orderId, seatId: seat.id, round: response.round };
+}
+
+async function makePendingResidualBooking(captain, boatId, buyer, label) {
+  const fixture = await makeSupplementFixture(captain, boatId, `${label}基础班次`);
+  const participant = fixture.round.participants[0];
+  await expect('POST',
+    `/orders/${participant.orderId}/supplement-rounds/${fixture.round.id}/decision`,
+    fixture.user.token, { action: 'accept' });
+  const supplementIntent = await expect('POST',
+    `/orders/${participant.orderId}/supplement-rounds/${fixture.round.id}/payment-intents`,
+    fixture.user.token, {}, 201);
+  await expect('POST',
+    `/orders/${participant.orderId}/supplement-rounds/${fixture.round.id}/sandbox-payment`,
+    fixture.user.token, { outcome: 'failure' });
+
+  const departureAt = new Date((await scalar(
+    'SELECT departure_at FROM departures WHERE id=$1', [fixture.departureId],
+  )).departure_at);
+  const seat = await scalar(
+    `INSERT INTO seat_inventory
+       (departure_id,seat_number,price_fen,seat_side,seat_section,status,sale_channel)
+     VALUES ($1,2,10000,'starboard','mid','available','platform')
+     RETURNING id,seat_number,price_fen`, [fixture.departureId],
+  );
+  const purchaseAt = new Date(departureAt.getTime() - 30_000);
+  let hold;
+  let order;
+  let payment;
+  simulatedStep3Time = purchaseAt;
+  try {
+    hold = await expect('POST', `/departures/${fixture.departureId}/seat-holds`, buyer.token,
+      { seatIds: [seat.id] }, 201);
+    sequence += 1;
+    order = await expect('POST', '/orders', buyer.token, {
+      holdId: hold.holdId,
+      idempotencyKey: `residual-cutoff-${label}-${Date.now()}-${sequence}`,
+      passengers: [{
+        seatId: seat.id,
+        fullName: '截止前待付款钓友',
+        identityNumber: makeSandboxIdentityNumber(String(sequence).padStart(3, '0')),
+        phone: '13900008888',
+      }],
+    }, 201);
+    payment = await expect('POST', `/orders/${order.order.id}/payment-intents`, buyer.token, {}, 201);
+  } finally {
+    simulatedStep3Time = null;
+  }
+  return {
+    ...fixture, buyer, departureAt, seat, hold, order: order.order, payment: payment.payment,
+    supplementIntent: supplementIntent.payment,
+  };
 }
 
 async function makeMultiSupplementFixture(captain, boatId, label, {
@@ -3272,6 +3350,174 @@ async function main() {
     'replayed ordinary late success remains idempotent');
 
   simulatedStep3Time = null;
+
+  function residualSuccessEvent(fixture, createdAt) {
+    const event = paymentAdapter.buildCallback({
+      transactionReference: fixture.payment.reference,
+      orderId: fixture.order.id,
+      amountFen: fixture.payment.amountFen,
+      outcome: 'success',
+    }).event;
+    event.createdAt = new Date(createdAt).toISOString();
+    return event;
+  }
+
+  const residualCallbackFirst = await makePendingResidualBooking(
+    captain, quotaBoatId, secondAngler, 'cutoff-before',
+  );
+  const residualCallbackFirstEvent = residualSuccessEvent(
+    residualCallbackFirst, new Date(residualCallbackFirst.departureAt.getTime() - 1),
+  );
+  simulatedStep3Time = new Date(residualCallbackFirst.departureAt.getTime() + 1000);
+  const residualCallbackFirstResult = await signedPaymentCallback(residualCallbackFirstEvent);
+  simulatedStep3Time = null;
+  const residualCallbackFirstCloseout = await processShortfallDepartureClosures(
+    pool, residualCallbackFirst.departureAt, undefined, { sandboxEnabled: true },
+  );
+  check(residualCallbackFirstResult.status, 200,
+    'a provider success completed before departure is accepted when its callback is delayed');
+  check(residualCallbackFirstResult.body.paymentStatus, 'succeeded',
+    'a delayed but pre-cutoff residual payment settles normally');
+  check(residualCallbackFirstResult.body.latePaymentRefundRequired ?? false, false,
+    'a pre-cutoff provider success is not misclassified as a late payment');
+  check(residualCallbackFirstCloseout.confirmed, 1,
+    'closeout sees the timely residual payment even when its callback arrives after departure');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [residualCallbackFirst.departureId])).status,
+    'confirmed', 'timely payment confirms instead of being cancelled by closeout');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [residualCallbackFirst.order.id])).status,
+    'paid', 'the timely residual buyer remains booked');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [residualCallbackFirst.orderId])).status,
+    'paid', 'the original passenger order is not displaced by residual sales');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [residualCallbackFirst.seatId])).status,
+    'booked', 'the original passenger seat stays booked after a timely residual sale');
+  check((await scalar('SELECT count(*)::integer AS count FROM refund_obligations WHERE order_id=$1',
+    [residualCallbackFirst.order.id])).count, 0,
+  'a valid pre-cutoff residual payment creates no late-refund obligation');
+
+  const exactCutoff = await makePendingResidualBooking(
+    captain, quotaBoatId, secondAngler, 'cutoff-exact',
+  );
+  const exactCutoffEvent = residualSuccessEvent(exactCutoff, exactCutoff.departureAt);
+  simulatedStep3Time = new Date(exactCutoff.departureAt.getTime() + 1000);
+  const [exactCutoffResult, exactCutoffCloseout] = await runDepartureLockQueue(
+    exactCutoff.departureId,
+    () => signedPaymentCallback(exactCutoffEvent),
+    () => processShortfallDepartureClosures(
+      pool, exactCutoff.departureAt, undefined, { sandboxEnabled: true },
+    ),
+    'SELECT d.id',
+    'SELECT d.status,d.departure_at,s.outcome,',
+    'exact-cutoff payment callback wins the closeout lock',
+  );
+  simulatedStep3Time = null;
+  check(exactCutoffResult.body.latePaymentRefundRequired, true,
+    'a provider success at the exact departure cutoff is treated as late');
+  check(exactCutoffCloseout.cancelled, 1,
+    'exact-cutoff funds do not prevent the shortfall closeout from cancelling');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [exactCutoff.departureId])).status,
+    'cancelled', 'an exact-cutoff payment cannot reverse the shortfall terminal state');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [exactCutoff.order.id])).status,
+    'cancelled', 'the exact-cutoff residual order remains cancelled');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM refund_obligations
+     WHERE order_id=$1 AND reason='late_booking_payment'`, [exactCutoff.order.id],
+  )).count, 1, 'exact-cutoff late funds receive one refund obligation');
+  check((await signedPaymentCallback(exactCutoffEvent)).body.duplicate, true,
+    'replaying exact-cutoff late success does not add a refund');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM refund_obligations
+     WHERE order_id=$1 AND reason='late_booking_payment'`, [exactCutoff.order.id],
+  )).count, 1, 'the exact-cutoff refund remains idempotent after replay');
+
+  const pendingCloseout = await makePendingResidualBooking(
+    captain, quotaBoatId, secondAngler, 'closeout-pending-seat',
+  );
+  const pendingCloseoutResult = await processShortfallDepartureClosures(
+    pool, pendingCloseout.departureAt, undefined, { sandboxEnabled: true },
+  );
+  check(pendingCloseoutResult.cancelled, 1,
+    'Stage 4 closes a shortfall with an active unpaid residual hold and payment intent');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [pendingCloseout.order.id])).status,
+    'cancelled', 'Stage 4 terminates the unpaid residual order');
+  check((await scalar('SELECT status FROM payment_transactions WHERE provider_reference=$1',
+    [pendingCloseout.payment.reference])).status, 'timed_out',
+  'Stage 4 times out the unpaid residual payment intent');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1',
+    [pendingCloseout.order.id])).status, 'released',
+  'Stage 4 releases the unpaid residual booking-order seat in the same closeout transaction');
+  check((await scalar(`SELECT count(*)::integer AS count FROM booking_order_seats
+    WHERE order_id=$1 AND status IN ('pending_payment','paid')`,
+  [pendingCloseout.order.id])).count, 0,
+  'cancelled unpaid orders leave no active booking-order seat index entry');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [pendingCloseout.seat.id])).status,
+    'available', 'Stage 4 releases inventory held by the unpaid residual order');
+  check((await scalar('SELECT status FROM seat_holds WHERE id=$1', [pendingCloseout.hold.holdId])).status,
+    'released', 'Stage 4 releases the unpaid residual hold');
+  check((await scalar('SELECT booking_status FROM order_passengers WHERE order_id=$1',
+    [pendingCloseout.order.id])).booking_status, 'departure_cancelled',
+  'Stage 4 closes the unpaid residual passenger record');
+  check((await scalar('SELECT count(*)::integer AS count FROM refund_obligations WHERE order_id=$1',
+    [pendingCloseout.order.id])).count, 0,
+  'an unpaid cancelled residual order creates no refund obligation');
+  const pendingCloseoutReplay = await processShortfallDepartureClosures(
+    pool, pendingCloseout.departureAt, undefined, { sandboxEnabled: true },
+  );
+  check(pendingCloseoutReplay.cancelled, 0,
+    'replaying Stage 4 does not cancel the unpaid residual order a second time');
+  check((await scalar('SELECT count(*)::integer AS count FROM refund_obligations WHERE order_id=$1',
+    [pendingCloseout.order.id])).count, 0,
+  'Stage 4 replay still creates no refund for an unpaid order');
+
+  const residualCloseoutFirst = await makePendingResidualBooking(
+    captain, quotaBoatId, secondAngler, 'cutoff-after',
+  );
+  const residualCloseoutFirstEvent = residualSuccessEvent(
+    residualCloseoutFirst, new Date(residualCloseoutFirst.departureAt.getTime() + 1),
+  );
+  simulatedStep3Time = new Date(residualCloseoutFirst.departureAt.getTime() + 2000);
+  const [residualCloseoutFirstResult, residualCloseoutFirstPayment] = await runDepartureLockQueue(
+    residualCloseoutFirst.departureId,
+    () => processShortfallDepartureClosures(
+      pool, residualCloseoutFirst.departureAt, undefined, { sandboxEnabled: true },
+    ),
+    () => signedPaymentCallback(residualCloseoutFirstEvent),
+    'SELECT d.status,d.departure_at,s.outcome,',
+    'SELECT d.id',
+    'post-cutoff closeout wins the payment lock',
+  );
+  simulatedStep3Time = null;
+  check(residualCloseoutFirstResult.cancelled, 1,
+    'closeout-first race reaches the cancelled shortfall terminal state');
+  check(residualCloseoutFirstPayment.body.latePaymentRefundRequired, true,
+    'post-cutoff provider success after closeout is refunded as a late payment');
+  check((await scalar('SELECT status FROM departures WHERE id=$1', [residualCloseoutFirst.departureId])).status,
+    'cancelled', 'post-cutoff callback cannot reverse closeout-first cancellation');
+  check((await scalar('SELECT status FROM booking_orders WHERE id=$1', [residualCloseoutFirst.order.id])).status,
+    'cancelled', 'post-cutoff callback cannot revive the closed residual order');
+  check((await scalar('SELECT status FROM seat_inventory WHERE id=$1', [residualCloseoutFirst.seat.id])).status,
+    'available', 'post-cutoff callback cannot reclaim the released residual seat');
+  check((await scalar('SELECT status FROM booking_order_seats WHERE order_id=$1',
+    [residualCloseoutFirst.order.id])).status, 'released',
+  'post-cutoff callback cannot restore a cancelled order seat');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM refund_obligations
+     WHERE order_id=$1 AND reason='departure_shortfall'`, [residualCloseoutFirst.order.id],
+  )).count, 0, 'unpaid residual order receives no shortfall refund during closeout');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM refund_obligations
+     WHERE order_id=$1 AND reason='late_booking_payment'`, [residualCloseoutFirst.order.id],
+  )).count, 1, 'post-cutoff payment creates exactly one late-payment refund');
+  check((await signedPaymentCallback(residualCloseoutFirstEvent)).body.duplicate, true,
+    'replayed post-cutoff success stays idempotent after the closeout-first race');
+  check((await scalar(
+    `SELECT count(*)::integer AS count FROM refund_obligations
+     WHERE order_id=$1 AND reason='late_booking_payment'`, [residualCloseoutFirst.order.id],
+  )).count, 1, 'closeout-first callback replay does not duplicate the refund');
+  const closeoutFirstReplay = await processShortfallDepartureClosures(
+    pool, residualCloseoutFirst.departureAt, undefined, { sandboxEnabled: true },
+  );
+  check(closeoutFirstReplay.cancelled, 0,
+    'replaying closeout after a post-cutoff payment does not reopen or cancel again');
 
   const residualFixture = await makeSupplementFixture(
     captain, quotaBoatId, 'B1 结束后包余位售票',

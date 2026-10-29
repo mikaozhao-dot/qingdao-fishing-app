@@ -64,6 +64,13 @@ test('late payment only counts when the provider timestamp is at or before autho
   assert.equal(effectivePaymentAtOrBeforeDeadline('2026-10-24T10:10:00.001Z', closeAt), false);
 });
 
+test('Date-valued payment deadlines preserve millisecond precision', () => {
+  const deadline = new Date('2026-10-24T10:10:00.465Z');
+  assert.equal(effectivePaymentAtOrBeforeDeadline(new Date('2026-10-24T10:10:00.464Z'), deadline), true);
+  assert.equal(effectivePaymentAtOrBeforeDeadline(new Date('2026-10-24T10:10:00.465Z'), deadline), true);
+  assert.equal(effectivePaymentAtOrBeforeDeadline(new Date('2026-10-24T10:10:00.466Z'), deadline), false);
+});
+
 test('cancellation penalty uses the approved left-open, right-closed bands', () => {
   const departureAt = Date.parse('2026-10-25T10:00:00.000Z');
   const cases = [

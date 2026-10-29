@@ -678,6 +678,12 @@ async function closeShortfallDeparture(client, departureId, asOf) {
        AND o.status='pending_payment' AND t.purpose='booking' AND t.status='pending'`, [departureId],
   );
   await client.query(
+    `UPDATE booking_order_seats SET status='released'
+     WHERE status='pending_payment' AND order_id IN (
+       SELECT id FROM booking_orders WHERE departure_id=$1 AND status='pending_payment'
+     )`, [departureId],
+  );
+  await client.query(
     `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,$2),updated_at=now()
      WHERE departure_id=$1 AND status='pending_payment'`, [departureId, asOf],
   );

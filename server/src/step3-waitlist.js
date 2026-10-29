@@ -50,8 +50,8 @@ export function cancellationAmounts(ticketAmountFen, departureAt, cancelledAt) {
 }
 
 export function effectivePaymentAtOrBeforeDeadline(paymentAt, deadline) {
-  const paidAt = Date.parse(paymentAt);
-  const deadlineAt = Date.parse(deadline);
+  const paidAt = paymentAt instanceof Date ? paymentAt.getTime() : Date.parse(paymentAt);
+  const deadlineAt = deadline instanceof Date ? deadline.getTime() : Date.parse(deadline);
   return Number.isFinite(paidAt) && Number.isFinite(deadlineAt) && paidAt <= deadlineAt;
 }
 

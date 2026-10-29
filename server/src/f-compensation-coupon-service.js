@@ -38,6 +38,19 @@ function publicCoupon(row, replayed = false) {
   };
 }
 
+async function recordCouponIssuedEvent(client, coupon) {
+  await client.query(
+    `INSERT INTO coupon_ledger_events
+       (coupon_kind,f_coupon_id,user_id,event_type,event_key,details)
+     VALUES ('f',$1,$2,'issued',$3,$4::jsonb)
+     ON CONFLICT (event_key) DO NOTHING`,
+    [coupon.id, coupon.beneficiary_user_id, `f-coupon-issued:${coupon.id}`,
+      JSON.stringify({ scenario: coupon.scenario, responsibleParty: coupon.responsible_party,
+        ticketPaidFen: Number(coupon.ticket_paid_fen), amountFen: Number(coupon.amount_fen),
+        issuedAt: coupon.issued_at, expiresAt: coupon.expires_at, issuedBy: coupon.issued_by })],
+  );
+}
+
 export async function issueFCompensationCoupon(client, {
   orderId, sourceEventKey, scenario, issueNote, issuedBy = 'sandbox_admin',
 }) {
@@ -47,7 +60,7 @@ export async function issueFCompensationCoupon(client, {
   }
 
   const orderResult = await client.query(
-    `SELECT o.id,o.buyer_user_id,o.status,o.paid_at,o.seat_fee_fen,o.discount_fen,
+    `SELECT o.id,o.buyer_user_id,o.status,o.paid_at,o.seat_fee_fen,o.discount_fen,o.coupon_discount_fen,
             d.status AS departure_status
        FROM booking_orders o JOIN departures d ON d.id=o.departure_id
       WHERE o.id=$1 FOR UPDATE OF o,d`, [orderId],
@@ -64,7 +77,8 @@ export async function issueFCompensationCoupon(client, {
     throw new FCompensationCouponError(409, '船长原因取消券要求班次已取消');
   }
 
-  const ticketPaidFen = Number(order.seat_fee_fen) - Number(order.discount_fen);
+  const ticketPaidFen = Number(order.seat_fee_fen) - Number(order.discount_fen)
+    - Number(order.coupon_discount_fen ?? 0);
   if (!Number.isSafeInteger(ticketPaidFen) || ticketPaidFen <= 0) {
     throw new FCompensationCouponError(409, '订单没有可计入的实付船费');
   }
@@ -81,19 +95,25 @@ export async function issueFCompensationCoupon(client, {
     [sourceEventKey, order.id, order.buyer_user_id, scenario, responsibleParty,
       ticketPaidFen, amountFen, issuedBy, issueNote],
   );
-  if (inserted.rowCount) return publicCoupon(inserted.rows[0]);
-
-  const existing = await client.query(
-    `SELECT * FROM f_compensation_coupon_ledger
-      WHERE source_event_key=$1 AND source_order_id=$2`, [sourceEventKey, order.id],
-  );
-  if (!existing.rowCount) throw new Error('补偿券幂等记录读取失败');
-  const row = existing.rows[0];
-  if (row.scenario !== scenario || row.responsible_party !== responsibleParty
-      || Number(row.ticket_paid_fen) !== ticketPaidFen
-      || Number(row.amount_fen) !== amountFen
-      || row.beneficiary_user_id !== order.buyer_user_id) {
-    throw new FCompensationCouponError(409, '该事件已用不同口径登记，不能覆盖原补偿账');
+  let row;
+  let replayed = false;
+  if (inserted.rowCount) {
+    row = inserted.rows[0];
+  } else {
+    const existing = await client.query(
+      `SELECT * FROM f_compensation_coupon_ledger
+        WHERE source_event_key=$1 AND source_order_id=$2`, [sourceEventKey, order.id],
+    );
+    if (!existing.rowCount) throw new Error('补偿券幂等记录读取失败');
+    row = existing.rows[0];
+    if (row.scenario !== scenario || row.responsible_party !== responsibleParty
+        || Number(row.ticket_paid_fen) !== ticketPaidFen
+        || Number(row.amount_fen) !== amountFen
+        || row.beneficiary_user_id !== order.buyer_user_id) {
+      throw new FCompensationCouponError(409, '该事件已用不同口径登记，不能覆盖原补偿账');
+    }
+    replayed = true;
   }
-  return publicCoupon(row, true);
+  await recordCouponIssuedEvent(client, row);
+  return publicCoupon(row, replayed);
 }

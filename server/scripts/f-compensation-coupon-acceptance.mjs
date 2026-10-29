@@ -201,7 +201,7 @@ try {
 
   const ownWallet = await expect('GET', '/compensation-coupons/me', { token: buyer.token });
   check(ownWallet.body.items.length, 1, 'beneficiary sees the issued coupon');
-  check(ownWallet.body.items[0].status, 'issued', 'unexpired coupon is available');
+  check(ownWallet.body.items[0].status, 'available', 'unexpired coupon is available');
   const otherWallet = await expect('GET', '/compensation-coupons/me', { token: other.token });
   check(otherWallet.body.items.length, 0, 'coupon is private to the beneficiary account');
   await expect('GET', '/compensation-coupons/me', {}, 401);

@@ -50,6 +50,7 @@ jobs:
       STEP6_PROMOTION_ACCEPTANCE: 'true'
       STEP6_CERTIFICATE_ACCEPTANCE: 'true'
       F_COMPENSATION_ACCEPTANCE: 'true'
+      MEMBER_COUPON_ACCEPTANCE: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -87,3 +88,6 @@ jobs:
       - name: Run F compensation coupon sandbox acceptance
         working-directory: server
         run: npm run smoke:f-compensation-coupons
+      - name: Run member coupon and stars sandbox acceptance
+        working-directory: server
+        run: npm run smoke:member-coupons

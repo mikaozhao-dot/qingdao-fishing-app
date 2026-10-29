@@ -1,5 +1,6 @@
 import { createSecurity } from './security.js';
 import { syncPromotionForUser, syncPromotionsForDeparture } from './promotion-service.js';
+import { reconcileCouponAfterRefund, syncMemberRewardsForDeparture } from './member-coupon-service.js';
 import { closeoutAtSql, processWaitlistCloseouts } from './step3-waitlist.js';
 import { configuredStep3Clock } from './step3-clock.js';
 
@@ -264,7 +265,7 @@ export async function closeSupplementRoundsForInsuranceGroupFailure(client, depa
 
 async function refundSupplementDecliners(client, roundId) {
   const exited = await client.query(
-    `SELECT p.order_id,o.buyer_user_id,o.seat_fee_fen,o.discount_fen,o.platform_fee_fen,
+    `SELECT p.order_id,o.buyer_user_id,o.seat_fee_fen,o.discount_fen,o.coupon_discount_fen,o.platform_fee_fen,
             o.ticket_refunded_fen,o.cancelled_refund_fen
      FROM departure_supplement_participants p
      JOIN booking_orders o ON o.id=p.order_id
@@ -275,7 +276,8 @@ async function refundSupplementDecliners(client, roundId) {
   const orders = new Map(exited.rows.map((row) => [row.order_id, row]));
   for (const order of orders.values()) {
     const remainingTicketPrincipal = Number(order.seat_fee_fen)
-      - Number(order.discount_fen) - Number(order.ticket_refunded_fen ?? 0);
+      - Number(order.discount_fen) - Number(order.coupon_discount_fen ?? 0)
+      - Number(order.ticket_refunded_fen ?? 0);
     if (!Number.isSafeInteger(remainingTicketPrincipal) || remainingTicketPrincipal < 0) {
       throw new Error('Supplement exit found an invalid remaining ticket principal.');
     }
@@ -522,7 +524,8 @@ export async function processSupplementDeadlines(pool, asOf = new Date()) {
   return { expired };
 }
 
-export async function processSandboxRefundObligations(pool, maxAttempts = 3, refundAttempt = async () => true) {
+export async function processSandboxRefundObligations(pool, maxAttempts = 3,
+  refundAttempt = async () => true, security = null, memberCouponsEnabled = false) {
   const pending = await pool.query(
     `SELECT id,request_key,attempt_count FROM refund_obligations
      WHERE status='pending' ORDER BY created_at,id LIMIT 100`,
@@ -533,7 +536,7 @@ export async function processSandboxRefundObligations(pool, maxAttempts = 3, ref
     try {
       await client.query('BEGIN');
       const locked = await client.query(
-        `SELECT id,request_key,attempt_count,status,payment_transaction_id FROM refund_obligations
+        `SELECT id,request_key,attempt_count,status,payment_transaction_id,order_id,reason FROM refund_obligations
          WHERE id=$1 AND status='pending' FOR UPDATE SKIP LOCKED`, [obligation.id],
       );
       if (!locked.rowCount) {
@@ -564,6 +567,10 @@ export async function processSandboxRefundObligations(pool, maxAttempts = 3, ref
            VALUES ('refund_manual_required',$1,'Sandbox refund retry limit reached')
            ON CONFLICT (refund_obligation_id) DO NOTHING`, [obligation.id],
         );
+      }
+      if (memberCouponsEnabled && status === 'sandbox_succeeded'
+          && locked.rows[0].reason !== 'supplement_failure') {
+        await reconcileCouponAfterRefund(client, locked.rows[0].order_id, security);
       }
       settled += updated.rowCount;
       await client.query('COMMIT');
@@ -621,13 +628,14 @@ async function closeShortfallDeparture(client, departureId, asOf) {
   if (!cancelled.rowCount) return { status: 'already_finalized' };
 
   const paidOrders = await client.query(
-    `SELECT id,buyer_user_id,seat_fee_fen,discount_fen,platform_fee_fen,ticket_refunded_fen
+    `SELECT id,buyer_user_id,seat_fee_fen,discount_fen,coupon_discount_fen,platform_fee_fen,ticket_refunded_fen
      FROM booking_orders WHERE departure_id=$1 AND status='paid' ORDER BY id FOR UPDATE`,
     [departureId],
   );
   for (const order of paidOrders.rows) {
     const ticketPrincipalRemaining = Number(order.seat_fee_fen)
-      - Number(order.discount_fen) - Number(order.ticket_refunded_fen ?? 0);
+      - Number(order.discount_fen) - Number(order.coupon_discount_fen ?? 0)
+      - Number(order.ticket_refunded_fen ?? 0);
     if (!Number.isSafeInteger(ticketPrincipalRemaining) || ticketPrincipalRemaining < 0) {
       throw new Error('Shortfall departure refund found an invalid remaining ticket principal.');
     }
@@ -735,12 +743,13 @@ export async function processShortfallDepartureClosures(
 
 /** Capture the approved T-1 18:00 Asia/Shanghai checkpoint once per departure. */
 export async function processFormationChecks(pool, asOf = new Date(), onError = () => {},
-  { redis = null, clockNow = null, sandboxEnabled = false } = {}) {
+  { redis = null, clockNow = null, sandboxEnabled = false, security = null,
+    memberCouponsEnabled = false } = {}) {
   if (!pool) return { checked: 0, deferred: 0, overdue: 0 };
   await processWaitlistCloseouts(pool, asOf, redis, clockNow);
   await processSupplementDeadlines(pool, asOf);
   await processShortfallDepartureClosures(pool, asOf, onError, { sandboxEnabled });
-  await processSandboxRefundObligations(pool);
+  await processSandboxRefundObligations(pool, 3, async () => true, security, memberCouponsEnabled);
   const due = await pool.query(
     `SELECT d.id FROM departures d
      WHERE d.status IN ('open','forming') AND ${closeoutAtSql('d')} <= $1
@@ -1529,6 +1538,9 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
           [departure.id],
         );
         await syncPromotionsForDeparture(client, departure.id);
+        if (config.nodeEnv !== 'production' && config.demoSandboxEnabled === true) {
+          await syncMemberRewardsForDeparture(client, departure.id, security);
+        }
       }
       return {
         ok: true,
@@ -1668,7 +1680,8 @@ export function registerStep4Routes(app, { pool, redis, config, requireUser }) {
       }).catch((error) => app.log.error({ err: error }, 'Step 4 checklist worker failed'));
       processFormationChecks(pool, new Date(), (error) => {
         app.log.error({ err: error }, 'Step 4 formation check failed');
-      }, { redis, clockNow, sandboxEnabled: config.nodeEnv !== 'production' })
+      }, { redis, clockNow, sandboxEnabled: config.nodeEnv !== 'production', security,
+        memberCouponsEnabled: config.nodeEnv !== 'production' && config.demoSandboxEnabled === true })
         .catch((error) => app.log.error({ err: error }, 'Step 4 formation worker failed'));
     }, 60_000);
     interval.unref?.();

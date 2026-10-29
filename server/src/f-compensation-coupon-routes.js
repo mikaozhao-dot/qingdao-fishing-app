@@ -81,11 +81,18 @@ export function registerFCompensationCouponRoutes(app, { pool, config, requireUs
   }, async (request, reply) => {
     try {
       const result = await pool.query(
-        `SELECT id,scenario,responsible_party,ticket_paid_fen,amount_fen,issued_at,expires_at,
-                CASE WHEN expires_at <= now() THEN 'expired' ELSE 'issued' END AS status
-           FROM f_compensation_coupon_ledger
-          WHERE beneficiary_user_id=$1
-          ORDER BY issued_at DESC,id DESC`, [request.user.id],
+        `SELECT c.id,c.scenario,c.responsible_party,c.ticket_paid_fen,c.amount_fen,c.issued_at,c.expires_at,
+                CASE WHEN active.status='reserved' THEN 'reserved'
+                     WHEN active.status='redeemed' THEN 'redeemed'
+                     WHEN c.expires_at<=now() THEN 'expired'
+                     ELSE 'available' END AS status
+           FROM f_compensation_coupon_ledger c
+           LEFT JOIN LATERAL (
+             SELECT r.status FROM order_coupon_redemptions r
+             WHERE r.f_coupon_id=c.id AND r.status IN ('reserved','redeemed') LIMIT 1
+           ) active ON TRUE
+          WHERE c.beneficiary_user_id=$1
+          ORDER BY c.issued_at DESC,c.id DESC`, [request.user.id],
       );
       return {
         items: result.rows.map((row) => ({

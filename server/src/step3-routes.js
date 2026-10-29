@@ -1,6 +1,14 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createSecurity, verifyChineseIdentityNumber } from './security.js';
 import { syncPromotionForUser } from './promotion-service.js';
+import {
+  MemberCouponError,
+  recordCouponReuseConflict,
+  redeemReservedCouponForOrder,
+  releaseReservedCouponsForOrders,
+  reserveOrderCoupon,
+  syncMemberRewardsForUser,
+} from './member-coupon-service.js';
 import { createSandboxInsuranceAdapter, createSandboxPaymentAdapter } from './step3-adapters.js';
 import {
   closeSupplementRoundsForInsuranceGroupFailure,
@@ -50,7 +58,7 @@ async function withTransaction(pool, operation) {
   }
 }
 
-function ticketPrincipalBySeat(seats, discountFen) {
+function ticketPrincipalBySeat(seats, discountFen, couponDiscountFen = 0, couponSeatId = null) {
   const totalPrice = seats.reduce((sum, seat) => sum + Number(seat.price_fen), 0);
   const discount = Number(discountFen);
   if (!seats.length || !Number.isSafeInteger(totalPrice) || !Number.isSafeInteger(discount)
@@ -76,7 +84,20 @@ function ticketPrincipalBySeat(seats, discountFen) {
     seat.discountFen += 1;
     remainder -= 1;
   }
-  return new Map(allocations.map((seat) => [seat.seatInventoryId, seat.priceFen - seat.discountFen]));
+  const principalBySeat = new Map(allocations.map((seat) => [
+    seat.seatInventoryId, seat.priceFen - seat.discountFen,
+  ]));
+  const couponDiscount = Number(couponDiscountFen ?? 0);
+  if (!Number.isSafeInteger(couponDiscount) || couponDiscount < 0
+      || (couponDiscount > 0 && !principalBySeat.has(couponSeatId))) {
+    throw new Error('Cannot allocate the order coupon to its seat.');
+  }
+  if (couponDiscount > 0) {
+    const seatPrincipal = principalBySeat.get(couponSeatId);
+    if (couponDiscount > seatPrincipal) throw new Error('Coupon exceeds its passenger seat principal.');
+    principalBySeat.set(couponSeatId, seatPrincipal - couponDiscount);
+  }
+  return principalBySeat;
 }
 
 function ageOnDate(identityNumber, asOf) {
@@ -98,8 +119,8 @@ async function cancelInsurancePassenger(client, passenger, {
 }) {
   const passengerId = passenger.passenger_id ?? passenger.id;
   const orderResult = await client.query(
-    `SELECT id,departure_id,buyer_user_id,status,seat_fee_fen,discount_fen,
-            ticket_refunded_fen,cancelled_refund_fen
+    `SELECT id,departure_id,buyer_user_id,status,seat_fee_fen,discount_fen,coupon_discount_fen,
+            buyer_seat_inventory_id,ticket_refunded_fen,cancelled_refund_fen
      FROM booking_orders WHERE id=$1 FOR UPDATE`, [passenger.order_id],
   );
   const order = orderResult.rows[0];
@@ -109,7 +130,8 @@ async function cancelInsurancePassenger(client, passenger, {
      FROM booking_order_seats os JOIN seat_inventory s ON s.id=os.seat_inventory_id
      WHERE os.order_id=$1 ORDER BY os.seat_number FOR UPDATE OF os,s`, [order.id],
   );
-  const principalBySeat = ticketPrincipalBySeat(seatResult.rows, Number(order.discount_fen));
+  const principalBySeat = ticketPrincipalBySeat(seatResult.rows, Number(order.discount_fen),
+    Number(order.coupon_discount_fen ?? 0), order.buyer_seat_inventory_id);
   const ticketRefundFen = principalBySeat.get(passenger.seat_inventory_id);
   if (ticketRefundFen === undefined) throw new Error('Passenger has no booked seat to release.');
   const seat = seatResult.rows.find((row) => row.seat_inventory_id === passenger.seat_inventory_id);
@@ -316,6 +338,7 @@ async function releaseHoldInTransaction(client, holdId, terminalStatus) {
        WHERE id=ANY($1::uuid[])`,
       [orderIds],
     );
+    await releaseReservedCouponsForOrders(client, orderIds, 'payment_failed_or_hold_expired');
     await client.query(
       `UPDATE booking_order_seats SET status='released'
        WHERE order_id=ANY($1::uuid[]) AND status='pending_payment'`,
@@ -422,7 +445,7 @@ function serializeSeat(row, currentUserId) {
 
 async function loadOrder(pool, orderId, userId, security) {
   const orderResult = await pool.query(
-    `SELECT o.id,o.order_number,o.status,o.seat_fee_fen,o.discount_fen,o.platform_fee_fen,
+    `SELECT o.id,o.order_number,o.status,o.seat_fee_fen,o.discount_fen,o.coupon_discount_fen,o.platform_fee_fen,
             o.total_amount_fen,o.hold_expires_at,o.created_at,o.paid_at,
             d.departure_at,d.return_at,d.marina_code,d.trip_type,b.name AS boat_name,
             ip.status AS insurance_status,ip.checkout_url,ip.provider_policy_reference
@@ -433,7 +456,7 @@ async function loadOrder(pool, orderId, userId, security) {
   );
   if (!orderResult.rowCount) return null;
   const row = orderResult.rows[0];
-  const [seatResult, passengerResult, coverageResult] = await Promise.all([
+  const [seatResult, passengerResult, coverageResult, couponResult] = await Promise.all([
     pool.query(
       `SELECT seat_number,price_fen FROM booking_order_seats
        WHERE order_id=$1 ORDER BY seat_number`,
@@ -465,6 +488,10 @@ async function loadOrder(pool, orderId, userId, security) {
        ) attempts ON TRUE
        WHERE c.order_id=$1 ORDER BY s.seat_number NULLS LAST,op.id`,
       [orderId],
+    ),
+    pool.query(
+      `SELECT coupon_kind,member_coupon_id,f_coupon_id,amount_fen,status
+       FROM order_coupon_redemptions WHERE order_id=$1 ORDER BY created_at,id LIMIT 1`, [orderId],
     ),
   ]);
   const passengers = passengerResult.rows.map((passenger) => ({
@@ -500,9 +527,16 @@ async function loadOrder(pool, orderId, userId, security) {
     amount: {
       seatFeeFen: Number(row.seat_fee_fen),
       discountFen: Number(row.discount_fen),
+      couponDiscountFen: Number(row.coupon_discount_fen ?? 0),
       platformFeeFen: Number(row.platform_fee_fen),
       totalFen: Number(row.total_amount_fen),
     },
+    coupon: couponResult.rowCount ? {
+      kind: couponResult.rows[0].coupon_kind,
+      id: couponResult.rows[0].member_coupon_id ?? couponResult.rows[0].f_coupon_id,
+      amountFen: Number(couponResult.rows[0].amount_fen),
+      status: couponResult.rows[0].status,
+    } : null,
     holdExpiresAt: row.hold_expires_at,
     paidAt: row.paid_at,
     insurance: {
@@ -742,6 +776,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
         `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),updated_at=now()
          WHERE id=$1 AND status='pending_payment'`, [order.id],
       );
+      await releaseReservedCouponsForOrders(client, [order.id], 'late_payment_refunded');
       await client.query(
         `UPDATE booking_order_seats SET status='released'
          WHERE order_id=$1 AND status='pending_payment'`, [order.id],
@@ -812,6 +847,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
           `UPDATE booking_orders SET status='cancelled',cancelled_at=COALESCE(cancelled_at,now()),updated_at=now()
            WHERE id=$1`, [order.id],
         );
+        await releaseReservedCouponsForOrders(client, [order.id], 'late_waitlist_payment_refunded');
         await client.query(
           `UPDATE booking_order_seats SET status='released'
            WHERE order_id=$1 AND status='pending_payment'`, [order.id],
@@ -873,6 +909,7 @@ async function handlePaymentEvent({ pool, redis, adapter, event, signature, log,
         `UPDATE booking_orders SET status='paid',paid_at=now(),updated_at=now() WHERE id=$1`,
         [event.orderId],
       );
+      await redeemReservedCouponForOrder(client, event.orderId);
       await syncPromotionForUser(client, order.buyer_user_id);
       await client.query(
         `UPDATE booking_order_seats SET status='paid' WHERE order_id=$1 AND status='pending_payment'`,
@@ -1136,6 +1173,14 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
   app.post('/orders', { preHandler: [requireUser, requireRedis] }, async (request, reply) => {
     if (request.user.identity_status !== 'verified') return sendError(reply, 403, '请先完成实名核验后再下单');
     const holdId = request.body?.holdId;
+    const couponInput = request.body?.coupon ?? null;
+    if (couponInput && (config.nodeEnv === 'production' || config.demoSandboxEnabled !== true)) {
+      return sendError(reply, 404, '优惠券沙盒当前不可用');
+    }
+    if (couponInput && (typeof couponInput !== 'object' || Array.isArray(couponInput)
+        || !['member', 'f'].includes(couponInput.kind) || !validUuid(couponInput.id))) {
+      return sendError(reply, 400, '优惠券信息无效');
+    }
     const idempotencyKey = String(request.body?.idempotencyKey ?? '').trim();
     if (!validUuid(holdId)) return sendError(reply, 400, '座位锁定信息无效，请重新选位');
     if (!/^[a-zA-Z0-9._:-]{8,100}$/.test(idempotencyKey)) return sendError(reply, 400, '订单请求编号无效');
@@ -1148,6 +1193,7 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       return reply.code(200).send({ order, idempotentReplay: true });
     }
     const client = await pool.connect();
+    let attemptedOrderId = null;
     try {
       await client.query('BEGIN');
       const holdResult = await client.query(
@@ -1208,6 +1254,22 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         await client.query('ROLLBACK');
         return sendError(reply, 400, passengerResult.error);
       }
+      const identityResult = await client.query(
+        `SELECT identity_number_hash FROM users
+         WHERE id=$1 AND identity_status='verified' AND identity_verified_at IS NOT NULL FOR UPDATE`,
+        [request.user.id],
+      );
+      if (!identityResult.rowCount || !identityResult.rows[0].identity_number_hash) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 403, '实名状态已变化，请重新核验后下单');
+      }
+      const buyerIdentityHash = Buffer.from(identityResult.rows[0].identity_number_hash);
+      const buyerPassenger = passengerResult.value.find((passenger) =>
+        security.identityHash(passenger.identityNumber).equals(buyerIdentityHash));
+      if (couponInput && !buyerPassenger) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 409, '优惠券仅限本人乘船时使用');
+      }
       const lockValues = await redis.mGet(seatIds.map(holdKey));
       if (lockValues.some((value) => value !== holdId)) {
         const seatIdsToRelease = await releaseHoldInTransaction(client, holdId, 'released');
@@ -1229,15 +1291,18 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
         return sendError(reply, 400, '订单金额超出支持范围');
       }
       const orderId = randomUUID();
+      attemptedOrderId = orderId;
       const orderNumber = `QD${Date.now()}${randomUUID().slice(0, 8).toUpperCase()}`;
       const orderResult = await client.query(
         `INSERT INTO booking_orders
           (id,order_number,departure_id,seat_inventory_id,buyer_user_id,status,seat_fee_fen,
-           discount_fen,platform_fee_fen,total_amount_fen,hold_expires_at,hold_id,idempotency_key,waitlist_entry_id)
-         VALUES ($1,$2,$3,$4,$5,'pending_payment',$6,0,0,$6,$7,$8,$9,$10)
+           discount_fen,coupon_discount_fen,buyer_seat_inventory_id,platform_fee_fen,
+           total_amount_fen,hold_expires_at,hold_id,idempotency_key,waitlist_entry_id)
+         VALUES ($1,$2,$3,$4,$5,'pending_payment',$6,0,0,$7,0,$6,$8,$9,$10,$11)
          RETURNING id`,
         [orderId, orderNumber, hold.departure_id, seatIds[0], request.user.id,
-          seatFeeFen, hold.expires_at, holdId, idempotencyKey, hold.waitlist_entry_id],
+          seatFeeFen, buyerPassenger?.seatId ?? null, hold.expires_at, holdId, idempotencyKey,
+          hold.waitlist_entry_id],
       );
       for (const seat of seatResult.rows) {
         await client.query(
@@ -1253,6 +1318,21 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
            VALUES ($1,$2,$3,$4,$5)`,
           [orderId, passenger.seatId, security.encrypt(passenger.fullName),
             security.encrypt(passenger.identityNumber), security.encrypt(passenger.phone)],
+        );
+      }
+      if (couponInput) {
+        await syncMemberRewardsForUser(client, request.user.id, security);
+        const redemption = await reserveOrderCoupon(client, {
+          couponKind: couponInput.kind,
+          couponId: couponInput.id,
+          userId: request.user.id,
+          orderId,
+          seatInventoryId: buyerPassenger.seatId,
+        });
+        await client.query(
+          `UPDATE booking_orders SET coupon_discount_fen=$2,
+             total_amount_fen=seat_fee_fen-discount_fen-$2+platform_fee_fen
+           WHERE id=$1`, [orderId, redemption.amountFen],
         );
       }
       await client.query(
@@ -1282,7 +1362,20 @@ export function registerStep3Routes(app, { pool, redis, config, requireUser }) {
       return reply.code(201).send({ order, idempotentReplay: false });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
+      if (error instanceof MemberCouponError) return sendError(reply, error.statusCode, error.message);
       if (error.code === '23505') {
+        if (couponInput && String(error.constraint ?? '').startsWith('order_coupon_redemptions_active_')) {
+          await recordCouponReuseConflict(pool, {
+            couponKind: couponInput.kind,
+            couponId: couponInput.id,
+            userId: request.user.id,
+            requestKey: `coupon-reuse:${createHash('sha256')
+              .update(`${request.user.id}:${couponInput.id}:${idempotencyKey}`).digest('hex')}`,
+            orderId: attemptedOrderId,
+            constraint: error.constraint,
+          }).catch((recordError) => request.log.warn({ err: recordError }, 'Coupon reuse fact write failed'));
+          return sendError(reply, 409, '这张优惠券已在其他订单占用或核销');
+        }
         const duplicate = await pool.query(
           'SELECT id FROM booking_orders WHERE buyer_user_id=$1 AND idempotency_key=$2',
           [request.user.id, idempotencyKey],

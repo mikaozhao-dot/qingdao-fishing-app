@@ -33,6 +33,7 @@ test('only the two approved F scenarios map to their designated subsidy accounts
 
 function fakeClient(order) {
   const rows = new Map();
+  const events = new Set();
   const calls = [];
   return {
     calls,
@@ -54,6 +55,12 @@ function fakeClient(order) {
         rows.set(key, row);
         return { rowCount: 1, rows: [row] };
       }
+      if (sql.includes('INSERT INTO coupon_ledger_events')) {
+        const key = values[2];
+        if (events.has(key)) return { rowCount: 0, rows: [] };
+        events.add(key);
+        return { rowCount: 1, rows: [] };
+      }
       if (sql.includes('SELECT * FROM f_compensation_coupon_ledger')) {
         const row = rows.get(`${values[0]}:${values[1]}`);
         return { rowCount: row ? 1 : 0, rows: row ? [row] : [] };
@@ -66,7 +73,7 @@ function fakeClient(order) {
 test('F issuance books discounted paid ticket fare, excludes platform/insurance charges, and replays idempotently', async () => {
   const client = fakeClient({
     id: 'order-id', buyer_user_id: 'buyer-id', status: 'cancelled', paid_at: new Date(),
-    seat_fee_fen: 50_000, discount_fen: 1_000, platform_fee_fen: 3_000,
+    seat_fee_fen: 50_000, discount_fen: 1_000, coupon_discount_fen: 1_000, platform_fee_fen: 3_000,
     departure_status: 'cancelled',
   });
   const input = {
@@ -74,15 +81,20 @@ test('F issuance books discounted paid ticket fare, excludes platform/insurance 
     scenario: 'captain_non_weather_cancel', issueNote: '船长非天气原因取消，经沙盒核验',
   };
   const first = await issueFCompensationCoupon(client, input);
-  assert.equal(first.ticketPaidFen, 49_000);
-  assert.equal(first.amountFen, 1_470);
+  assert.equal(first.ticketPaidFen, 48_000);
+  assert.equal(first.amountFen, 1_440);
   assert.equal(first.responsibleParty, 'captain_guarantee');
   assert.equal(first.replayed, false);
+  assert.equal(client.calls.filter(({ sql }) => sql.includes('INSERT INTO coupon_ledger_events')).length, 1);
   assert.equal(client.calls.filter(({ sql }) => sql.startsWith('UPDATE')).length, 0);
 
   const replay = await issueFCompensationCoupon(client, input);
   assert.equal(replay.id, first.id);
   assert.equal(replay.replayed, true);
+  assert.equal(client.calls.filter(({ sql }) => sql.includes('INSERT INTO coupon_ledger_events')).length, 2);
+  assert.deepEqual([...new Set(client.calls
+    .filter(({ sql }) => sql.includes('INSERT INTO coupon_ledger_events'))
+    .map(({ values }) => values[2]))], [`f-coupon-issued:${first.id}`]);
 });
 
 test('platform fault can affect one cancelled booking while the departure remains available', async () => {

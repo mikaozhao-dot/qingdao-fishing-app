@@ -10,6 +10,7 @@ import { registerStep5Routes } from './step5-routes.js';
 import { registerPromotionRoutes } from './promotion-routes.js';
 import { registerStep6CertificateRoutes } from './step6-certificate-routes.js';
 import { registerFCompensationCouponRoutes } from './f-compensation-coupon-routes.js';
+import { registerMemberCouponRoutes } from './member-coupon-routes.js';
 
 const { Pool } = pg;
 
@@ -95,6 +96,7 @@ export function buildApp(runtimeConfig = config) {
   registerStep5Routes(app, { pool, config: runtimeConfig, requireUser });
   registerStep6CertificateRoutes(app, { pool, config: runtimeConfig, requireUser });
   registerFCompensationCouponRoutes(app, { pool, config: runtimeConfig, requireUser });
+  registerMemberCouponRoutes(app, { pool, config: runtimeConfig, requireUser });
 
   app.addHook('onClose', async () => {
     await pool?.end();

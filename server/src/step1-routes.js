@@ -3,6 +3,7 @@ import { createIdentityAdapter } from './identity-adapter.js';
 import { createSecurity } from './security.js';
 import { createSmsAdapter } from './sms-adapter.js';
 import { syncPromotionForUser } from './promotion-service.js';
+import { issueWelcomeMemberCoupon, syncMemberRewardsForUser } from './member-coupon-service.js';
 
 const MARINAS = Object.freeze({
   xiaogang: '小港',
@@ -335,6 +336,10 @@ export function registerStep1Routes(app, { pool, config }) {
       );
       if (sandboxDecision.status === 'verified') {
         await syncPromotionForUser(client, request.user.id);
+        if (config.nodeEnv !== 'production' && config.demoSandboxEnabled === true) {
+          await issueWelcomeMemberCoupon(client, request.user.id);
+          await syncMemberRewardsForUser(client, request.user.id, security);
+        }
       }
       await client.query('COMMIT');
     } catch (error) {

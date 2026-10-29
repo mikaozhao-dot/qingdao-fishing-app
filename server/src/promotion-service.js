@@ -2,7 +2,8 @@ const COMMISSION_RATE_BASIS_POINTS = 500;
 const COMMISSION_DENOMINATOR = 10_000;
 
 export function calculateNetTicketFen(order) {
-  const ticketFen = Math.max(0, Number(order.seat_fee_fen) - Number(order.discount_fen ?? 0));
+  const ticketFen = Math.max(0, Number(order.seat_fee_fen) - Number(order.discount_fen ?? 0)
+    - Number(order.coupon_discount_fen ?? 0));
   const refundedFen = Math.min(ticketFen, Number(order.ticket_refunded_fen ?? 0));
   return ticketFen - refundedFen;
 }
@@ -59,21 +60,21 @@ export async function syncPromotionForUser(client, userId) {
     [attribution.id],
   );
   const firstEligibleOrderResult = await client.query(
-    `SELECT o.id,o.status,o.seat_fee_fen,o.discount_fen,o.ticket_refunded_fen,o.paid_at,
+    `SELECT o.id,o.status,o.seat_fee_fen,o.discount_fen,o.coupon_discount_fen,o.ticket_refunded_fen,o.paid_at,
             d.return_at,d.status AS departure_status,dc.checked_at AS returned_at
      FROM booking_orders o
      JOIN departures d ON d.id=o.departure_id
      LEFT JOIN departure_checkins dc ON dc.departure_id=d.id AND dc.event='returned'
      WHERE o.buyer_user_id=$1 AND o.paid_at IS NOT NULL
        AND o.status NOT IN ('cancelled','refunded')
-       AND o.seat_fee_fen-o.discount_fen-o.ticket_refunded_fen>0
+       AND o.seat_fee_fen-o.discount_fen-o.coupon_discount_fen-o.ticket_refunded_fen>0
      ORDER BY o.paid_at,o.created_at,o.id
      LIMIT 1`,
     [userId],
   );
   const orderResult = protectedLedgerResult.rowCount
     ? await client.query(
-      `SELECT o.id,o.status,o.seat_fee_fen,o.discount_fen,o.ticket_refunded_fen,o.paid_at,
+      `SELECT o.id,o.status,o.seat_fee_fen,o.discount_fen,o.coupon_discount_fen,o.ticket_refunded_fen,o.paid_at,
               d.return_at,d.status AS departure_status,dc.checked_at AS returned_at
        FROM booking_orders o
        JOIN departures d ON d.id=o.departure_id

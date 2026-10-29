@@ -639,6 +639,7 @@ async function makePendingResidualBooking(captain, boatId, buyer, label, couponS
   }
   return {
     ...fixture, buyer, departureAt, seat, hold, order: order.order, payment: payment.payment,
+    passengerIdentityNumber,
     supplementIntent: supplementIntent.payment, coupon: couponFixture,
   };
 }
@@ -737,14 +738,21 @@ async function makeWaitlistPaymentFixture(captain, boatId, label, clockOffsets =
     departureId, departureAt, confirmationAt,
     entryId: authorized.entry.id, orderId: order.order.id, candidate,
     intent: intent.payment, authorizationExpiresAt: authorized.entry.authorizationExpiresAt, coupon,
+    passengerIdentityNumber,
   };
 }
 
 async function makeOrdinaryPendingPaymentFixture(captain, boatId, label, {
-  buyer: existingBuyer = null, coupon = null,
+  buyer: existingBuyer = null, coupon = null, buyerIdentityNumber = null,
 } = {}) {
   const departure = await makeWindowDeparture(captain, boatId, label);
   const buyer = existingBuyer ?? await makeUser(`${label}钓友`);
+  const passengerIdentity = buyerIdentityNumber
+    ?? makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0'));
+  if (buyerIdentityNumber) {
+    await pool.query('UPDATE users SET identity_number_hash=$2,identity_verified_at=now() WHERE id=$1',
+      [buyer.id, security.identityHash(passengerIdentity)]);
+  }
   simulatedStep3Time = new Date(departure.confirmationAt.getTime() - 60_000);
   const hold = await expect('POST', `/departures/${departure.departureId}/seat-holds`, buyer.token,
     { seatIds: [departure.seat.id] }, 201);
@@ -754,7 +762,7 @@ async function makeOrdinaryPendingPaymentFixture(captain, boatId, label, {
     passengers: [{
       seatId: departure.seat.id,
       fullName: '普通订单钓友',
-      identityNumber: makeSandboxIdentityNumber(String(sequence + 1).padStart(3, '0')),
+      identityNumber: passengerIdentity,
       phone: '13900009999',
     }],
   }, 201);
@@ -768,6 +776,7 @@ async function makeOrdinaryPendingPaymentFixture(captain, boatId, label, {
     holdId: hold.holdId,
     orderId: order.order.id,
     intent: intent.payment, couponRedemption,
+    passengerIdentityNumber: passengerIdentity,
   };
 }
 
@@ -3907,6 +3916,7 @@ async function main() {
   const shortfallMemberReuse = await makeOrdinaryPendingPaymentFixture(
     captain, quotaBoatId, 'shortfall member coupon reuse', {
       buyer: shortfallMember.buyer, coupon: shortfallMember.coupon,
+      buyerIdentityNumber: shortfallMember.passengerIdentityNumber,
     },
   );
   simulatedStep3Time = null;
@@ -3957,7 +3967,10 @@ async function main() {
   await checkCouponReleasedAfterCloseout(shortfallExpiredF.coupon,
     shortfallExpiredAt, 'shortfall expired F coupon');
   const shortfallExpiredProbe = await makeOrdinaryPendingPaymentFixture(
-    captain, quotaBoatId, 'shortfall expired F coupon probe', { buyer: shortfallExpiredF.buyer },
+    captain, quotaBoatId, 'shortfall expired F coupon probe', {
+      buyer: shortfallExpiredF.buyer,
+      buyerIdentityNumber: shortfallExpiredF.passengerIdentityNumber,
+    },
   );
   simulatedStep3Time = null;
   await assert.rejects(
@@ -4019,6 +4032,7 @@ async function main() {
   const waitlistExpiredProbe = await makeOrdinaryPendingPaymentFixture(
     captain, quotaBoatId, 'waitlist expired member coupon probe', {
       buyer: waitlistExpiredBuyerCoupon.candidate,
+      buyerIdentityNumber: waitlistExpiredBuyerCoupon.passengerIdentityNumber,
     },
   );
   simulatedStep3Time = null;
@@ -4074,6 +4088,7 @@ async function main() {
   const waitlistFReuse = await makeOrdinaryPendingPaymentFixture(
     captain, quotaBoatId, 'waitlist F coupon reuse', {
       buyer: waitlistFCoupon.candidate, coupon: waitlistFCoupon.coupon,
+      buyerIdentityNumber: waitlistFCoupon.passengerIdentityNumber,
     },
   );
   simulatedStep3Time = null;

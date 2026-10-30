@@ -67,3 +67,31 @@ node --test test/member-activity.test.js
 - 尚无匹配配置页面的截图/交互验收证据。
 - `9dad7ea` 的 Muse 限沙盒评审仍有效；Dot 已完成有界代码复核，但未授予独立技术验收。现补齐固定 SHA 的本地定点日志、Flutter Actions run/job 原始日志入口及实际覆盖说明，等待 Dot 复核。
 - `203ddca` 已获 Muse 对需求单生命周期切片的限沙盒通过；Dot 复核仍待完成。两者均不构成会员活动整体验收或生产放行。
+
+
+## 船长端需求广场筛选 API 切片 `e48de0bc`
+
+固定提交：`e48de0bc22a28d41203d653fb1bedf8a2ecf071a`。
+
+### 本地定点复核
+
+在该提交的独立 worktree 中运行：
+
+```text
+cd server
+node --test test/member-activity.test.js
+```
+
+结果：`tests 13`、`pass 13`、`fail 0`、`exit 0`。其中新增用例覆盖五类筛选参数校验、未知/非法筛选拒绝、未审核船长门禁、参数化 SQL、只列出已发布未过期需求及响应不含会员身份；原有需求单生命周期用例仍通过。
+
+同一提交运行 `node --check src/member-activity-service.js` 与 `node --check src/member-activity-routes.js`，均 `exit 0`。
+
+### PostgreSQL 条件表达式验证
+
+本地临时 PostgreSQL `17.11` 实例中创建 `fish_codes varchar(60)[]` 临时表，使用与实现相同的 `fish_codes @> ARRAY[$1::varchar]` 预备语句查询，样例匹配返回 `true`，命令退出 `0`。这是数组类型/操作符的隔离表达式验证，不是全量迁移、事务、认证中间件或并发集成测试。
+
+`gh run list --repo mikaozhao-dot/qingdao-fishing-app --commit e48de0bc22a28d41203d653fb1bedf8a2ecf071a` 未返回该 SHA 的 GitHub Actions run；本切片目前提供的是上述本地定点日志，不将其描述成 CI 通过。
+
+### 评审状态
+
+Muse 对该 API 切片限沙盒通过（评审 `c669a4cc`）。Dot 复核仍待完成；该评审不表示撮合通知、邀约、站内消息或转化链路已实现，也不构成生产放行。

@@ -50,6 +50,24 @@ class Step1Api {
     return _decode(response);
   }
 
+  static Future<Map<String, dynamic>> put(
+    String path,
+    Map<String, dynamic> body, {
+    String? token,
+  }) async {
+    final response = await _client
+        .put(
+          Uri.parse('$baseUrl$path'),
+          headers: {
+            'content-type': 'application/json',
+            if (token != null) 'authorization': 'Bearer $token',
+          },
+          body: jsonEncode(body),
+        )
+        .timeout(const Duration(seconds: 20));
+    return _decode(response);
+  }
+
   static Future<Map<String, dynamic>> delete(
     String path, {
     String? token,

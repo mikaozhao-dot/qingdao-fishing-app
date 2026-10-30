@@ -3,6 +3,10 @@ import { createSecurity } from './security.js';
 import { step1Options } from './step1-routes.js';
 import { isResidualSalesOpen } from './step4-routes.js';
 import {
+  serializeActivityMatchingSettings,
+  validateActivityMatchingSettings,
+} from './activity-matching-settings.js';
+import {
   BAIT_SUPPLIES,
   BAIT_TYPES,
   FISH_CATALOG,
@@ -544,6 +548,80 @@ export function registerStep2Routes(app, { pool, config, requireUser }) {
   const storage = createLocalObjectStorage(config.uploadDir);
 
   app.get('/step2/options', { preHandler: requireUser }, async () => optionsPayload());
+
+  const loadActivityMatchingSettings = async (userId) => {
+    const [marinas, fish] = await Promise.all([
+      pool.query(
+        `SELECT marina_code FROM captain_service_marinas
+         WHERE captain_user_id=$1 ORDER BY sort_order, marina_code`, [userId],
+      ),
+      pool.query(
+        `SELECT fish_code FROM captain_fish_targets
+         WHERE captain_user_id=$1 ORDER BY sort_order, fish_code`, [userId],
+      ),
+    ]);
+    return serializeActivityMatchingSettings({
+      serviceMarinaCodes: marinas.rows.map((row) => row.marina_code),
+      fishTargetCodes: fish.rows.map((row) => row.fish_code),
+      marinas: MARINAS,
+      fishCatalog: FISH_CATALOG,
+    });
+  };
+
+  app.get('/captain/activity-matching-settings', { preHandler: requireUser }, async (request, reply) => {
+    if (!await captainApproved(pool, request.user.id)) {
+      return sendError(reply, 403, '船长资质尚未审核通过');
+    }
+    return { settings: await loadActivityMatchingSettings(request.user.id) };
+  });
+
+  app.put('/captain/activity-matching-settings', { preHandler: requireUser }, async (request, reply) => {
+    if (!await captainApproved(pool, request.user.id)) {
+      return sendError(reply, 403, '船长资质尚未审核通过');
+    }
+    const validated = validateActivityMatchingSettings(
+      request.body,
+      new Set(Object.keys(MARINAS)),
+      new Set(FISH_CATALOG.map((fish) => fish.code)),
+    );
+    if (validated.error) return sendError(reply, 400, validated.error);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const captain = await client.query(
+        `SELECT user_id FROM captain_profiles
+         WHERE user_id=$1 AND verification_status='approved' FOR UPDATE`,
+        [request.user.id],
+      );
+      if (!captain.rowCount) {
+        await client.query('ROLLBACK');
+        return sendError(reply, 403, '船长资质尚未审核通过');
+      }
+      await client.query('DELETE FROM captain_service_marinas WHERE captain_user_id=$1', [request.user.id]);
+      await client.query('DELETE FROM captain_fish_targets WHERE captain_user_id=$1', [request.user.id]);
+      await client.query(
+        `INSERT INTO captain_service_marinas (captain_user_id, marina_code, sort_order)
+         SELECT $1, value.code, (value.ordinality - 1)::smallint
+         FROM unnest($2::varchar[]) WITH ORDINALITY AS value(code, ordinality)`,
+        [request.user.id, validated.value.serviceMarinaCodes],
+      );
+      await client.query(
+        `INSERT INTO captain_fish_targets (captain_user_id, fish_code, sort_order)
+         SELECT $1, value.code, (value.ordinality - 1)::smallint
+         FROM unnest($2::varchar[]) WITH ORDINALITY AS value(code, ordinality)`,
+        [request.user.id, validated.value.fishTargetCodes],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      request.log.error({ err: error }, 'Captain activity matching settings update failed');
+      return sendError(reply, 500, '匹配偏好保存失败，请稍后重试');
+    } finally {
+      client.release();
+    }
+    return { settings: await loadActivityMatchingSettings(request.user.id) };
+  });
 
   app.get('/captain/departure-context', { preHandler: requireUser }, async (request, reply) => {
     if (!await captainApproved(pool, request.user.id)) return sendError(reply, 403, '船长资质尚未审核通过');

@@ -299,10 +299,21 @@ class _Step2WorkspaceState extends State<Step2Workspace> {
       onRefresh: _load,
       onPublish: () => widget.onSelectTab(1),
       onTrips: () => widget.onSelectTab(2),
+      onActivitySettings: _openActivityMatchingSettings,
       onOpenDetail: _openDetail,
       onOpenProfile: widget.onOpenProfile,
       token: widget.token!,
     );
+  }
+
+  Future<void> _openActivityMatchingSettings() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            _CaptainActivityMatchingSettingsPage(token: widget.token!),
+      ),
+    );
+    if (mounted) await _load();
   }
 
   Future<void> _openDetail(Map<String, dynamic> item) async {
@@ -1038,6 +1049,213 @@ class _PublishDeparturePageState extends State<_PublishDeparturePage> {
   }
 }
 
+class _CaptainActivityMatchingSettingsPage extends StatefulWidget {
+  const _CaptainActivityMatchingSettingsPage({required this.token});
+
+  final String token;
+
+  @override
+  State<_CaptainActivityMatchingSettingsPage> createState() =>
+      _CaptainActivityMatchingSettingsPageState();
+}
+
+class _CaptainActivityMatchingSettingsPageState
+    extends State<_CaptainActivityMatchingSettingsPage> {
+  List<Map<String, dynamic>> _marinaOptions = [];
+  List<Map<String, dynamic>> _fishOptions = [];
+  Set<String> _serviceMarinas = {};
+  Set<String> _fishTargets = {};
+  bool _loading = true;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final options = await Step1Api.get('/step2/options', token: widget.token);
+      final response = await Step1Api.get(
+        '/captain/activity-matching-settings',
+        token: widget.token,
+      );
+      final settings = Map<String, dynamic>.from(response['settings'] as Map);
+      if (!mounted) return;
+      setState(() {
+        _marinaOptions = _mapList(options['marinas']);
+        _fishOptions = _mapList(options['fish']);
+        _serviceMarinas = (settings['serviceMarinaCodes'] as List? ?? [])
+            .map((code) => '$code')
+            .toSet();
+        _fishTargets = (settings['fishTargetCodes'] as List? ?? [])
+            .map((code) => '$code')
+            .toSet();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      final message = error.toString().replaceFirst('Exception: ', '');
+      setState(() => _error = message);
+      if (message.contains('登录已过期')) Navigator.of(context).pop();
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final response =
+          await Step1Api.put('/captain/activity-matching-settings', {
+            'serviceMarinaCodes': _serviceMarinas.toList(),
+            'fishTargetCodes': _fishTargets.toList(),
+          }, token: widget.token);
+      final settings = Map<String, dynamic>.from(response['settings'] as Map);
+      if (!mounted) return;
+      setState(() {
+        _serviceMarinas = (settings['serviceMarinaCodes'] as List? ?? [])
+            .map((code) => '$code')
+            .toSet();
+        _fishTargets = (settings['fishTargetCodes'] as List? ?? [])
+            .map((code) => '$code')
+            .toSet();
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('撮合偏好已保存')));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Widget _selectionSection({
+    required String title,
+    required String hint,
+    required List<Map<String, dynamic>> options,
+    required Set<String> selected,
+    required ValueChanged<String> onToggle,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: FishingTokens.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: FishingTokens.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          Text(
+            hint,
+            style: const TextStyle(
+              color: FishingTokens.secondary,
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: options.map((option) {
+              final code = '${option['code']}';
+              final name = '${option['name'] ?? code}';
+              return FilterChip(
+                label: Text(name),
+                selected: selected.contains(code),
+                onSelected: _saving ? null : (_) => onToggle(code),
+                showCheckmark: true,
+                selectedColor: FishingTokens.brand.withValues(alpha: 0.22),
+                checkmarkColor: FishingTokens.brand,
+                side: const BorderSide(color: FishingTokens.line),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('需求撮合偏好')),
+      body: _loading && _marinaOptions.isEmpty
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+              children: [
+                const _SectionEyebrow('CAPTAIN · MATCHING PROFILE'),
+                const SizedBox(height: 8),
+                const Text('设置你的服务范围', style: _titleStyle),
+                const SizedBox(height: 6),
+                const Text('这些偏好用于活动需求撮合，不会修改已有班次或订单。', style: _bodyStyle),
+                if (_loading) ...[
+                  const SizedBox(height: 10),
+                  const LinearProgressIndicator(minHeight: 2),
+                ],
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  _InlineError(message: _error!, onRetry: _load),
+                ],
+                const SizedBox(height: 18),
+                _selectionSection(
+                  title: '服务码头',
+                  hint: '需求出发码头在所选范围内时，才会纳入匹配。',
+                  options: _marinaOptions,
+                  selected: _serviceMarinas,
+                  onToggle: (code) => setState(() {
+                    if (!_serviceMarinas.add(code)) {
+                      _serviceMarinas.remove(code);
+                    }
+                  }),
+                ),
+                const SizedBox(height: 12),
+                _selectionSection(
+                  title: '目标鱼种',
+                  hint: '选择你愿意承接的目标鱼种需求。',
+                  options: _fishOptions,
+                  selected: _fishTargets,
+                  onToggle: (code) => setState(() {
+                    if (!_fishTargets.add(code)) _fishTargets.remove(code);
+                  }),
+                ),
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: _saving || _loading ? null : _save,
+                  icon: _saving
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save_outlined),
+                  label: Text(_saving ? '正在保存' : '保存偏好'),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '可以随时调整；未选择的码头或鱼种不会作为匹配条件。',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: FishingTokens.muted, fontSize: 12),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
 class _CaptainWorkbench extends StatelessWidget {
   const _CaptainWorkbench({
     required this.contextData,
@@ -1047,6 +1265,7 @@ class _CaptainWorkbench extends StatelessWidget {
     required this.onRefresh,
     required this.onPublish,
     required this.onTrips,
+    required this.onActivitySettings,
     required this.onOpenDetail,
     required this.onOpenProfile,
     required this.token,
@@ -1058,6 +1277,7 @@ class _CaptainWorkbench extends StatelessWidget {
   final Future<void> Function() onRefresh;
   final VoidCallback onPublish;
   final VoidCallback onTrips;
+  final VoidCallback onActivitySettings;
   final ValueChanged<Map<String, dynamic>> onOpenDetail;
   final VoidCallback onOpenProfile;
   final String token;
@@ -1113,6 +1333,12 @@ class _CaptainWorkbench extends StatelessWidget {
               boats.isEmpty ? Icons.verified_user_outlined : Icons.add,
             ),
             label: Text(boats.isEmpty ? '完善船长与船档案' : '创建新班次'),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: onActivitySettings,
+            icon: const Icon(Icons.tune_rounded),
+            label: const Text('需求撮合偏好'),
           ),
           const SizedBox(height: 20),
           _SectionHeading(

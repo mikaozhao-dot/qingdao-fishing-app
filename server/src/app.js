@@ -4,6 +4,7 @@ import { createClient } from 'redis';
 import { config } from './config.js';
 import { registerStep1Routes } from './step1-routes.js';
 import { registerStep2Routes } from './step2-routes.js';
+import { registerMemberActivityRoutes } from './member-activity-routes.js';
 import { registerStep3Routes } from './step3-routes.js';
 import { registerStep4Routes } from './step4-routes.js';
 import { registerStep5Routes } from './step5-routes.js';
@@ -40,7 +41,7 @@ export function buildApp(runtimeConfig = config) {
   app.addHook('onRequest', async (request, reply) => {
     if (request.headers.origin) {
       reply.header('access-control-allow-origin', '*');
-      reply.header('access-control-allow-methods', 'GET,POST,OPTIONS');
+      reply.header('access-control-allow-methods', 'GET,POST,PUT,OPTIONS');
       reply.header('access-control-allow-headers', 'content-type,authorization,x-admin-password,x-admin-actor,x-sandbox-signature');
       reply.header('access-control-max-age', '600');
     }
@@ -91,6 +92,7 @@ export function buildApp(runtimeConfig = config) {
   const { requireUser } = registerStep1Routes(app, { pool, config: runtimeConfig });
   registerPromotionRoutes(app, { pool, config: runtimeConfig, requireUser });
   registerStep2Routes(app, { pool, config: runtimeConfig, requireUser });
+  registerMemberActivityRoutes(app, { pool, config: runtimeConfig, requireUser });
   registerStep3Routes(app, { pool, redis, config: runtimeConfig, requireUser });
   registerStep4Routes(app, { pool, redis, config: runtimeConfig, requireUser });
   registerStep5Routes(app, { pool, config: runtimeConfig, requireUser });

@@ -41,5 +41,5 @@
 - **F 补偿券实现状态**：沙盒管理员登记责任账与本人只读钱包已于 `docs/founder-f-product-acceptance-closure-2026-10-29.md` 获限定范围产品验收；F 工单仅在此沙盒范围关闭。生产发放、自动事件触发、可信责任事件源、多人订单实际受影响乘客映射、真实资金及核销仍未实现/未授权。会员券与 F 券同单互斥已在当前会员券队列项的限定沙盒范围内验收，详见 `docs/founder-product-acceptance-member-coupons-2026-10-29.md`；不扩展 F 券其他待办或生产范围。
 - **G 保险失败实现与真实首单前置**：规则已定版，Muse 的 2026-10-28 剩余开发工单已授权沙盒/API 实现；实现完成仍须 Muse 评审、Dot 复核与创始人另行验收。真实首单前仍须保险方书面确认出单/回查时效、拒保标准、年龄/健康准入、退保规则及对外文案合规；不授权真实保险、生产部署或真实资金。
 - **会员等级与营销券实现**：星级、券额/授予规则、有效期、不可转赠、不可叠加及无券外星级权益均已定版。退款/星级矩阵、F 券佣金及责任账核销口径已获 Muse 任务书评审确认（`docs/ui-design-review-06811f5f.md`）；M1 回补 `e318f81d` 已获 Muse 有条件通过及 Dot 技术复核通过，创始人对本地/CI 沙盒交付作限定范围产品验收（`docs/founder-product-acceptance-member-coupons-2026-10-29.md`）。隔离 CI `40879779458` 成功（Step 4 1097、会员券 43、F 券 33 项断言）。已披露覆盖局限保留；不含真实资金、生产部署或新增处罚/降级。
-- **会员发起活动需求撮合**：创始人于 2026-10-30 排为下一批开发首项；任务书 `docs/member-activity-implementation-task-brief-2026-10-30.md` 已发布，Luna 回执见 `docs/luna-member-activity-implementation-receipt-2026-10-30.md`。当前实现等待 Muse 裁定码头/鱼种匹配来源与包船订单复用口径；仅限沙盒/API，不授权生产。
+- **会员发起活动需求撮合**：创始人于 2026-10-30 排为下一批开发首项；服务码头/鱼种的可维护配置切片已提交 `9dad7ea`，待 Muse 评审；包船订单复用方式和班次字段映射待裁定，暂不实现撮合/转化业务链路。任务书与回执见 `docs/member-activity-implementation-task-brief-2026-10-30.md`、`docs/luna-member-activity-implementation-receipt-2026-10-30.md`。仅限沙盒/API，不授权生产。
 - **真实通道**：真实支付/保险出单/实名/短信供应商、生产部署与真实首单，均未授权

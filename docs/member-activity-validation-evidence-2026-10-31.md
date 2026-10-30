@@ -94,4 +94,4 @@ node --test test/member-activity.test.js
 
 ### 评审状态
 
-Muse 对该 API 切片限沙盒通过（评审 `c669a4cc`）。Dot 复核仍待完成；该评审不表示撮合通知、邀约、站内消息或转化链路已实现，也不构成生产放行。
+Muse 对该 API 切片限沙盒通过（评审 `c669a4cc`）。已向 Dot 发出固定 SHA 定点复核请求，期限与范围见 `docs/dot-member-activity-filters-e48de0bc-review-request-2026-10-30.md`；Dot 结论待回。该评审不表示撮合通知、邀约、站内消息或转化链路已实现，也不构成生产放行。

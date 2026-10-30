@@ -1,6 +1,6 @@
 # Luna 开工回执：会员发起活动需求撮合（2026-10-30）
 
-- 状态：**按创始人裁定推送两个实现切片：可维护匹配配置 `9dad7ea`、需求单生命周期 `203ddca`。配置切片获 Muse 限沙盒通过（`4d70ec23`）；Dot 完成有界代码复核但未授予技术验收，待补固定 SHA 的 CI 原始日志和实际覆盖说明。需求单生命周期切片获 Muse 限沙盒通过（`316deb03`），待 Dot 复核。撮合、邀约、站内消息与确认转化按后续切片推进。**
+- 状态：**匹配配置 `9dad7ea` 与需求单生命周期 `203ddca` 均获 Muse 限沙盒通过。配置切片的 Dot 有界复核未授予技术验收；固定 SHA 本地测试、Flutter Actions 原始日志入口和覆盖说明已补回，等待 Dot 复核。生命周期切片等待 Dot 复核。撮合、邀约、站内消息与确认转化按后续切片推进。**
 - 工单：`docs/member-activity-implementation-task-brief-2026-10-30.md`
 - 后续裁定：`docs/member-activity-conversion-rulings-2026-10-30.md`（创始人批准包船订单模式和邀约字段口径）。
 - 起始基线：`main` 提交 `7880f00299458637685e0809dd55111c96699ae4`；本次按仓库指令同步至主线最新提交后继续。
@@ -19,7 +19,7 @@
 - 船长专用读取/保存 API 校验平台目录并在事务内替换配置；未审核船长不能读写。
 - 船长工作台新增“需求撮合偏好”设置页。
 - 验证：服务端 `npm test` 25/25、`npm run check` 通过；`dart analyze lib/api_client.dart lib/step2_flow.dart` 报告无问题。首次 Flutter analyzer 服务因 LSP 输出截断未能启动，直接 Dart 分析已验证相关改动。
-- 代码提交：`9dad7ea`（`feat: add captain activity matching settings`），已推送 `main`；Muse 已限沙盒通过。Dot 有界复核未授予技术验收：所附测试/分析结果仍为交付回执自述，固定 SHA CI 原始日志、实际覆盖说明尚缺。复核详见 `docs/dot-member-activity-settings-9dad7ea-review-2026-10-30.md`。
+- 代码提交：`9dad7ea`（`feat: add captain activity matching settings`），已推送 `main`；Muse 已限沙盒通过。Dot 有界复核未授予技术验收。固定 SHA 的 8 项服务端定点测试、Dart 分析与 Flutter Actions run/job 日志入口及覆盖说明见 `docs/member-activity-validation-evidence-2026-10-31.md`；等待 Dot 复核。原复核详见 `docs/dot-member-activity-settings-9dad7ea-review-2026-10-30.md`。
 
 ## 切片二：需求单生命周期
 
@@ -28,6 +28,7 @@
 - 日期和时段按 `Asia/Shanghai` 解析；有效期取时段开始与发布后 7 天的较早值。后台每分钟自动下架到期需求，读写接口也会补做过期处理。
 - 发布、编辑、关闭、自动下架均写入追加事实；备注、装备要求和钓法标签拦截手机号及微信号模式。接口不返回会员身份/联系方式。
 - 验证：服务端 `npm test` 34/34；本次复跑 `npm run check` 通过。覆盖实名拒绝、双限频、字段校验、联系方式过滤、创建/编辑/关闭与自动下架事实。
+- 定点验证：固定代码 SHA `203ddcab4f804cc0ea2837154e1835d7298a98e6` 的 `test/member-activity.test.js` 为 9/9 通过，三个相关 JS 文件 `node --check` 均退出 0；见 `docs/member-activity-validation-evidence-2026-10-31.md`。
 - 代码提交：`203ddca`（`feat: add member activity request lifecycle`），已推送 `main`；Muse 已限沙盒通过（评审 `316deb03`），Dot 复核待完成。
 
 ## 后续切片

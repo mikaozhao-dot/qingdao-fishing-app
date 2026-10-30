@@ -14,6 +14,59 @@ function validDate(value) {
     && date.getUTCDate() === day;
 }
 
+export function validateMemberActivityRequestFilters(query, { marinaCodes, fishCodes }) {
+  if (!query || typeof query !== 'object' || Array.isArray(query)) {
+    return { error: '筛选条件无效' };
+  }
+  const allowedKeys = new Set(['marinaCode', 'departureDate', 'partySize', 'fishCode', 'bookingType']);
+  if (Object.keys(query).some((key) => !allowedKeys.has(key))) return { error: '包含不支持的筛选条件' };
+
+  const optionalString = (key) => {
+    const value = query[key];
+    if (value === undefined || value === null || value === '') return { value: null };
+    if (typeof value !== 'string') return { error: `${key}筛选值无效` };
+    const normalized = value.trim();
+    return normalized ? { value: normalized } : { value: null };
+  };
+
+  const marina = optionalString('marinaCode');
+  if (marina.error) return marina;
+  if (marina.value && !marinaCodes.has(marina.value)) return { error: '请选择平台内的出发码头' };
+
+  const date = optionalString('departureDate');
+  if (date.error) return date;
+  if (date.value && !validDate(date.value)) return { error: '出航日期筛选值无效' };
+
+  const fish = optionalString('fishCode');
+  if (fish.error) return fish;
+  if (fish.value && !fishCodes.has(fish.value)) return { error: '目标鱼种筛选值无效' };
+
+  const bookingType = optionalString('bookingType');
+  if (bookingType.error) return bookingType;
+  if (bookingType.value && !['charter', 'shared'].includes(bookingType.value)) {
+    return { error: '包船/拼船筛选值无效' };
+  }
+
+  let partySize = null;
+  if (query.partySize !== undefined && query.partySize !== null && query.partySize !== '') {
+    if (!['number', 'string'].includes(typeof query.partySize)) return { error: '人数筛选值无效' };
+    partySize = Number(query.partySize);
+    if (!Number.isInteger(partySize) || partySize < 1 || partySize > 30) {
+      return { error: '人数筛选值需为 1–30 人' };
+    }
+  }
+
+  return {
+    value: {
+      marinaCode: marina.value,
+      departureDate: date.value,
+      partySize,
+      fishCode: fish.value,
+      bookingType: bookingType.value,
+    },
+  };
+}
+
 function addCalendarDay(value) {
   const [year, month, day] = value.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day + 1));

@@ -2,6 +2,7 @@ import { step1Options } from './step1-routes.js';
 import { FISH_CATALOG, TARGET_AREAS } from './step2-catalog.js';
 import {
   serializeMemberActivityRequest,
+  validateMemberActivityRequestFilters,
   validateMemberActivityRequest,
 } from './member-activity-service.js';
 
@@ -23,6 +24,13 @@ function validateBody(body, now) {
     targetAreaCodes: new Set(Object.keys(TARGET_AREAS)),
     fishCodes: new Set(FISH_CATALOG.map(({ code }) => code)),
     now,
+  });
+}
+
+function validateFilters(query) {
+  return validateMemberActivityRequestFilters(query, {
+    marinaCodes: new Set(Object.keys(step1Options.marinas)),
+    fishCodes: new Set(FISH_CATALOG.map(({ code }) => code)),
   });
 }
 
@@ -147,6 +155,37 @@ export function registerMemberActivityRoutes(app, { pool, config, requireUser, c
     } finally {
       client.release();
     }
+  });
+
+  app.get('/captain/member/activity-requests', { preHandler: requireUser }, async (request, reply) => {
+    const filters = validateFilters(request.query ?? {});
+    if (filters.error) return sendError(reply, 400, filters.error);
+    const captain = await pool.query(
+      `SELECT 1 FROM captain_profiles
+       WHERE user_id=$1 AND verification_status='approved'`, [request.user.id],
+    );
+    if (!captain.rowCount) return sendError(reply, 403, '仅已审核船长可以浏览需求广场');
+
+    await expireMemberActivityRequests(pool);
+    const values = [clockNow().toISOString()];
+    const conditions = ["status='published'", 'expires_at > $1'];
+    const addFilter = (condition, value) => {
+      values.push(value);
+      conditions.push(condition.replace('?', `$${values.length}`));
+    };
+    if (filters.value.marinaCode) addFilter('marina_code=?', filters.value.marinaCode);
+    if (filters.value.departureDate) addFilter('departure_date=?::date', filters.value.departureDate);
+    if (filters.value.partySize !== null) addFilter('party_size=?::smallint', filters.value.partySize);
+    if (filters.value.fishCode) addFilter('fish_codes @> ARRAY[?::varchar]', filters.value.fishCode);
+    if (filters.value.bookingType) addFilter('booking_type=?', filters.value.bookingType);
+
+    const result = await pool.query(
+      `SELECT ${REQUEST_COLUMNS} FROM member_activity_requests
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY requested_start_at ASC,created_at DESC,id ASC LIMIT 100`,
+      values,
+    );
+    return { items: result.rows.map(serializeMemberActivityRequest) };
   });
 
   app.get('/member/activity-requests', { preHandler: requireUser }, async (request) => {

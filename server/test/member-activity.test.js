@@ -4,6 +4,7 @@ import { expireMemberActivityRequests, registerMemberActivityRoutes } from '../s
 import {
   containsExternalContact,
   serializeMemberActivityRequest,
+  validateMemberActivityRequestFilters,
   validateMemberActivityRequest,
 } from '../src/member-activity-service.js';
 import { step1Options } from '../src/step1-routes.js';
@@ -36,6 +37,40 @@ function validation(bodyValue = body) {
     now,
   });
 }
+
+function filterValidation(query) {
+  return validateMemberActivityRequestFilters(query, {
+    marinaCodes: new Set(Object.keys(step1Options.marinas)),
+    fishCodes: new Set(FISH_CATALOG.map(({ code }) => code)),
+  });
+}
+
+test('member activity plaza filters accept all five supported dimensions', () => {
+  const result = filterValidation({
+    marinaCode: body.marinaCode,
+    departureDate: '2026-11-01',
+    partySize: '4',
+    fishCode: FISH_CATALOG[0].code,
+    bookingType: 'shared',
+  });
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.value, {
+    marinaCode: body.marinaCode,
+    departureDate: '2026-11-01',
+    partySize: 4,
+    fishCode: FISH_CATALOG[0].code,
+    bookingType: 'shared',
+  });
+});
+
+test('member activity plaza filters reject unknown, malformed, and out-of-range values', () => {
+  assert.match(filterValidation({ marinaCode: 'unknown' }).error, /出发码头/);
+  assert.match(filterValidation({ departureDate: '2026-02-30' }).error, /日期/);
+  assert.match(filterValidation({ partySize: '0' }).error, /1–30/);
+  assert.match(filterValidation({ fishCode: 'unknown' }).error, /鱼种/);
+  assert.match(filterValidation({ bookingType: 'auction' }).error, /包船\/拼船/);
+  assert.match(filterValidation({ unexpected: 'value' }).error, /不支持/);
+});
 
 test('member activity request validation normalizes Shanghai time and optional requirements', () => {
   const result = validation();
@@ -175,6 +210,26 @@ function captureRoutes(pool) {
   return routes;
 }
 
+function fakeCaptainPlazaPool({ approved = true, requests = [] } = {}) {
+  const state = { approved, requests, queries: [], plazaQuery: null };
+  return {
+    state,
+    async query(sql, values = []) {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase();
+      state.queries.push({ sql: normalized, values });
+      if (normalized.startsWith('with expired as')) return { rowCount: 0, rows: [] };
+      if (normalized.includes('from captain_profiles')) {
+        return { rowCount: approved ? 1 : 0, rows: approved ? [{ '?column?': 1 }] : [] };
+      }
+      if (normalized.includes('from member_activity_requests')) {
+        state.plazaQuery = { sql: normalized, values };
+        return { rowCount: requests.length, rows: requests };
+      }
+      throw new Error(`Unexpected captain plaza query: ${normalized}`);
+    },
+  };
+}
+
 function fakeReply() {
   return {
     statusCode: 200,
@@ -239,4 +294,62 @@ test('expired requests transition once and receive an expiration fact', async ()
   assert.equal(await expireMemberActivityRequests(pool), 1);
   assert.equal(pool.state.request.status, 'expired');
   assert.equal(pool.state.facts.filter((fact) => fact.factType === 'request_expired').length, 1);
+});
+
+test('captain demand plaza requires approval and applies parameterized filters without exposing member identity', async () => {
+  const requestRow = {
+    id: '22222222-2222-4222-8222-222222222222', member_user_id: 'private-member-id',
+    departure_date: '2026-11-01', requested_start_at: '2026-10-31T22:00:00Z',
+    requested_end_at: '2026-11-01T05:00:00Z', marina_code: body.marinaCode,
+    target_area_code: body.targetAreaCode, party_size: 4, booking_type: 'shared',
+    fish_codes: [FISH_CATALOG[0].code], fishing_methods: [], min_budget_fen: 30000,
+    max_budget_fen: 60000, gear_requirements: '', beginner_friendly: true,
+    children_allowed: false, notes: '', status: 'published', expires_at: '2026-11-01T05:00:00Z',
+    converted_departure_id: null, created_at: now, updated_at: now,
+  };
+  const pool = fakeCaptainPlazaPool({ requests: [requestRow] });
+  const route = captureRoutes(pool).find((item) => item.method === 'GET'
+    && item.path === '/captain/member/activity-requests');
+  const response = await route.handler({
+    user: { id: 'captain-1' },
+    query: {
+      marinaCode: body.marinaCode,
+      departureDate: '2026-11-01',
+      partySize: '4',
+      fishCode: FISH_CATALOG[0].code,
+      bookingType: 'shared',
+    },
+  }, fakeReply());
+
+  assert.equal(response.items.length, 1);
+  assert.equal(Object.hasOwn(response.items[0], 'memberUserId'), false);
+  assert.match(pool.state.plazaQuery.sql, /status='published'/);
+  assert.match(pool.state.plazaQuery.sql, /expires_at > \$1/);
+  assert.match(pool.state.plazaQuery.sql, /marina_code=\$2/);
+  assert.match(pool.state.plazaQuery.sql, /departure_date=\$3::date/);
+  assert.match(pool.state.plazaQuery.sql, /party_size=\$4::smallint/);
+  assert.match(pool.state.plazaQuery.sql, /fish_codes @> array\[\$5::varchar\]/);
+  assert.match(pool.state.plazaQuery.sql, /booking_type=\$6/);
+  assert.deepEqual(pool.state.plazaQuery.values, [
+    now.toISOString(), body.marinaCode, '2026-11-01', 4, FISH_CATALOG[0].code, 'shared',
+  ]);
+  assert.equal(pool.state.plazaQuery.sql.includes(FISH_CATALOG[0].code), false);
+});
+
+test('captain demand plaza rejects unapproved captains and invalid filters before listing', async () => {
+  const unapproved = fakeCaptainPlazaPool({ approved: false });
+  const route = captureRoutes(unapproved).find((item) => item.method === 'GET'
+    && item.path === '/captain/member/activity-requests');
+  const denied = fakeReply();
+  await route.handler({ user: { id: 'captain-1' }, query: {} }, denied);
+  assert.equal(denied.statusCode, 403);
+  assert.equal(unapproved.state.plazaQuery, null);
+
+  const invalid = fakeCaptainPlazaPool();
+  const invalidRoute = captureRoutes(invalid).find((item) => item.method === 'GET'
+    && item.path === '/captain/member/activity-requests');
+  const invalidReply = fakeReply();
+  await invalidRoute.handler({ user: { id: 'captain-1' }, query: { marinaCode: 'bad-code' } }, invalidReply);
+  assert.equal(invalidReply.statusCode, 400);
+  assert.equal(invalid.state.queries.length, 0);
 });

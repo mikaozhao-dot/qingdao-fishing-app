@@ -1,0 +1,91 @@
+{
+  "run_id": "20261031T112739Z",
+  "order_commit": "70fe1d48e5bdca3ab2cf2c58bcb73f249ab01894",
+  "original_order": "686ace0472563f2949aa66aefcf838ea6e33d1e9",
+  "patch_receipt_commit": "0f6e929b4ae2057f2affb8b5e87cf6391f9f36fe",
+  "fixed_business_sha": "e48de0bc22a28d41203d653fb1bedf8a2ecf071a",
+  "status": "STOPPED_A_AFTER_OLD_ORPHAN_REMOVAL_AND_NEW_WORKTREE_CREATION",
+  "a_started_at_utc": "2026-10-31T11:30:30.178788+00:00",
+  "a_stopped_at_utc": "2026-10-31T11:31:50.240293+00:00",
+  "a_elapsed_seconds": 80.061505,
+  "a_budget_seconds": 180,
+  "checks": [
+    {
+      "id": "A.a",
+      "result": "pass",
+      "target_exists": true,
+      "target_symlink": false,
+      "realpath": "/private/tmp/qf-e48de0bc.8ud3bq"
+    },
+    {
+      "id": "A.b",
+      "result": "pass",
+      "top_level": ["capture", "capture-command.zsh", "pg", "worktree"]
+    },
+    {
+      "id": "A.c",
+      "result": "pass",
+      "worktree_git_pointer": "main repository .git/worktrees/worktree",
+      "admin_target_exists": true,
+      "back_reference_matches": true,
+      "head": "e48de0bc22a28d41203d653fb1bedf8a2ecf071a",
+      "clean": true
+    },
+    {
+      "id": "A.d",
+      "result": "pass",
+      "archived_tree_commit": "83b4931c",
+      "archived_entries": 127,
+      "run_artifact_files_checked": 105,
+      "unarchived_unique_files": 0,
+      "worktree_clean_including_ignored_untracked": true
+    },
+    {
+      "id": "A.e",
+      "result": "pass",
+      "worktree_list_exit": 0,
+      "target_registered": false,
+      "other_entries_redacted": true
+    },
+    {
+      "id": "A.f.1",
+      "result": "pass",
+      "lsof_plus_D_exit": 1,
+      "stdout_line_count": 0,
+      "stderr_line_count": 0,
+      "raw_output_published": false
+    },
+    {
+      "id": "A.f.2",
+      "result": "pass",
+      "process_cwd_probe_exit": 0,
+      "matching_cwd_count": 0,
+      "raw_process_paths_published": false
+    }
+  ],
+  "old_orphan_removal": {
+    "argv": ["/bin/rm", "-rf", "--", "/private/tmp/qf-e48de0bc.8ud3bq"],
+    "exit": 0,
+    "target_absent_after": true
+  },
+  "new_worktree": {
+    "argv": ["git", "worktree", "add", "--detach", "/tmp/qf-e48de0bc.20261031T112739Z/worktree", "e48de0bc22a28d41203d653fb1bedf8a2ecf071a"],
+    "command_returned_success": true,
+    "head_and_clean_state_independently_verified": false
+  },
+  "stop": {
+    "gate": "A.source",
+    "reason": "The local extraction logic could not isolate both approved source blocks from the rev5 draft. No alternate parser or source was tried.",
+    "supervisor_hash_verified": false,
+    "registry_gate_hash_verified": false,
+    "supervisor_or_gate_written_to_run_root": false,
+    "further_a_b_c_d_execution": false
+  },
+  "b_started": false,
+  "npm_install_or_network_request": false,
+  "postgres_started": false,
+  "migrations_or_tests_or_harness": false,
+  "business_code_modified": false,
+  "old_run_or_other_residue_cleaned": false,
+  "new_run_root_preserved_after_stop": true
+}

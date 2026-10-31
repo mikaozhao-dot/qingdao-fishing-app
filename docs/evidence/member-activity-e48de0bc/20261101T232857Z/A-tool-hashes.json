@@ -1,0 +1,18 @@
+{
+  "run_id": "20261101T232857Z",
+  "checked_utc": "2026-10-31T23:32:38.266+00:00",
+  "tools": [
+    {
+      "tool": "docs/bounded-verification/tools/supervise.mjs",
+      "expected_sha256": "0e8803edd116f2f7128cdd31f97708c5e4a0a28d9edce8fc00381c016dc3aa49",
+      "observed_sha256": "0e8803edd116f2f7128cdd31f97708c5e4a0a28d9edce8fc00381c016dc3aa49",
+      "matches": true
+    },
+    {
+      "tool": "docs/bounded-verification/tools/registry-gate.mjs",
+      "expected_sha256": "901860dd66992dedf67860c40e7022b36e51211ce6166c959ce397be01178942",
+      "observed_sha256": "901860dd66992dedf67860c40e7022b36e51211ce6166c959ce397be01178942",
+      "matches": true
+    }
+  ]
+}

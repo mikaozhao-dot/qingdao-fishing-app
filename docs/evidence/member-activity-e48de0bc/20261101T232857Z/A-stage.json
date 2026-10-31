@@ -1,0 +1,87 @@
+{
+  "run_id": "20261101T232857Z",
+  "stage": "A",
+  "started_utc": "2026-10-31T23:32:38.265+00:00",
+  "budget_seconds": 180,
+  "checks": [
+    {
+      "id": "A.tool-hash",
+      "result": "pass",
+      "both_match": true
+    },
+    {
+      "id": "A.local-versions",
+      "result": "pass",
+      "node_minimum_met": true,
+      "postgres_version_match": true,
+      "macos_version_recorded": true
+    },
+    {
+      "id": "A.isolation-root",
+      "result": "pass",
+      "root_created": true,
+      "permissions_0700": true,
+      "approved_subdirectories_created": true
+    },
+    {
+      "id": "A.worktree-add",
+      "result": "pass",
+      "exit_code": 0,
+      "stderr_classified_as_expected_informational_progress": true,
+      "raw_output_preserved": true
+    },
+    {
+      "id": "A.worktree-head",
+      "result": "pass",
+      "fixed_sha_matches": true
+    },
+    {
+      "id": "A.worktree-status",
+      "result": "pass",
+      "clean": true
+    },
+    {
+      "id": "A.root-inventory",
+      "result": "pass",
+      "entry_count": 6
+    },
+    {
+      "id": "A.size-cap",
+      "result": "pass",
+      "bytes_used": 44118016,
+      "cap_bytes": 1073741824
+    }
+  ],
+  "local_versions": {
+    "node": {
+      "exit_code": 0,
+      "value": "v25.9.0"
+    },
+    "pg_ctl": {
+      "exit_code": 0,
+      "value": "pg_ctl (PostgreSQL) 17.11 (Homebrew)"
+    },
+    "postgres": {
+      "exit_code": 0,
+      "value": "postgres (PostgreSQL) 17.11 (Homebrew)"
+    },
+    "initdb": {
+      "exit_code": 0,
+      "value": "initdb (PostgreSQL) 17.11 (Homebrew)"
+    },
+    "psql": {
+      "exit_code": 0,
+      "value": "psql (PostgreSQL) 17.11 (Homebrew)"
+    },
+    "macos": {
+      "exit_code": 0,
+      "value": "26.6.2"
+    }
+  },
+  "isolated_root_realpath": "/private/tmp/qf-e48de0bc.20261101T232857Z.p0yahdxh",
+  "worktree_path": "/tmp/qf-e48de0bc.20261101T232857Z.p0yahdxh/worktree",
+  "stopped_utc": "2026-10-31T23:32:38.602+00:00",
+  "elapsed_seconds": 40.712,
+  "completed_utc": "2026-10-31T23:33:18.977+00:00",
+  "within_budget": true
+}

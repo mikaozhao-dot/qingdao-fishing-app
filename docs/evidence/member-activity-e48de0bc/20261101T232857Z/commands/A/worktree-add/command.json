@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "git",
+    "worktree",
+    "add",
+    "--detach",
+    "/tmp/qf-e48de0bc.20261101T232857Z.p0yahdxh/worktree",
+    "e48de0bc22a28d41203d653fb1bedf8a2ecf071a"
+  ]
+}

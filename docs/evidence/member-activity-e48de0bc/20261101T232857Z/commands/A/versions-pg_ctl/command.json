@@ -1,0 +1,6 @@
+{
+  "argv": [
+    "pg_ctl",
+    "--version"
+  ]
+}

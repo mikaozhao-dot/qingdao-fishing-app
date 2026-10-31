@@ -1,0 +1,118 @@
+{
+  "run_id": "20261031T152748Z",
+  "inventory_time_utc": "2026-10-31T15:59:54.130+00:00",
+  "scope": "root-level regular run files and capture/ only; other directories intentionally not enumerated",
+  "roots": [
+    {
+      "label": "patch",
+      "run_id": "20261031T112739Z",
+      "expected_root": "/private/tmp/qf-e48de0bc.20261031T112739Z",
+      "files": [
+        {
+          "path": "capture/old-head.stderr.txt",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "already_archived_by_hash": false
+        },
+        {
+          "path": "capture/old-head.stdout.txt",
+          "bytes": 41,
+          "sha256": "e0dd42e169e06083b5515ce0e63dc92089b50cc8c04c6b0528878eaf870109fa",
+          "already_archived_by_hash": false
+        },
+        {
+          "path": "capture/old-status.stderr.txt",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "already_archived_by_hash": false
+        },
+        {
+          "path": "capture/old-status.stdout.txt",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "already_archived_by_hash": false
+        },
+        {
+          "path": "capture/preflight.json",
+          "bytes": 2978,
+          "sha256": "eb56fed7687d25da1ec5edbbc2235f7d701feecbeccac048176ca13f2eb818f9",
+          "already_archived_by_hash": false,
+          "publication_safety_flags": [
+            "personal-home-path"
+          ]
+        },
+        {
+          "path": "stop-report.md",
+          "bytes": 298,
+          "sha256": "26803e35d3dd4ea2f46867c7c6bf11f8f4984a42753f4d73416fa27129996cc1",
+          "already_archived_by_hash": false
+        }
+      ],
+      "root_state": "plain-directory"
+    },
+    {
+      "label": "run2",
+      "run_id": "20261031T132243Z",
+      "expected_root": "/private/tmp/qf-e48de0bc.20261031T132243Z.NbCZgY",
+      "files": [
+        {
+          "path": "capture/A1-identity.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "already_archived_by_hash": true
+        },
+        {
+          "path": "capture/A1-identity.stdout",
+          "bytes": 135,
+          "sha256": "dfbf7ee9e27c5af7b455d53c5a635850fd8517284455f0e8aa20f2cd69cecf22",
+          "already_archived_by_hash": true
+        },
+        {
+          "path": "capture/run-context.txt",
+          "bytes": 181,
+          "sha256": "3ac0cd9b963410bdcf8a5412d099b1ea6c25821de617072fd46725224fcd9b23",
+          "already_archived_by_hash": true
+        }
+      ],
+      "root_state": "plain-directory"
+    },
+    {
+      "label": "run3",
+      "run_id": "20261031T141753Z",
+      "expected_root": "/private/tmp/qf-e48de0bc.20261031T141753Z.CGuW0B",
+      "files": [
+        {
+          "path": "capture/cleanup-root1-summary.json",
+          "bytes": 1730,
+          "sha256": "451ace497a6d66873dbe13a2f7ec557b90049504534f2971e44f0f798bdb250b",
+          "already_archived_by_hash": true
+        },
+        {
+          "path": "capture/cleanup-root1.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "already_archived_by_hash": true
+        },
+        {
+          "path": "capture/cleanup-root1.stdout",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "already_archived_by_hash": true
+        },
+        {
+          "path": "capture/run-context.txt",
+          "bytes": 179,
+          "sha256": "d1a75bd18b88c794fad990a4879ad1bf1142c0bd754d0f775cc98411774e9af3",
+          "already_archived_by_hash": true
+        }
+      ],
+      "root_state": "plain-directory"
+    }
+  ],
+  "supplementary_candidate_count": 6,
+  "supplementary_candidate_bytes": 3317,
+  "blockers": [
+    "patch: publication-safety marker in candidate capture/preflight.json: personal-home-path"
+  ],
+  "archive_copy_started": false
+}

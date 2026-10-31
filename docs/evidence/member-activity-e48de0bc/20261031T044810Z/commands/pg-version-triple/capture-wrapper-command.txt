@@ -1,0 +1,8 @@
+wrapper=/tmp/qf-e48de0bc.8ud3bq/capture-command.zsh
+wrapper_cwd=repo-root
+command_id=pg-version-triple
+target_cwd=/tmp/qf-e48de0bc.8ud3bq
+target_argv:
+  node
+  -e
+  const\ p=require\(\"/tmp/qf-e48de0bc.8ud3bq/worktree/server/package.json\"\)\;const\ l=require\(\"/tmp/qf-e48de0bc.8ud3bq/worktree/server/package-lock.json\"\)\;let\ g\;try\{g=require\(\"/opt/homebrew/lib/node_modules/pg/package.json\"\)\}catch\(e\)\{console.error\(\"PG_SOURCE_READ_FAILED:\"+\(e.code\|\|\"unknown\"\)\)\;process.exit\(2\)\}const\ a=p.dependencies.pg,b=l.packages\[\"node_modules/pg\"\]\?.version,c=g.version\;console.log\(\"manifest=\"+a\)\;console.log\(\"lock=\"+b\)\;console.log\(\"installed=\"+c\)\;if\(a!==\"8.23.1\"\|\|b!==\"8.23.1\"\|\|c!==\"8.23.1\"\|\|a!==b\|\|b!==c\)process.exit\(1\)

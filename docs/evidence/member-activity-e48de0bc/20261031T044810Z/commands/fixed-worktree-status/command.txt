@@ -1,0 +1,7 @@
+cwd=/tmp/qf-e48de0bc.8ud3bq
+argv:
+  git
+  -C
+  /tmp/qf-e48de0bc.8ud3bq/worktree
+  status
+  --porcelain

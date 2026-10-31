@@ -1,0 +1,8 @@
+cwd=repo-root
+argv:
+  git
+  worktree
+  add
+  --detach
+  /tmp/qf-e48de0bc.8ud3bq/worktree
+  e48de0bc22a28d41203d653fb1bedf8a2ecf071a

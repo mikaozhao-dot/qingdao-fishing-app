@@ -1,0 +1,5 @@
+cwd=/tmp/qf-e48de0bc.8ud3bq
+argv:
+  zsh
+  -n
+  capture-command.zsh

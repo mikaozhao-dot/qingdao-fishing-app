@@ -1,0 +1,5 @@
+cwd=repo-root
+argv:
+  node
+  -e
+  const\ fs=require\(\"node:fs\"\),path=require\(\"node:path\"\),root=\"docs/evidence/member-activity-e48de0bc/20261031T044810Z/commands\",bad=\[String.fromCharCode\(47,85,115,101,114,115,47\),String.fromCharCode\(47,104,111,109,101,47\),\"postgresql\"+\"://\",\"PG\"+\"PASSWORD\",\"DATABASE\"+\"_URL\",\"Bearer\"+\"\ \"\]\;let\ files=\[\]\;function\ walk\(d\)\{for\(const\ e\ of\ fs.readdirSync\(d,\{withFileTypes:true\}\)\)\{const\ p=path.join\(d,e.name\)\;if\(e.isDirectory\(\)\)walk\(p\)\;else\ files.push\(p\)\}\}walk\(root\)\;const\ hit=\[\]\;for\(const\ f\ of\ files\)\{const\ s=fs.readFileSync\(f\)\;if\(bad.some\(x=\>s.includes\(Buffer.from\(x\)\)\)\)hit.push\(path.relative\(\".\",f\)\)\}if\(hit.length\)\{console.log\(\"LOG_PRIVACY=FAIL\ files=\"+hit.join\(\",\"\)\)\;process.exit\(1\)\}console.log\(\"LOG_PRIVACY=PASS\ files=\"+files.length\)

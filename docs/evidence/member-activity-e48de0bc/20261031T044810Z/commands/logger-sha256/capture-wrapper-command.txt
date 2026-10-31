@@ -1,0 +1,9 @@
+wrapper=/tmp/qf-e48de0bc.8ud3bq/capture-command.zsh
+wrapper_cwd=repo-root
+command_id=logger-sha256
+target_cwd=/tmp/qf-e48de0bc.8ud3bq
+target_argv:
+  shasum
+  -a
+  256
+  capture-command.zsh

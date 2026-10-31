@@ -1,0 +1,6 @@
+cwd=/tmp/qf-e48de0bc.8ud3bq
+argv:
+  shasum
+  -a
+  256
+  capture-command.zsh

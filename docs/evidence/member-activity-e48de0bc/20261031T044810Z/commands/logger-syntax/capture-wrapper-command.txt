@@ -1,0 +1,8 @@
+wrapper=/tmp/qf-e48de0bc.8ud3bq/capture-command.zsh
+wrapper_cwd=repo-root
+command_id=logger-syntax
+target_cwd=/tmp/qf-e48de0bc.8ud3bq
+target_argv:
+  zsh
+  -n
+  capture-command.zsh

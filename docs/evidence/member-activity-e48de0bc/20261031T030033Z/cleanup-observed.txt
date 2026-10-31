@@ -1,0 +1,3 @@
+Run-scoped cleanup output:
+RUN_TEMP_CLEANUP=verified
+Exit code: 0

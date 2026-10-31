@@ -1,0 +1,27 @@
+Observed terminal output (the terminal tool presented a combined stream; stdout/stderr were not separately captured).
+
+System preflight, wrapper result 0:
+UTC_START=2026-10-31T03:00:33Z
+NODE=v25.9.0
+MACOS=26.6.2
+initdb_PATH=/opt/homebrew/bin/initdb
+initdb (PostgreSQL) 17.11 (Homebrew)
+pg_ctl_PATH=/opt/homebrew/bin/pg_ctl
+pg_ctl (PostgreSQL) 17.11 (Homebrew)
+createdb_PATH=/opt/homebrew/bin/createdb
+createdb (PostgreSQL) 17.11 (Homebrew)
+psql_PATH=/opt/homebrew/bin/psql
+psql (PostgreSQL) 17.11 (Homebrew)
+postgres_PATH=/opt/homebrew/bin/postgres
+postgres (PostgreSQL) 17.11 (Homebrew)
+FIXED_SHA_PRESENT
+
+Fixed worktree and dependency preflight, final Node command result 2:
+Preparing worktree (detached HEAD e48de0b)
+HEAD is now at e48de0b feat: add captain member activity plaza filters
+ROOT=/tmp/qf-e48de0bc.mVozkh
+RUN_ID=20261031T030033Z
+WORKTREE_HEAD=e48de0bc22a28d41203d653fb1bedf8a2ecf071a
+WORKTREE_STATUS_BEGIN
+WORKTREE_STATUS_END
+PG_MODULE=UNAVAILABLE

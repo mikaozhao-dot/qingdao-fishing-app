@@ -1,0 +1,22 @@
+# Bounded verification run manifest
+
+- Run ID: `20261031T030033Z`
+- Result: **STOPPED during local dependency preflight; no verification executed**
+- Fixed implementation SHA: `e48de0bc22a28d41203d653fb1bedf8a2ecf071a`
+- Start (UTC): `2026-10-31T03:00:33Z`
+- Stop (UTC): `2026-10-31T03:01:47Z`
+- Host: macOS `26.6.2`
+- Node: `v25.9.0` (satisfies project `>=22`)
+- PostgreSQL tools: `17.11 (Homebrew)` for `initdb`, `pg_ctl`, `createdb`, `psql`, and `postgres`
+- Temporary root: `/tmp/qf-e48de0bc.mVozkh`
+- Detached worktree: `/tmp/qf-e48de0bc.mVozkh/worktree`
+- Worktree HEAD: exact fixed SHA above
+- Worktree status before stop: clean (`git status --porcelain` was empty)
+- Dependency check: `createRequire(<worktree>/server/package.json).resolve("pg")` reported `PG_MODULE=UNAVAILABLE`; the Node command exited `2`.
+- Stop reason: the approved harness cannot resolve the project's existing `pg` dependency from the approved fixed-SHA worktree. The plan requires stopping when the dependency is unavailable and prohibits installing or downloading it.
+- Commands not run: `initdb`, `pg_ctl`, `createdb`, either migration, the member-activity test, either syntax check, and the PostgreSQL integration harness.
+- Database state: no PostgreSQL cluster was initialized or started; no database or synthetic rows were created.
+- Code state: no source, test, dependency, or lockfile changes were made.
+- Process deviation and evidence limitation: read-only environment checks and the dependency check were issued in bundled terminal invocations, rather than capturing each subcommand's stdout, stderr, exit code, and timestamps separately as the plan specifies. The terminal tool displayed combined output. `preflight-observed.txt` preserves that display; streams and per-subcommand exit codes have not been reconstructed. This run is stopped and is not represented as fully conforming execution evidence.
+- Cleanup: the run-specific empty PostgreSQL data/socket directories and detached worktree were removed; `cleanup-observed.txt` records the successful scoped cleanup.
+- Review state: this is a stop report for Muse review, then Dot's PL-E1/PL-E2 review if requested. It is not technical acceptance, product acceptance, or authorization to resume.

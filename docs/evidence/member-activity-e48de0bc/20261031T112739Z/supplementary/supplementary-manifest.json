@@ -1,0 +1,63 @@
+{
+  "source_run_id": "20261031T112739Z",
+  "archived_by_run": "20261101T222857Z",
+  "files": [
+    {
+      "filename": "stop-report.md",
+      "original_bytes": 298,
+      "original_sha256": "26803e35d3dd4ea2f46867c7c6bf11f8f4984a42753f4d73416fa27129996cc1",
+      "expected_size_sha256_match": true,
+      "desensitized": false,
+      "other_sensitive_marker_types": []
+    },
+    {
+      "filename": "capture/old-head.stdout.txt",
+      "original_bytes": 41,
+      "original_sha256": "e0dd42e169e06083b5515ce0e63dc92089b50cc8c04c6b0528878eaf870109fa",
+      "expected_size_sha256_match": true,
+      "desensitized": false,
+      "other_sensitive_marker_types": []
+    },
+    {
+      "filename": "capture/old-head.stderr.txt",
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "expected_size_sha256_match": true,
+      "desensitized": false,
+      "other_sensitive_marker_types": []
+    },
+    {
+      "filename": "capture/old-status.stdout.txt",
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "expected_size_sha256_match": true,
+      "desensitized": false,
+      "other_sensitive_marker_types": []
+    },
+    {
+      "filename": "capture/old-status.stderr.txt",
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "expected_size_sha256_match": true,
+      "desensitized": false,
+      "other_sensitive_marker_types": []
+    },
+    {
+      "filename": "capture/preflight.json",
+      "original_bytes": 2978,
+      "original_sha256": "eb56fed7687d25da1ec5edbbc2235f7d701feecbeccac048176ca13f2eb818f9",
+      "expected_size_sha256_match": true,
+      "desensitized": true,
+      "personal_home_path_marker_present": true,
+      "other_sensitive_marker_types": [],
+      "username_outside_home_path_present": false,
+      "redaction_substitution_only": true,
+      "replacement_count": 1,
+      "post_scan_personal_home_path_absent": true,
+      "post_scan_other_sensitive_marker_types": [],
+      "redacted_bytes": 2972,
+      "redacted_sha256": "eed9816b5befe98ee51101e800916543e8a26a48fbce7d7490d56eaa8f8b72ee",
+      "redaction_description": "personal-home-path prefix replaced with <HOME>"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "run_id": "20261031T141753Z",
+  "authorization_chain": ["686ace04", "70fe1d48", "44275557", "8fdc6c1d", "c02d2c75"],
+  "receipt_commit": "1804b23",
+  "execution_started_at_utc": "2026-10-31T14:17:52Z",
+  "cleanup_window_started_at_utc": "2026-10-31T14:17:52Z",
+  "cleanup_window_stopped_at_utc": "2026-10-31T14:21:18Z",
+  "cleanup_window_elapsed_seconds": 206,
+  "cleanup_window_budget_seconds": 300,
+  "status": "STOPPED_CLEANUP_A.d_UNARCHIVED_UNIQUE_FILES",
+  "cleanup_targets": [
+    {
+      "path": "/private/tmp/qf-e48de0bc.20261031T112739Z",
+      "inspected_in_order": true,
+      "realpath_matches": true,
+      "symlink": false,
+      "top_level_matches_archived_record": true,
+      "git_pointer_suffix": ".git/worktrees/worktree1",
+      "git_pointer_sha256": "a2635399777e21caa6bf8cd9194c05053bcc344712790e341c5c066ea5ddaff8",
+      "admin_exists": true,
+      "backref_matches": true,
+      "commondir_matches": true,
+      "head": "e48de0bc22a28d41203d653fb1bedf8a2ecf071a",
+      "worktree_clean_including_ignored": true,
+      "unarchived_unique_files": [
+        "stop-report.md",
+        "capture/old-status.stdout.txt",
+        "capture/old-head.stdout.txt",
+        "capture/old-status.stderr.txt",
+        "capture/old-head.stderr.txt",
+        "capture/preflight.json"
+      ],
+      "registration_checked": false,
+      "occupancy_checked": false,
+      "worktree_unregistered": false,
+      "root_deleted": false
+    },
+    {
+      "path": "/private/tmp/qf-e48de0bc.20261031T132243Z.NbCZgY",
+      "inspected": false,
+      "deleted": false
+    }
+  ],
+  "current_capture_root": "/private/tmp/qf-e48de0bc.20261031T141753Z.CGuW0B",
+  "current_capture_root_preserved": true,
+  "a_started": false,
+  "b_tests_or_syntax_checks_run": false,
+  "c_database_migrations_or_harness_run": false,
+  "d_cleanup_run": false,
+  "business_code_modified": false,
+  "shared_or_production_resources_touched": false,
+  "pl_e1_pl_e2_evidence_created": false,
+  "acceptance_claimed": false
+}

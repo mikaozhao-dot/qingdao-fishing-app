@@ -1,0 +1,4 @@
+run_id=20261031T141753Z
+started_at_utc=2026-10-31T14:17:52Z
+root=/private/tmp/qf-e48de0bc.20261031T141753Z.CGuW0B
+evidence=docs/evidence/member-activity-e48de0bc/20261031T141753Z

@@ -1,0 +1,5 @@
+command: python3 docs/evidence/member-activity-e48de0bc/20261031T141753Z/cleanup-root1.py
+stdout: redirected to /private/tmp/qf-e48de0bc.20261031T141753Z.CGuW0B/capture/cleanup-root1.stdout
+stderr: redirected to /private/tmp/qf-e48de0bc.20261031T141753Z.CGuW0B/capture/cleanup-root1.stderr
+exit_code: 70
+stop_gate: A.d.no-unarchived-unique-files

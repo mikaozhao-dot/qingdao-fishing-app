@@ -1,0 +1,74 @@
+{
+  "target": "/private/tmp/qf-e48de0bc.20261031T112739Z",
+  "steps": [
+    {
+      "gate": "A.a.path-and-symlink",
+      "result": "pass",
+      "detail": {
+        "exists": true,
+        "symlink": false,
+        "realpath": "/private/tmp/qf-e48de0bc.20261031T112739Z"
+      }
+    },
+    {
+      "gate": "A.b.top-level",
+      "result": "pass",
+      "detail": {
+        "observed": [
+          "capture",
+          "deps",
+          "home",
+          "npm-cache",
+          "npm-logs",
+          "pg",
+          "stop-report.md",
+          "worktree"
+        ],
+        "matches_archived_manifest": true
+      }
+    },
+    {
+      "gate": "A.c.git-pointer",
+      "result": "pass",
+      "detail": {
+        "pointer_suffix": ".git/worktrees/worktree1",
+        "pointer_sha256": "a2635399777e21caa6bf8cd9194c05053bcc344712790e341c5c066ea5ddaff8",
+        "admin_exists": true,
+        "under_main_worktrees": true,
+        "backref_matches": true,
+        "commondir_matches": true
+      }
+    },
+    {
+      "gate": "A.c.fixed-head",
+      "result": "pass",
+      "detail": {
+        "exit": 0,
+        "head": "e48de0bc22a28d41203d653fb1bedf8a2ecf071a"
+      }
+    },
+    {
+      "gate": "A.c.clean-worktree",
+      "result": "pass",
+      "detail": {
+        "exit": 0,
+        "status_lines": [],
+        "stderr_bytes": 0
+      }
+    },
+    {
+      "gate": "A.d.no-unarchived-unique-files",
+      "result": "stop",
+      "detail": {
+        "unique_files": [
+          "stop-report.md",
+          "capture/old-status.stdout.txt",
+          "capture/old-head.stdout.txt",
+          "capture/old-status.stderr.txt",
+          "capture/old-head.stderr.txt",
+          "capture/preflight.json"
+        ]
+      }
+    }
+  ]
+}

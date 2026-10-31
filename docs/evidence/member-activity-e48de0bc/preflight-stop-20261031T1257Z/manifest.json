@@ -1,0 +1,33 @@
+{
+  "kind": "preflight_stop",
+  "checked_at_utc": "2026-10-31T12:57:47Z",
+  "new_run_started": false,
+  "run_id": null,
+  "order_commit": "44275557",
+  "original_execution_approval_commit": "686ace04",
+  "patch_effective_commit": "70fe1d48",
+  "status": "STOPPED_BEFORE_A_DUE_TO_APPROVAL_BUDGET_CONFLICT",
+  "stop_gate": "preflight.approval-scope-conflict",
+  "finding": {
+    "approved_total_budget_minutes": 10,
+    "patch_and_rerun_segment_minutes": {
+      "A": 3,
+      "B": 5,
+      "C": 10,
+      "D": 5,
+      "total": 23
+    },
+    "resolution_authorized": false
+  },
+  "receipt_path": "docs/luna-bounded-verification-v3-rerun-receipt-2026-10-31.md",
+  "receipt_committed_before_execution": true,
+  "worktree_created": false,
+  "temporary_database_created": false,
+  "migrations_run": false,
+  "tests_or_harness_run": false,
+  "tool_hashes_verified": false,
+  "business_code_modified": false,
+  "shared_or_production_resources_touched": false,
+  "pl_e1_pl_e2_evidence_created": false,
+  "acceptance_claimed": false
+}

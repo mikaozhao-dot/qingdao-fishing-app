@@ -1,0 +1,55 @@
+{
+  "run_id": "20261101T232857Z",
+  "authorization_commit": "934481cd23b9c2b182c0e811727a0eee060fdd1c",
+  "receipt_commit": "99df353",
+  "cleanup_window_started_utc": "2026-10-31T23:30:14.746+00:00",
+  "cleanup_window_completed_utc": "2026-10-31T23:31:21Z",
+  "cleanup_window_elapsed_seconds_approx": 66.3,
+  "cleanup_window_budget_seconds": 600,
+  "supplementary_archive_rechecked_commit": "5736b271",
+  "supplementary_archive_recheck": {
+    "patch_run_artifact_count": 6,
+    "all_expected_local_size_hash_pairs_match": true,
+    "redacted_copy_hash_matches_authorized_value": true,
+    "manifest_original_to_redacted_link_matches": true,
+    "unredacted_original_preflight_json_published": false
+  },
+  "roots": [
+    {
+      "kind": "patch-run-root",
+      "top_level_names_and_types_classified": true,
+      "root_identity_and_realpath_match": true,
+      "worktree_git_pointer_and_reverse_pointer_valid": true,
+      "fixed_sha_matches": true,
+      "worktree_clean_including_untracked_and_ignored": true,
+      "target_worktree_registered_before_removal": true,
+      "open_handle_probe_clear": true,
+      "cwd_probe_match_count": 0,
+      "git_worktree_remove_exit": 0,
+      "root_remove_exit": 0,
+      "root_absent_after": true
+    },
+    {
+      "kind": "run-2-capture-root",
+      "top_level_names_and_types_classified": true,
+      "root_identity_and_realpath_match": true,
+      "scoped_run_artifact_count": 3,
+      "all_hashes_match_run5_inventory_and_original_archive": true,
+      "worktree_present": false,
+      "root_remove_exit": 0,
+      "root_absent_after": true
+    },
+    {
+      "kind": "run-3-capture-root",
+      "top_level_names_and_types_classified": true,
+      "root_identity_and_realpath_match": true,
+      "scoped_run_artifact_count": 4,
+      "all_hashes_match_run5_inventory_and_original_archive": true,
+      "worktree_present": false,
+      "root_remove_exit": 0,
+      "root_absent_after": true
+    }
+  ],
+  "cleanup_window_result": "completed",
+  "A_B_C_D_started": false
+}

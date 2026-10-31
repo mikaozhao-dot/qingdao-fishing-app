@@ -1,0 +1,145 @@
+{
+  "run_id": "20261101T232857Z",
+  "cleanup_window_started_utc": "2026-10-31T23:30:14.746+00:00",
+  "target": "patch-run-root",
+  "checks": [
+    {
+      "id": "A.b",
+      "result": "pass",
+      "entries": [
+        {
+          "name": "home",
+          "name_omitted_for_personal_marker": false,
+          "type": "directory",
+          "category": "known-runtime-directory"
+        },
+        {
+          "name": "npm-logs",
+          "name_omitted_for_personal_marker": false,
+          "type": "directory",
+          "category": "known-runtime-directory"
+        },
+        {
+          "name": "capture",
+          "name_omitted_for_personal_marker": false,
+          "type": "directory",
+          "category": "capture-directory"
+        },
+        {
+          "name": "npm-cache",
+          "name_omitted_for_personal_marker": false,
+          "type": "directory",
+          "category": "known-runtime-directory"
+        },
+        {
+          "name": "worktree",
+          "name_omitted_for_personal_marker": false,
+          "type": "directory",
+          "category": "known-runtime-directory"
+        },
+        {
+          "name": "pg",
+          "name_omitted_for_personal_marker": false,
+          "type": "directory",
+          "category": "known-runtime-directory"
+        },
+        {
+          "name": "deps",
+          "name_omitted_for_personal_marker": false,
+          "type": "directory",
+          "category": "known-runtime-directory"
+        },
+        {
+          "name": "stop-report.md",
+          "name_omitted_for_personal_marker": false,
+          "type": "ordinary-file",
+          "category": "root-run-artifact-file"
+        }
+      ]
+    },
+    {
+      "id": "cleanup.archive-recheck",
+      "result": "pass",
+      "files": [
+        {
+          "file": "stop-report.md",
+          "size_hash_match": true,
+          "archive_match": true,
+          "desensitized": false
+        },
+        {
+          "file": "capture/old-head.stdout.txt",
+          "size_hash_match": true,
+          "archive_match": true,
+          "desensitized": false
+        },
+        {
+          "file": "capture/old-head.stderr.txt",
+          "size_hash_match": true,
+          "archive_match": true,
+          "desensitized": false
+        },
+        {
+          "file": "capture/old-status.stdout.txt",
+          "size_hash_match": true,
+          "archive_match": true,
+          "desensitized": false
+        },
+        {
+          "file": "capture/old-status.stderr.txt",
+          "size_hash_match": true,
+          "archive_match": true,
+          "desensitized": false
+        },
+        {
+          "file": "capture/preflight.json",
+          "size_hash_match": true,
+          "archive_match": true,
+          "desensitized": true
+        }
+      ]
+    },
+    {
+      "id": "A.a",
+      "result": "pass",
+      "exists": true,
+      "non_symlink": true,
+      "realpath_matches": true
+    },
+    {
+      "id": "A.c.pointer",
+      "result": "pass",
+      "git_pointer_valid": true,
+      "reverse_pointer_valid": true
+    },
+    {
+      "id": "A.c.fixed-head",
+      "result": "pass",
+      "fixed_sha_matches": true
+    },
+    {
+      "id": "A.c.clean",
+      "result": "pass",
+      "clean_including_untracked_and_ignored": true
+    },
+    {
+      "id": "A.e",
+      "result": "pass",
+      "target_worktree_registered": true
+    },
+    {
+      "id": "A.f.lsof",
+      "result": "pass",
+      "no_open_handles": true
+    },
+    {
+      "id": "A.f.cwd",
+      "result": "pass",
+      "matching_cwd_count": 0
+    }
+  ],
+  "stop_at": null,
+  "stop_reason": null,
+  "checks_completed_utc": "2026-10-31T23:30:15.377+00:00",
+  "ready_for_worktree_unregister": true
+}

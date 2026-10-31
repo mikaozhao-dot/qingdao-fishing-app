@@ -1,0 +1,32 @@
+{
+  "run_id": "20261101T232857Z",
+  "started_utc": "2026-10-31T23:30:35.803+00:00",
+  "target": "patch-run-root",
+  "worktree_remove": {
+    "argv": [
+      "git",
+      "worktree",
+      "remove",
+      "/private/tmp/qf-e48de0bc.20261031T112739Z/worktree"
+    ],
+    "exit_code": 0,
+    "stdout_bytes": 0,
+    "stderr_bytes": 0
+  },
+  "root_remove": {
+    "argv": [
+      "/bin/rm",
+      "-rf",
+      "--",
+      "/private/tmp/qf-e48de0bc.20261031T112739Z"
+    ],
+    "exit_code": 0,
+    "stdout_bytes": 0,
+    "stderr_bytes": 0,
+    "target_absent_after": true
+  },
+  "stop_at": null,
+  "target_registration_absent": true,
+  "completed_utc": "2026-10-31T23:30:35.867+00:00",
+  "target_root_absent": true
+}

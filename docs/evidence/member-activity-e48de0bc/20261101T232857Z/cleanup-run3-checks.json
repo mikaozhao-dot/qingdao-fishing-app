@@ -1,0 +1,49 @@
+{
+  "run_id": "20261101T232857Z",
+  "target": "run3",
+  "source_run_id": "20261031T141753Z",
+  "checks": [
+    {
+      "id": "A.b",
+      "result": "pass",
+      "entries": [
+        {
+          "name": "capture",
+          "name_omitted_for_personal_marker": false,
+          "type": "directory",
+          "category": "capture-directory"
+        }
+      ]
+    },
+    {
+      "id": "A.a",
+      "result": "pass",
+      "exists": true,
+      "non_symlink": true,
+      "realpath_matches": true
+    },
+    {
+      "id": "A.d",
+      "result": "pass",
+      "scoped_file_count": 4,
+      "all_hashes_in_original_archive": true,
+      "run5_inventory_matches": true
+    }
+  ],
+  "stop_at": null,
+  "ready_for_delete": true,
+  "checked_utc": "2026-10-31T23:31:15.626+00:00",
+  "delete": {
+    "argv": [
+      "/bin/rm",
+      "-rf",
+      "--",
+      "/private/tmp/qf-e48de0bc.20261031T141753Z.CGuW0B"
+    ],
+    "exit_code": 0,
+    "stdout_bytes": 0,
+    "stderr_bytes": 0,
+    "target_absent_after": true
+  },
+  "completed_utc": "2026-10-31T23:31:15.630+00:00"
+}

@@ -65,7 +65,7 @@ node --test test/member-activity.test.js
 - 两组服务端定点测试使用 fakePool 与直接 handler 调用；不证明真实 PostgreSQL 事务回滚/并发、真实认证中间件或动态双用户隔离。
 - 本地定点结果不是 GitHub Actions 结果；上文链接的 Flutter CI 也未单独执行服务端匹配配置测试。
 - 尚无匹配配置页面的截图/交互验收证据。
-- `9dad7ea` 的 Muse 限沙盒评审仍有效；Dot 已完成有界代码复核，但未授予独立技术验收。现补齐固定 SHA 的本地定点日志、Flutter Actions run/job 原始日志入口及实际覆盖说明，等待 Dot 复核。
+- `9dad7ea` 的 Muse 限沙盒评审仍有效；Dot 已完成有界代码复核，但未授予独立技术验收。该切片 Flutter Actions run/job 原始日志入口及实际覆盖范围见 `docs/luna-receipt-dot-plaza-review-evidence-relay-2026-10-31.md`；没有把 Flutter 回归覆盖描述为会员活动配置专项测试。
 - `203ddca` 已获 Muse 对需求单生命周期切片的限沙盒通过；Dot 复核仍待完成。两者均不构成会员活动整体验收或生产放行。
 
 
@@ -94,4 +94,4 @@ node --test test/member-activity.test.js
 
 ### 评审状态
 
-Muse 对该 API 切片限沙盒通过（评审 `c669a4cc`）。已向 Dot 发出固定 SHA 定点复核请求，期限与范围见 `docs/dot-member-activity-filters-e48de0bc-review-request-2026-10-30.md`；Dot 结论待回。该评审不表示撮合通知、邀约、站内消息或转化链路已实现，也不构成生产放行。
+Muse 对该 API 切片限沙盒通过（评审 `c669a4cc`）。Dot 已完成有界代码复核但未授予独立技术验收；`PL-E1` 固定 SHA 原始输出/环境记录与 `PL-E2` 实际查询行为证据仍缺。现有摘要和缺口清单见 `docs/luna-receipt-dot-plaza-review-evidence-relay-2026-10-31.md`。该评审不表示撮合通知、邀约、站内消息或转化链路已实现，也不构成生产放行。

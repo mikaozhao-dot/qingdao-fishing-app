@@ -1,6 +1,6 @@
 # Luna 开工回执：会员发起活动需求撮合（2026-10-30）
 
-- 状态：**匹配配置 `9dad7ea` 与需求单生命周期 `203ddca` 均获 Muse 限沙盒通过。配置切片的 Dot 有界复核未授予技术验收；固定 SHA 本地测试、Flutter Actions 原始日志入口和覆盖说明见 `docs/luna-receipt-dot-plaza-review-evidence-relay-2026-10-31.md`。生命周期切片等待 Dot 复核。船长端需求广场筛选 API `e48de0b` 已获 Muse 限沙盒通过（`c669a4cc`）；Dot 已完成有界代码复核，但因 `PL-E1`、`PL-E2` 证据未闭合，未授予独立技术验收。Luna 已回执盘点既有证据；缺口见 `docs/luna-receipt-dot-plaza-review-evidence-relay-2026-10-31.md`，未授权重跑。**
+- 状态：**匹配配置 `9dad7ea` 与需求单生命周期 `203ddca` 均获 Muse 限沙盒通过。配置切片的 Dot 有界复核未授予技术验收；固定 SHA 本地测试、Flutter Actions 原始日志入口和覆盖说明见 `docs/luna-receipt-dot-plaza-review-evidence-relay-2026-10-31.md`。生命周期切片等待 Dot 复核。船长端需求广场筛选 API `e48de0b` 已获 Muse 限沙盒通过（`c669a4cc`）；Dot 已正式回复 `PL-E1`、`PL-E2` 未闭合，独立技术验收未通过，非已复现代码故障。Luna 已提交有界验证方案 `docs/luna-plaza-filter-bounded-verification-plan-2026-10-31.md`，待 Muse 评审及创始人明确批准；批准前不运行测试/迁移或修改代码。**
 - 工单：`docs/member-activity-implementation-task-brief-2026-10-30.md`
 - 后续裁定：`docs/member-activity-conversion-rulings-2026-10-30.md`（创始人批准包船订单模式和邀约字段口径）。
 - 起始基线：`main` 提交 `7880f00299458637685e0809dd55111c96699ae4`；本次按仓库指令同步至主线最新提交后继续。
@@ -45,4 +45,4 @@
 - 边界：本切片不生成四维匹配记录，不发站内通知，不做船长邀约或消息；这些进入后续独立切片。
 - 实现：`GET /captain/member/activity-requests` 仅允许已审核船长访问；支持五种参数化筛选，只返回已发布且未到期需求，按出航时段排序，最多 100 条。返回复用不含会员身份的序列化结构。
 - 验证：`node --test test/member-activity.test.js` 在本切片后 13/13 通过；相关路由与校验服务 `node --check` 均退出 0。覆盖筛选组合、非法值、未审核船长拒绝、有效状态/到期条件、参数化查询和身份字段不泄漏。
-- 代码提交：`e48de0b`（`feat: add captain member activity plaza filters`），已推送 `main`；Muse 已限沙盒通过（`c669a4cc`），Dot 有界代码复核已完成但未授予独立技术验收。现有运行摘要、未闭合证据及 Dot 的 PL-E1/PL-E2 要求见 `docs/luna-receipt-dot-plaza-review-evidence-relay-2026-10-31.md`；不重跑、不自宣通过。
+- 代码提交：`e48de0b`（`feat: add captain member activity plaza filters`），已推送 `main`；Muse 已限沙盒通过（`c669a4cc`），Dot 有界代码复核已完成但未授予独立技术验收。现有运行摘要与 Dot 的 PL-E1/PL-E2 要求见 `docs/luna-receipt-dot-plaza-review-evidence-relay-2026-10-31.md`；有界验证方案见 `docs/luna-plaza-filter-bounded-verification-plan-2026-10-31.md`，尚未获 Muse 评审和创始人执行批准，不重跑、不自宣通过。

@@ -1,0 +1,11 @@
+set -eu
+ROOT='/private/tmp/qf-e48de0bc.20261031T132243Z.NbCZgY'
+OLDROOT='/private/tmp/qf-e48de0bc.20261031T112739Z'
+CAPTURE="$ROOT/capture"
+{
+  printf 'started='; date -u '+%Y-%m-%dT%H:%M:%SZ'
+  [ -d "$OLDROOT" ]
+  [ ! -L "$OLDROOT" ]
+  realpath "$OLDROOT"
+  ls -1A "$OLDROOT" | sort
+} >"$CAPTURE/A1-identity.stdout" 2>"$CAPTURE/A1-identity.stderr"

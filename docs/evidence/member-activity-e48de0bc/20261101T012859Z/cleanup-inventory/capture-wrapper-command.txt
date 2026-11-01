@@ -1,0 +1,3 @@
+cwd=/private/tmp
+argv-shell-escaped:
+zsh -c source\ \"\$RUN_EVIDENCE_DIR/capture-command.zsh\"\;\ capture_main\ \"\$@\" zsh cleanup-inventory -- python3 -c import\ json,stat,sys\;from\ pathlib\ import\ Path\;r=Path\(sys.argv\[1\]\)\;\ out=\[\]$'\n'for\ p\ in\ r.iterdir\(\):$'\n'\ m=p.lstat\(\).st_mode$'\n'\ t=\"symlink\"\ if\ stat.S_ISLNK\(m\)\ else\ \"directory\"\ if\ stat.S_ISDIR\(m\)\ else\ \"file\"\ if\ stat.S_ISREG\(m\)\ else\ \"other\"$'\n'\ out.append\(\{\"name\":p.name,\"type\":t\}\)$'\n'print\(json.dumps\(\{\"entry_count\":len\(out\),\"entries\":out\},sort_keys=True\)\) /private/tmp/qf-e48de0bc.20261101T232857Z.p0yahdxh 

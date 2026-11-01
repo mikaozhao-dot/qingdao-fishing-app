@@ -1,0 +1,1 @@
+{"entries": [{"name": "home", "type": "directory"}, {"name": "npm-logs", "type": "directory"}, {"name": "npm-cache", "type": "directory"}, {"name": "worktree", "type": "directory"}, {"name": "pg", "type": "directory"}, {"name": "deps", "type": "directory"}], "entry_count": 6}

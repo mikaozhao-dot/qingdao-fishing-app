@@ -1,0 +1,76 @@
+{
+  "run_id": "20261101T012859Z",
+  "authorization_commit": "caa6e278ff06f8b48ae483be5a964e869a63ac31",
+  "receipt_commit": "e56e8d0",
+  "fixed_sha": "e48de0bc22a28d41203d653fb1bedf8a2ecf071a",
+  "state": "stopped",
+  "bootstrap": {
+    "started_utc": "2026-11-01T01:31:15Z",
+    "completed_utc": "2026-11-01T01:31:15Z",
+    "actions": [
+      "create evidence directory with umask 077",
+      "write capture-command.zsh",
+      "write run-target.zsh",
+      "set both scripts mode 0700"
+    ],
+    "capture_command_sha256": "f9d97683dd1eb2aac63c4870220b9595312ef125be7f179edff1f2c85ddeb893",
+    "run_target_sha256": "685f46e1560b0ff1f32cbbffa9d08a650947b5c5cfb91959f19a0014b9901989",
+    "preflight_checks": {
+      "capture_command_zsh_syntax": {
+        "started_utc": "2026-11-01T01:32:33Z",
+        "ended_utc": "2026-11-01T01:32:33Z",
+        "exit_code": 0
+      },
+      "run_target_zsh_syntax": {
+        "started_utc": "2026-11-01T01:32:33Z",
+        "ended_utc": "2026-11-01T01:32:33Z",
+        "exit_code": 0
+      },
+      "result": "pass"
+    },
+    "note": "Initial logger drafts were corrected and syntax-checked before any cleanup or verification target command; only the final hashed scripts are used."
+  },
+  "budgets_seconds": {
+    "cleanup": 600,
+    "A": 180,
+    "B": 300,
+    "C": 600,
+    "D": 300,
+    "total": 1980
+  },
+  "temporary_size_cap_bytes": 1073741824,
+  "network_install": false,
+  "registry_gate_used": false,
+  "run7_root_cleanup": {
+    "target": "/private/tmp/qf-e48de0bc.20261101T232857Z.p0yahdxh",
+    "state": "stopped_before_mutation",
+    "failure": "worktree-pointer check returned nonzero; no retry per stop discipline"
+  },
+  "dot_pl_e1_pl_e2_review": "pending",
+  "cleanup_window": {
+    "started_utc": "2026-11-01T01:31:15Z",
+    "budget_seconds": 600,
+    "target": "/private/tmp/qf-e48de0bc.20261101T232857Z.p0yahdxh",
+    "status": "stopped_before_mutation",
+    "ended_utc": "2026-11-01T01:33:52Z",
+    "elapsed_seconds": 157,
+    "within_budget": true,
+    "top_level_inventory": "pass: six known runtime directories; no descent",
+    "authorized_path_check": "pass: exists, not symlink, realpath exact",
+    "worktree_pointer_command_exit_code": 1,
+    "worktree_pointer_observed": "pointer/back-reference/common-dir/metadata checks true; expected symlink=false; command assertion bug treated false as failure",
+    "unregister_or_delete_performed": false,
+    "retained_root_untouched": true
+  },
+  "stopped_utc": "2026-11-01T01:33:52Z",
+  "stopped_at": "cleanup-worktree-pointers",
+  "stages": {
+    "cleanup": "stopped",
+    "A": "not_started",
+    "B": "not_started",
+    "C": "not_started",
+    "D": "not_started"
+  },
+  "postgres_cluster_created": false,
+  "tests_run": false
+}

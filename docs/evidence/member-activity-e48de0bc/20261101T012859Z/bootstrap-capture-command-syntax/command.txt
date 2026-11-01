@@ -1,0 +1,3 @@
+cwd=/private/tmp
+argv-shell-escaped:
+zsh -n <(cat "$RUN_EVIDENCE_DIR/capture-command.zsh")
